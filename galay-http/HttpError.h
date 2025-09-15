@@ -1,0 +1,47 @@
+#ifndef GALAY_HTTP_ERROR_H
+#define GALAY_HTTP_ERROR_H 
+
+#include <galay/common/Error.h>
+
+namespace galay::http
+{
+
+    enum HttpErrorCode
+    {
+        kHttpError_NoError = 0,              // 无错误
+        kHttpError_ConnectionClose,          // 连接已关闭
+        kHttpError_RequestTimeOut,           // 请求超时
+        kHttpError_HeaderInComplete,         // HTTP头部不完整
+        kHttpError_BodyInComplete,           // HTTP体不完整
+        kHttpError_HeaderTooLong,            // HTTP头部过长
+        kHttpError_UriTooLong,               // URI过长
+        kHttpError_ChunkHasError,            // 分块传输编码错误
+        kHttpError_HttpCodeInvalid,          // HTTP状态码无效
+        kHttpError_HeaderPairExist,          // HTTP头部键值对已存在
+        kHttpError_HeaderPairNotExist,       // HTTP头部键值对不存在
+        kHttpError_BadRequest,               // 错误的请求格式
+        kHttpError_UrlInvalid,               // URL格式无效
+        kHttpError_PortInvalid,              // 端口号无效
+        kHttpError_UnkownError,              // 未知错误
+        kHttpError_MethodNotAllow,           // HTTP方法不支持
+        kHttpError_VersionNotSupport,        // HTTP版本不支持
+        kHttpError_RequestEntityTooLarge,    // 请求体过大
+        kHttpError_UriEncodeError,           // URI编码错误
+        kHttpError_ContentTypeInvalid,       // Content-Type无效
+        kHttpError_UnknownError,             // 未知错误(重复，建议删除)
+    };
+
+    class HttpError
+    {
+    public:
+        HttpError(HttpErrorCode code);
+        std::string message() const;
+    private:
+        HttpErrorCode m_code;
+    };
+    
+
+}
+
+
+#endif
