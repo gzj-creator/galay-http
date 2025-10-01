@@ -1,0 +1,795 @@
+#include "HttpReader.h"
+#include "galay-http/utils/HttpUtils.h"
+#include "galay-http/utils/HttpLogger.h"
+#include "HttpWriter.h"
+
+namespace galay::http 
+{
+    HttpReader::HttpReader(AsyncTcpSocket &socket, TimerGenerator& generator, HttpParams params)
+        : m_socket(socket), m_params(params), m_generator(generator)
+    {
+    }
+
+    AsyncResult<std::expected<HttpRequest, HttpError>> HttpReader::getRequest(std::chrono::milliseconds timeout)
+    {
+        std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter = std::make_shared<AsyncWaiter<HttpRequest, HttpError>>();
+        waiter->appendTask(readRequest(waiter, timeout));
+        return waiter->wait();
+    }
+
+    AsyncResult<std::expected<HttpResponse, HttpError>> HttpReader::getResponse(std::chrono::milliseconds timeout)
+    {
+        std::shared_ptr<AsyncWaiter<HttpResponse, HttpError>> waiter = std::make_shared<AsyncWaiter<HttpResponse, HttpError>>();
+        waiter->appendTask(readResponse(waiter, timeout));
+        return waiter->wait();
+    }
+
+    AsyncResult<std::expected<void, HttpError>> HttpReader::getChunkBlock(const std::function<void(HttpRequestHeader&, std::string)> &callback, std::chrono::milliseconds timeout)
+    {
+        std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
+        waiter->appendTask(readChunkBlock(waiter, callback, timeout));
+        return waiter->wait();
+    }
+
+    AsyncResult<std::expected<void, HttpError>> HttpReader::getChunkBlock(const std::function<void(HttpResponseHeader&,std::string)> &callback, std::chrono::milliseconds timeout)
+    {
+        std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
+        waiter->appendTask(readChunkBlock(waiter, callback, timeout));
+        return waiter->wait();
+    }
+
+    Coroutine<nil> HttpReader::readRequest(std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter, std::chrono::milliseconds timeout)
+    {
+        HttpRequest request;
+        HttpRequestHeader header;
+        size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
+        Buffer buffer(buffer_size), body_buffer;
+        while(recv_size <= m_params.max_header_size) {
+            std::expected<Bytes, CommonError> bytes;
+            if(timeout <= std::chrono::milliseconds(0)) {
+                bytes = co_await m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+            } else {
+                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                    return m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+                }, timeout);
+                if(!res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readRequest] timeout");
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    co_return nil();
+                }
+                bytes = std::move(res.value());
+            }
+            // recv error
+            if(!bytes) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readRequest] recv error: {}", bytes.error().message());
+                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                co_return nil();
+            }
+            recv_size += bytes.value().size();
+            std::string_view view(std::string_view(buffer.data(), recv_size));
+            auto header_str = header.checkAndGetHeaderString(view);
+            if(!header_str.empty()) {
+                //header end
+                auto error = header.fromString(header_str);
+                if(error != HttpErrorCode::kHttpError_NoError) {
+                    waiter->notify(std::unexpected(error));
+                    co_return nil();
+                } 
+                recv_size -= header_str.size();
+                if(recv_size != 0) body_buffer = Buffer(buffer.data() + header_str.size(), recv_size);
+                break;
+            } 
+            if(recv_size >= buffer_size) {
+                if(buffer_size < m_params.max_header_size) {
+                    buffer_size += m_params.recv_incr_length;
+                    buffer.resize(buffer_size);
+                }
+            }
+        }
+        //header too long
+        if( recv_size > m_params.max_header_size) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
+            co_return nil();
+        }
+        request.setHeader(std::move(header));
+        //chunk 不接收body
+        if(header.isChunked()) {
+            waiter->notify(std::move(request));
+            co_return nil();
+        }
+        std::string body_length_str = header.headerPairs().getValue("Content-Length");
+        // 没有Content-Length
+        if(body_length_str.empty()) {
+            //允许仅含头的请求
+            if(request.header().method() == HttpMethod::Http_Method_Get || 
+                request.header().method() == HttpMethod::Http_Method_Head ||
+                request.header().method() == HttpMethod::Http_Method_Options ||
+                request.header().method() == HttpMethod::Http_Method_Delete ||
+                request.header().method() == HttpMethod::Http_Method_Connect) 
+            {
+                waiter->notify(std::move(request));
+                co_return nil();
+            } 
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ContentLengthNotContained));
+            co_return nil();
+        }
+        size_t body_length = 0;
+        //body-length 转换为size_t
+        try
+        {
+            body_length = std::stoull(body_length_str);
+        }
+        catch(const std::exception& e)
+        {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ContentLengthConvertError));
+            co_return nil();
+        }
+        if (recv_size > body_length) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_BodyLengthNotMatch));
+            co_return nil();
+        }
+        body_buffer.resize(body_length);
+        //接收body
+        while(body_length > recv_size)
+        {
+            std::expected<Bytes, CommonError> bytes;
+            if(timeout <= std::chrono::milliseconds(0)) {
+                bytes = co_await m_socket.recv(body_buffer.data() + recv_size, body_length - recv_size);
+            }
+            else {
+                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                    return m_socket.recv(body_buffer.data() + recv_size, body_length - recv_size);
+                }, timeout);
+                if(!res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readRequest] timeout");
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    co_return nil();
+                }
+                bytes = std::move(res.value());
+            }
+            // recv error
+            if(!bytes) {
+                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                co_return nil();
+            }
+            recv_size += bytes.value().size();
+        }
+        request.setBodyStr(std::string(body_buffer.data(), recv_size));
+        waiter->notify(std::move(request));
+        co_return nil();
+    }
+
+    Coroutine<nil> HttpReader::readResponse(std::shared_ptr<AsyncWaiter<HttpResponse, HttpError>> waiter, std::chrono::milliseconds timeout)
+    {
+        HttpResponse response;
+        HttpResponseHeader header;
+        size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
+        Buffer buffer(buffer_size), body_buffer;
+        while(recv_size <= m_params.max_header_size) {
+            std::expected<Bytes, CommonError> bytes;
+            if(timeout <= std::chrono::milliseconds(0)) {
+                bytes = co_await m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+            } else {
+                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                    return m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+                }, timeout);
+                if(!res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readResponse] timeout");
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    co_return nil();
+                }
+                bytes = std::move(res.value());
+            }
+            // recv error
+            if(!bytes) {
+                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                co_return nil();
+            }
+            recv_size += bytes.value().size();
+            std::string_view view(std::string_view(buffer.data(), recv_size));
+            auto header_str = header.checkAndGetHeaderString(view);
+            if(!header_str.empty()) {
+                //header end
+                auto error = header.fromString(header_str);
+                if(error != HttpErrorCode::kHttpError_NoError) {
+                    waiter->notify(std::unexpected(error));
+                    co_return nil();
+                } 
+                recv_size -= header_str.size();
+                if(recv_size != 0) body_buffer = Buffer(buffer.data() + header_str.size(), recv_size);
+                break;
+            } 
+            if(recv_size >= buffer_size) {
+                if(buffer_size < m_params.max_header_size) {
+                    buffer_size += m_params.recv_incr_length;
+                    buffer.resize(buffer_size);
+                }
+            }
+        }
+        //header too long
+        if( recv_size > m_params.max_header_size) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
+            co_return nil();
+        }
+        response.setHeader(std::move(header));
+        //chunk 不接收body
+        if(header.isChunked()) {
+            waiter->notify(std::move(response));
+            co_return nil();
+        }
+        std::string body_length_str = header.headerPairs().getValue("Content-Length");
+        // 没有Content-Length
+        if(body_length_str.empty()) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ContentLengthNotContained));
+            co_return nil();
+        }
+        size_t body_length = 0;
+        //body-length 转换为size_t
+        try
+        {
+            body_length = std::stoull(body_length_str);
+        }
+        catch(const std::exception& e)
+        {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ContentLengthConvertError));
+            co_return nil();
+        }
+        if (recv_size > body_length) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_BodyLengthNotMatch));
+            co_return nil();
+        }
+        body_buffer.resize(body_length);
+        //接收body
+        while(body_length > recv_size)
+        {
+            std::expected<Bytes, CommonError> bytes;
+            if(timeout <= std::chrono::milliseconds(0)) {
+                bytes = co_await m_socket.recv(body_buffer.data() + recv_size, body_length - recv_size);
+            } else {
+                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                    return m_socket.recv(body_buffer.data() + recv_size, body_length - recv_size);
+                }, timeout);
+                if(!res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readResponse] timeout");
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    co_return nil();
+                }
+                bytes = std::move(res.value());
+            }
+            // recv error
+            if(!bytes) {
+                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                co_return nil();
+            }
+            recv_size += bytes.value().size();
+        }
+        response.setBodyStr(std::string(body_buffer.data(), recv_size));
+        waiter->notify(std::move(response));
+        co_return nil();
+    }
+
+    Coroutine<nil> HttpReader::readChunkBlock(std::shared_ptr<AsyncWaiter<void, HttpError>> waiter, \
+        const std::function<void(HttpRequestHeader&,std::string)> &callback, \
+        std::chrono::milliseconds timeout)
+    {
+        // read header
+        HttpRequestHeader header;
+        size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
+        Buffer buffer(buffer_size), body_buffer;
+        while(recv_size <= m_params.max_header_size) {
+            std::expected<Bytes, CommonError> bytes;
+            if(timeout <= std::chrono::milliseconds(0)) {
+                bytes = co_await m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+            } else {
+                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                    return m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+                }, timeout);
+                if(!res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readHeader] timeout");
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    co_return nil();
+                }
+                bytes = std::move(res.value());
+            }
+            // recv error
+            if(!bytes) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readHeader] recv error: {}", bytes.error().message());
+                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                co_return nil();
+            }
+            recv_size += bytes.value().size();
+            std::string_view view(std::string_view(buffer.data(), recv_size));
+            auto header_str = header.checkAndGetHeaderString(view);
+            if(!header_str.empty()) {
+                //header end
+                auto error = header.fromString(header_str);
+                if(error != HttpErrorCode::kHttpError_NoError) {
+                    waiter->notify(std::unexpected(error));
+                    co_return nil();
+                }
+                recv_size -= header_str.size();
+                if(recv_size != 0) body_buffer = Buffer(buffer.data() + header_str.size(), recv_size);
+                break;
+            } 
+            if(recv_size >= buffer_size) {
+                if(buffer_size < m_params.max_header_size) {
+                    buffer_size += m_params.recv_incr_length;
+                    buffer.resize(buffer_size);
+                }
+            }
+        }
+        //header too long
+        if( recv_size > m_params.max_header_size) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
+            co_return nil();
+        }
+
+
+        //read chunk data
+        enum Status
+        {
+            Length,      // 正在读取块长度
+            LengthCR,    // 已读取长度的CR，等待LF
+            Data,        // 正在读取块数据
+            DataCR,      // 已读取数据的CR，等待LF
+            DataLF,      // 已读取数据的CRLF中的CR，等待LF
+            FinalCR,     // 处理最后的CR，等待结束LF
+            FinalLF      // 处理最后的CRLF中的CR，等待LF
+        };
+        
+        Status status = Length;
+        size_t remaining_length = 0;  // 还需要读取的数据长度
+        std::string chunk_data;       // 当前块的数据
+        std::string length_str;       // 块长度的十六进制字符串
+        
+        body_buffer.resize(std::max(recv_size, m_params.chunk_buffer_size));
+        while(true)
+        {
+            size_t pos = 0;
+            const uint8_t* data;  // 获取数据指针
+            size_t data_size;     // 获取数据大小
+            if(recv_size != 0) {
+                data = reinterpret_cast<const uint8_t*>(body_buffer.data());
+                data_size = recv_size;
+                recv_size = 0;
+            } else {
+                std::expected<Bytes, CommonError> bytes;
+                // 接收数据，返回Bytes对象
+                if(timeout <= std::chrono::milliseconds(0)) {
+                    bytes = co_await m_socket.recv(body_buffer.data() , body_buffer.capacity());
+                } else {
+                    auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                        return m_socket.recv(body_buffer.data() , body_buffer.capacity());
+                    }, timeout);
+                    if(!res) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readChunkData] timeout");
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                        co_return nil();
+                    }
+                    bytes = std::move(res.value());
+                }
+                
+                if(!bytes) {  // 检查是否接收失败
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                    co_return nil();
+                }
+                data = bytes.value().data();
+                data_size = bytes.value().size();
+            }
+            while(pos < data_size)
+            {
+                switch (status)
+                {
+                case Length:
+                {
+                    // 读取十六进制长度，直到遇到CR
+                    while(pos < data_size && status == Length)
+                    {
+                        char c = static_cast<char>(data[pos]);
+                        if (c == '\r') {
+                            status = LengthCR;
+                            pos++;
+                        } else if (isxdigit(c)) {
+                            length_str += c;
+                            pos++;
+                        } else {
+                            // 无效字符，解析错误
+                            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                            co_return nil();
+                        }
+                    }
+                    break;
+                }
+                    
+                case LengthCR:
+                {
+                    // 等待LF
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\n') {
+                        pos++;
+                        
+                        // 解析十六进制长度
+                        if (length_str.empty()) {
+                            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkLength));
+                            co_return nil();
+                        }
+                        
+                        try {
+                            remaining_length = std::stoul(length_str, nullptr, 16);
+                        } catch (...) {
+                            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkLength));
+                            co_return nil();
+                        }
+                        
+                        // 如果长度为0，表示所有块结束
+                        if (remaining_length == 0) {
+                            status = FinalCR;
+                        } else {
+                            status = Data;
+                            chunk_data.reserve(remaining_length);
+                        }
+                        
+                        length_str.clear();
+                    } else {
+                        // 不符合CRLF格式
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case Data:
+                {
+                    // 读取块数据
+                    size_t read_size = std::min(remaining_length, data_size - pos);
+                    chunk_data.append(reinterpret_cast<const char*>(data + pos), read_size);
+                    remaining_length -= read_size;
+                    pos += read_size;
+                    
+                    // 如果当前块数据已读完，等待CRLF
+                    if (remaining_length == 0) {
+                        status = DataCR;
+                    }
+                    break;
+                }
+                    
+                case DataCR:
+                {
+                    // 处理数据后的CR
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\r') {
+                        status = DataLF;
+                        pos++;
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case DataLF:
+                {
+                    // 处理数据后的LF
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\n') {
+                        status = Length;  // 下一个状态是读取下一个块的长度
+                        pos++;
+                        
+                        //触发回调
+                        callback(header, std::move(chunk_data));
+                        chunk_data.clear();
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case FinalCR:
+                {
+                    // 处理最后0长度块后的CR
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\r') {
+                        status = FinalLF;
+                        pos++;
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case FinalLF:
+                {
+                    // 处理最后0长度块后的LF，结束所有块
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\n') {
+                        pos++;
+                        // 通知等待者解析完成
+                        waiter->notify({});
+                        co_return nil();
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                default:
+                    // 不可能到达的状态
+                    co_return nil();
+                }
+            }
+        }
+        
+        co_return nil();
+    }
+
+    Coroutine<nil> HttpReader::readChunkBlock(std::shared_ptr<AsyncWaiter<void, HttpError>> waiter, \
+        const std::function<void(HttpResponseHeader&,std::string)> &callback, \
+        std::chrono::milliseconds timeout)
+    {
+        // read header
+        HttpResponseHeader header;
+        size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
+        Buffer buffer(buffer_size), body_buffer;
+        while(recv_size <= m_params.max_header_size) {
+            std::expected<Bytes, CommonError> bytes;
+            if(timeout <= std::chrono::milliseconds(0)) {
+                bytes = co_await m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+            } else {
+                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                    return m_socket.recv(buffer.data() + recv_size, buffer_size - recv_size);
+                }, timeout);
+                if(!res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readHeader] timeout");
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    co_return nil();
+                }
+                bytes = std::move(res.value());
+            }
+            // recv error
+            if(!bytes) {
+                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                co_return nil();
+            }
+            recv_size += bytes.value().size();
+            std::string_view view(std::string_view(buffer.data(), recv_size));
+            auto header_str = header.checkAndGetHeaderString(view);
+            if(!header_str.empty()) {
+                //header end
+                auto error = header.fromString(header_str);
+                if(error != HttpErrorCode::kHttpError_NoError) {
+                    waiter->notify(std::unexpected(error));
+                    co_return nil();
+                }
+                recv_size -= header_str.size();
+                if(recv_size != 0) body_buffer = Buffer(buffer.data() + header_str.size(), recv_size);
+                break;
+            } 
+            if(recv_size >= buffer_size) {
+                if(buffer_size < m_params.max_header_size) {
+                    buffer_size += m_params.recv_incr_length;
+                    buffer.resize(buffer_size);
+                }
+            }
+        }
+        //header too long
+        if( recv_size > m_params.max_header_size) {
+            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
+            co_return nil();
+        }
+
+
+        //read chunk data
+        enum Status
+        {
+            Length,      // 正在读取块长度
+            LengthCR,    // 已读取长度的CR，等待LF
+            Data,        // 正在读取块数据
+            DataCR,      // 已读取数据的CR，等待LF
+            DataLF,      // 已读取数据的CRLF中的CR，等待LF
+            FinalCR,     // 处理最后的CR，等待结束LF
+            FinalLF      // 处理最后的CRLF中的CR，等待LF
+        };
+        
+        Status status = Length;
+        size_t remaining_length = 0;  // 还需要读取的数据长度
+        std::string chunk_data;       // 当前块的数据
+        std::string length_str;       // 块长度的十六进制字符串
+        
+        body_buffer.resize(std::max(recv_size, m_params.chunk_buffer_size));
+
+        while(true)
+        {
+            size_t pos = 0;
+            const uint8_t* data;  // 获取数据指针
+            size_t data_size;     // 获取数据大小
+            if(recv_size != 0) {
+                data = reinterpret_cast<const uint8_t*>(body_buffer.data());
+                data_size = recv_size;
+                recv_size = 0;
+            } else {
+                // 接收数据，返回Bytes对象
+                std::expected<Bytes, CommonError> bytes;
+                if(timeout <= std::chrono::milliseconds(0)) {
+                    bytes = co_await m_socket.recv(body_buffer.data() , body_buffer.capacity());
+                } else {
+                    auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                        return m_socket.recv(body_buffer.data() , body_buffer.capacity());
+                    }, timeout);
+                    if(!res) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readChunkData] timeout");
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                        co_return nil();
+                    }
+                    bytes = std::move(res.value());
+                }
+                if(!bytes) {  // 检查是否接收失败
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                    co_return nil();
+                }
+                data = bytes.value().data();
+                data_size = bytes.value().size();
+            }
+            
+            
+            
+            while(pos < data_size)
+            {
+                switch (status)
+                {
+                case Length:
+                {
+                    // 读取十六进制长度，直到遇到CR
+                    while(pos < data_size && status == Length)
+                    {
+                        char c = static_cast<char>(data[pos]);
+                        if (c == '\r') {
+                            status = LengthCR;
+                            pos++;
+                        } else if (isxdigit(c)) {
+                            length_str += c;
+                            pos++;
+                        } else {
+                            // 无效字符，解析错误
+                            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                            co_return nil();
+                        }
+                    }
+                    break;
+                }
+                    
+                case LengthCR:
+                {
+                    // 等待LF
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\n') {
+                        pos++;
+                        
+                        // 解析十六进制长度
+                        if (length_str.empty()) {
+                            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkLength));
+                            co_return nil();
+                        }
+                        
+                        try {
+                            remaining_length = std::stoul(length_str, nullptr, 16);
+                        } catch (...) {
+                            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkLength));
+                            co_return nil();
+                        }
+                        
+                        // 如果长度为0，表示所有块结束
+                        if (remaining_length == 0) {
+                            status = FinalCR;
+                        } else {
+                            status = Data;
+                            chunk_data.reserve(remaining_length);
+                        }
+                        
+                        length_str.clear();
+                    } else {
+                        // 不符合CRLF格式
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case Data:
+                {
+                    // 读取块数据
+                    size_t read_size = std::min(remaining_length, data_size - pos);
+                    chunk_data.append(reinterpret_cast<const char*>(data + pos), read_size);
+                    remaining_length -= read_size;
+                    pos += read_size;
+                    
+                    // 如果当前块数据已读完，等待CRLF
+                    if (remaining_length == 0) {
+                        status = DataCR;
+                    }
+                    break;
+                }
+                    
+                case DataCR:
+                {
+                    // 处理数据后的CR
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\r') {
+                        status = DataLF;
+                        pos++;
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case DataLF:
+                {
+                    // 处理数据后的LF
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\n') {
+                        status = Length;  // 下一个状态是读取下一个块的长度
+                        pos++;
+                        
+                        //触发回调
+                        callback(header, std::move(chunk_data));
+                        chunk_data.clear();
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case FinalCR:
+                {
+                    // 处理最后0长度块后的CR
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\r') {
+                        status = FinalLF;
+                        pos++;
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                    
+                case FinalLF:
+                {
+                    // 处理最后0长度块后的LF，结束所有块
+                    if (pos >= data_size) break;
+                    
+                    if (data[pos] == '\n') {
+                        pos++;
+                        // 通知等待者解析完成
+                        waiter->notify({});
+                        co_return nil();
+                    } else {
+                        waiter->notify(std::unexpected(HttpErrorCode::kHttpError_InvalidChunkFormat));
+                        co_return nil();
+                    }
+                    break;
+                }
+                default:
+                    // 不可能到达的状态
+                    co_return nil();
+                }
+            }
+        }
+        
+        co_return nil();
+    }
+    
+}

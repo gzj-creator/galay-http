@@ -1,8 +1,28 @@
 #include "HttpHeader.h"
 
 namespace galay::http 
-{ 
-    bool HeaderPair::hasKey(const std::string& key) const
+{
+    HeaderPair::HeaderPair()
+    {
+    }
+
+    HeaderPair::HeaderPair(const HeaderPair &other)
+    {
+        if(this != &other)
+        {
+            m_headerPairs = other.m_headerPairs;
+        }
+    }
+
+    HeaderPair::HeaderPair(HeaderPair &&other)
+    {
+        if(this != &other)
+        {
+            std::swap(m_headerPairs, other.m_headerPairs);
+            std::swap(m_stream, other.m_stream);
+        }
+    }
+    bool HeaderPair::hasKey(const std::string &key) const
     {
         return m_headerPairs.contains(key);
     }
@@ -59,10 +79,17 @@ namespace galay::http
         if(!m_headerPairs.empty()) m_headerPairs.clear();
     }
 
-    HeaderPair &HeaderPair::operator=(const HeaderPair &headerPair)
+    HeaderPair &HeaderPair::operator=(const HeaderPair &other)
     {
-        m_stream << headerPair.m_stream.str();
-        m_headerPairs = headerPair.m_headerPairs;
+        m_stream << other.m_stream.str();
+        m_headerPairs = other.m_headerPairs;
+        return *this;
+    }
+
+    HeaderPair &HeaderPair::operator=(HeaderPair &&other)
+    {
+        std::swap(m_stream, other.m_stream);
+        std::swap(m_headerPairs, other.m_headerPairs);
         return *this;
     }
 

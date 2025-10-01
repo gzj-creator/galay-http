@@ -14,6 +14,16 @@ namespace galay::http
         using ptr = std::shared_ptr<HttpRequest>;
         using wptr = std::weak_ptr<HttpRequest>;
         using uptr = std::unique_ptr<HttpRequest>;
+
+        HttpRequest() = default;
+    
+        // 添加移动构造函数
+        HttpRequest(HttpRequest&&) noexcept = default;
+        // 添加移动赋值操作符
+        HttpRequest& operator=(HttpRequest&&) noexcept = default;
+        
+        // 添加析构函数
+        ~HttpRequest() = default;
         
         HttpRequestHeader& header();
         //移交所有权

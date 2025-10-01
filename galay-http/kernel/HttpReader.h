@@ -1,0 +1,58 @@
+#ifndef GALAY_HTTP_READER_H
+#define GALAY_HTTP_READER_H 
+
+#include <galay/kernel/async/Socket.h>
+#include <galay/kernel/async/TimerGenerator.h>
+#include <galay/kernel/coroutine/AsyncWaiter.hpp>
+#include "galay-http/protoc/HttpRequest.h"
+#include "galay-http/protoc/HttpResponse.h"
+#include "HttpParams.hpp"
+
+namespace galay::http
+{
+    //不支持跨线程协程调用
+    class HttpReader 
+    {
+    public:
+        HttpReader(AsyncTcpSocket& socket, TimerGenerator& generator, HttpParams params);
+        
+        /*
+            @param timeout 每次recv读取超时时间
+        */
+        AsyncResult<std::expected<HttpRequest, HttpError>> 
+            getRequest( std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        
+        AsyncResult<std::expected<void, HttpError>> 
+            getChunkBlock(  const std::function<void(HttpRequestHeader&,std::string)> &callback,
+                            std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+
+        AsyncResult<std::expected<HttpResponse, HttpError>> 
+            getResponse(    std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        
+        AsyncResult<std::expected<void, HttpError>> 
+            getChunkBlock(  const std::function<void(HttpResponseHeader&,std::string)> &callback,
+                            std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+
+    private:
+        Coroutine<nil> readRequest( std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter,
+                                    std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        
+        Coroutine<nil> readResponse(std::shared_ptr<AsyncWaiter<HttpResponse, HttpError>> waiter,
+                                    std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        
+        Coroutine<nil> readChunkBlock(  std::shared_ptr<AsyncWaiter<void, HttpError>> waiter,
+                                        const std::function<void(HttpRequestHeader&,std::string)> &callback,
+                                        std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        
+        Coroutine<nil> readChunkBlock(  std::shared_ptr<AsyncWaiter<void, HttpError>> waiter,
+                                        const std::function<void(HttpResponseHeader&,std::string)> &callback,
+                                        std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+                                        
+    private:
+        AsyncTcpSocket& m_socket;
+        HttpParams      m_params;
+        TimerGenerator& m_generator;
+    };
+}
+
+#endif

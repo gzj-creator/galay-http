@@ -10,7 +10,11 @@ namespace galay::http
     {
         kHttpError_NoError = 0,              // 无错误
         kHttpError_ConnectionClose,          // 连接已关闭
+        kHttpError_TcpRecvError,             // TCP接收错误
+        kHttpError_TcpSendError,
         kHttpError_RequestTimeOut,           // 请求超时
+        kHttpError_ContentLengthNotContained,// 缺少Content-Length
+        kHttpError_ContentLengthConvertError,// Content-Length转换错误
         kHttpError_HeaderInComplete,         // HTTP头部不完整
         kHttpError_BodyInComplete,           // HTTP体不完整
         kHttpError_HeaderTooLong,            // HTTP头部过长
@@ -28,6 +32,11 @@ namespace galay::http
         kHttpError_RequestEntityTooLarge,    // 请求体过大
         kHttpError_UriEncodeError,           // URI编码错误
         kHttpError_ContentTypeInvalid,       // Content-Type无效
+        kHttpError_InvalidChunkFormat,       // Chunk格式错误
+        kHttpError_InvalidChunkLength,       // Chunk长度错误
+        kHttpError_BodyLengthNotMatch,       // 请求体长度与Content-Length不匹配
+        kHttpError_RecvTimeOut,              // 接收超时
+        kHttpError_SendTimeOut,              // 发送超时
         kHttpError_UnknownError,             // 未知错误(重复，建议删除)
     };
 

@@ -11,6 +11,9 @@ namespace galay::http {
     class HeaderPair
     {
     public:
+        HeaderPair();
+        HeaderPair(const HeaderPair& other);
+        HeaderPair(HeaderPair&& other);
         bool hasKey(const std::string& key) const;
         std::string getValue(const std::string& key);
         HttpErrorCode removeHeaderPair(const std::string& key);
@@ -18,7 +21,8 @@ namespace galay::http {
         HttpErrorCode addHeaderPair(const std::string& key, const std::string& value);
         std::string toString();
         void clear();
-        HeaderPair& operator=(const HeaderPair& headerPair);
+        HeaderPair& operator=(const HeaderPair& other);
+        HeaderPair& operator=(HeaderPair&& other);
     private:
         std::ostringstream m_stream;
         std::map<std::string, std::string> m_headerPairs;

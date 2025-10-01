@@ -15,7 +15,8 @@ namespace galay::http
     #define DEFAULT_HTTP_MAX_BODY_SIZE                      1 * 1024 * 1024     // http body最大长度1M
     #define DEFAULT_HTTP_MAX_URI_LEN                        1024                // uri最大长度1k
     #define DEFAULT_HTTP_MAX_VERSION_SIZE                   32
-    #define DEFAULT_HTTP_PEER_RECV_SIZE                     1024
+    #define DEFAULT_HTTP_PEER_STEP_SIZE                     1024
+    #define DEFAULT_HTTP_CHUNK_BUFFER_SIZE                  2048
 
     #define DEFAULT_HTTP_KEEPALIVE_TIME_MS                  (7500 * 1000)
 

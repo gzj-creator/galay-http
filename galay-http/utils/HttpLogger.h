@@ -1,7 +1,7 @@
 #ifndef GALAY_HTTP_LOGGER_H
 #define GALAY_HTTP_LOGGER_H 
 
-#include "HttpBase.h"
+#include "galay-http/protoc/HttpBase.h"
 
 namespace galay::http
 {

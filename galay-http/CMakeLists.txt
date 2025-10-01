@@ -1,6 +1,10 @@
-file(GLOB SRC_LIST "*.cc")
+file(GLOB SRC_LIST "*.cc" "protoc/*.cc" "utils/*.cc" "kernel/*.cc" "server/*.cc" "client/*.cc")
 
 find_package(Galay REQUIRED)
+find_package(OpenSSL REQUIRED)
+
+include_directories(${OPENSSL_INCLUDE_DIR})
+
 
 if(NOT TARGET Galay::galay)
     message(FATAL_ERROR "Galay::Galay target not found. Please check Galay installation and CMake config.")
@@ -11,19 +15,17 @@ add_library(${PROJECT_NAME} ${SRC_LIST})
 # 链接 Galay 库
 target_link_libraries(${PROJECT_NAME}
     PUBLIC Galay::galay
+    PUBLIC OpenSSL::SSL    # 使用OpenSSL目标
+    PUBLIC OpenSSL::Crypto # 使用OpenSSL目标
+    PUBLIC pthread
 )
+
+target_include_directories(${PROJECT_NAME} PUBLIC ${OPENSSL_INCLUDE_DIR})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
-)
-
-# 设置包含目录
-target_include_directories(${PROJECT_NAME}
-    PUBLIC 
-        $<INSTALL_INTERFACE:include>
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
 )
 
 # 安装编译完成的库文件
