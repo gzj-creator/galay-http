@@ -46,7 +46,8 @@ namespace galay::http
         Http_Method_Options = 6,
         Http_Method_Connect = 7,
         Http_Method_Patch = 8,
-        Http_Method_Unknown,
+        Http_Method_Unknown = 9,
+        Http_Method_Size = Http_Method_Unknown
     };
 
     enum class HttpVersion: int

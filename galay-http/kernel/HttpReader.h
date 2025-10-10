@@ -22,18 +22,22 @@ namespace galay::http
         AsyncResult<std::expected<HttpRequest, HttpError>> 
             getRequest( std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
-        AsyncResult<std::expected<void, HttpError>> 
-            getChunkBlock(  const std::function<void(HttpRequestHeader&,std::string)> &callback,
-                            std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
-
         AsyncResult<std::expected<HttpResponse, HttpError>> 
             getResponse(    std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
         AsyncResult<std::expected<void, HttpError>> 
-            getChunkBlock(  const std::function<void(HttpResponseHeader&,std::string)> &callback,
+            getChunkData(  const std::function<void(std::string)> &callback,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
 
     private:
+        Coroutine<nil> readRequestHeader( std::shared_ptr<AsyncWaiter<HttpRequestHeader, HttpError>> waiter,
+                                    std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        Coroutine<nil> readResponseHeader( std::shared_ptr<AsyncWaiter<HttpResponseHeader, HttpError>> waiter,
+                                    std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+        Coroutine<nil> readBody(std::shared_ptr<AsyncWaiter<std::string, HttpError>> waiter, 
+                                size_t length,
+                                std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+
         Coroutine<nil> readRequest( std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter,
                                     std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
@@ -41,17 +45,14 @@ namespace galay::http
                                     std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
         Coroutine<nil> readChunkBlock(  std::shared_ptr<AsyncWaiter<void, HttpError>> waiter,
-                                        const std::function<void(HttpRequestHeader&,std::string)> &callback,
-                                        std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
-        
-        Coroutine<nil> readChunkBlock(  std::shared_ptr<AsyncWaiter<void, HttpError>> waiter,
-                                        const std::function<void(HttpResponseHeader&,std::string)> &callback,
+                                        const std::function<void(std::string)> &callback,
                                         std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
                                         
     private:
         AsyncTcpSocket& m_socket;
         HttpParams      m_params;
         TimerGenerator& m_generator;
+        Buffer          m_buffer;
     };
 }
 

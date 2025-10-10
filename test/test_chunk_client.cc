@@ -41,11 +41,20 @@ Coroutine<nil> test(Runtime& runtime)
         co_await generator.sleep(std::chrono::milliseconds(1000));
     }
     HttpReader reader(socket, generator, {});
-    if(auto res = co_await reader.getChunkBlock([](HttpResponseHeader& header, std::string chunk) {
-        std::cout << "chunk data: " << chunk << std::endl;
-    }); !res) {
-        std::cout << "get chunk block error: " << res.error().message() << std::endl;
+    if(auto res = co_await reader.getResponse(); res) {
+        if(res.value().header().isChunked()) {
+            if(auto res = co_await reader.getChunkData([](std::string chunk) {
+                std::cout << "chunk data: " << chunk << std::endl;
+            }); !res) {
+                std::cout << "get chunk block error: " << res.error().message() << std::endl;
+            }
+        } else {
+            std::cout << "Header: " << res.value().toString() << std::endl;
+        }
+    } else {
+        std::cout << "get response error: " << res.error().message() << std::endl;
     }
+    
     co_return nil();
 }
 

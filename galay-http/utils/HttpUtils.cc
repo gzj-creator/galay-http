@@ -1,4 +1,5 @@
 #include "HttpUtils.h"
+#include <iostream>
 
 namespace galay::http 
 {

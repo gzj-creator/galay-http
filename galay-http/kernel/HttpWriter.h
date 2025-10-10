@@ -27,6 +27,11 @@ namespace galay::http
             sendChunkHeader(HttpRequestHeader&& header,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
 
+         AsyncResult<std::expected<void, HttpError>> 
+            sendChunkData(  std::string_view chunk,
+                            bool is_last,
+                            std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+
         AsyncResult<std::expected<void, HttpError>> 
             reply(  HttpResponse& response,
                     std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
@@ -39,11 +44,12 @@ namespace galay::http
             replyChunkHeader(   HttpResponseHeader&& header,
                                 std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
-        // without \r\n
-        AsyncResult<std::expected<void, HttpError>> 
-            sendChunkData(  std::string_view chunk,
+        
+         AsyncResult<std::expected<void, HttpError>> 
+            replyChunkData(  std::string_view chunk,
                             bool is_last,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+       
                             
     private:
         Coroutine<nil> sendData(    std::string data,

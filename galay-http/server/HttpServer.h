@@ -2,7 +2,8 @@
 #define GALAY_HTTP_SERVER_H 
 
 #include <galay/kernel/server/TcpServer.h>
-#include "galay-http/kernel/HttpConnection.h"
+#include "galay-http/kernel/HttpRouter.h"
+
 
 namespace galay::http 
 {
@@ -11,8 +12,10 @@ namespace galay::http
     public:
         HttpServer(TcpServer&& server);
         void listen(const Host& host);
-        void run(std::function<Coroutine<nil>(HttpConnection,AsyncFactory)> callback);
+        void run(std::function<Coroutine<nil>(HttpConnection, AsyncFactory)> handler);
+        void run(HttpRouter router, HttpParams params = HttpParams());
         void stop();
+    private:
     private:
         TcpServer m_server;
     };

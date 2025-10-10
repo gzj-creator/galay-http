@@ -20,6 +20,7 @@ namespace galay::http
     private:
         AsyncTcpSocket m_socket;
         TimerGenerator m_generator;
+        std::unordered_map<std::string, std::string> m_params;
     };
 }
 

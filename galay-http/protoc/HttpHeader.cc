@@ -152,11 +152,13 @@ namespace galay::http
                 if(line.empty()) {
                     break;
                 }
-                if(line.find(':') == std::string::npos) {
+                size_t pos = line.find(":");
+                if( pos == std::string::npos) {
                     return kHttpError_BadRequest;
                 }
-                key = line.substr(0, line.find(':'));
-                value = line.substr(line.find(':') + 1);
+                key = line.substr(0, pos);
+                if( pos < n - 2 && line[pos + 1] == ' ') value = line.substr(pos + 2);
+                else value = line.substr(pos + 1);
                 m_headerPairs.addHeaderPair(key, value);
             }
             start = end + 2;
@@ -559,11 +561,13 @@ namespace galay::http
                 if(line.empty()) {
                     break;
                 }
-                if(line.find(':') == std::string::npos) {
+                size_t pos = line.find(":");
+                if(pos == std::string::npos) {
                     return kHttpError_BadRequest;
                 }
-                key = line.substr(0, line.find(':'));
-                value = line.substr(line.find(':') + 1);
+                key = line.substr(0, pos);
+                if( pos < n - 2 && line[pos + 1] == ' ') value = line.substr(pos + 2);
+                else value = line.substr(pos + 1);
                 m_headerPairs.addHeaderPair(key, value);
             }
             start = end + 2;

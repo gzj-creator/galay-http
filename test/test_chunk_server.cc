@@ -12,18 +12,28 @@ Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, TimerGenerator&& generator)
     AsyncTcpSocket socket = std::move(temp);
     TimerGenerator gen = std::move(generator);
     HttpReader reader(socket, gen, {});
-    if(auto res = co_await reader.getChunkBlock([](HttpRequestHeader& header, std::string chunk) {
-        std::cout << "chunk: " << chunk << std::endl;
-    }); !res) {
-        std::cout << "getChunkBlock error: " << res.error().message() << std::endl;
+    if(auto res = co_await reader.getRequest(); res) {
+        if(res.value().header().isChunked()) {
+            if(auto res = co_await reader.getChunkData([](std::string chunk) {
+                std::cout << "chunk: " << chunk << std::endl;
+            }); !res) {
+                std::cout << "getChunkData error: " << res.error().message() << std::endl;
+            }
+        } else {
+            std::cout << "Header: " << res.value().toString() << std::endl;
+        }
+    } else {
+        std::cout << "getRequest error" << std::endl;
+        co_return nil();
     }
+    
 
     HttpWriter writer(socket, gen, {});
     if(auto res = co_await writer.replyChunkHeader(HttpUtils::defaultOkHeader("txt")); !res) {
         std::cout << "reply chunk header error: " << res.error().message() << std::endl;
     }
     for(int i = 0; i < 10; ++i) {
-        auto res = co_await writer.sendChunkData("hello world", i == 9);
+        auto res = co_await writer.replyChunkData("hello world", i == 9);
         if(!res) {
             std::cout << "send chunk data error: " << res.error().message() << std::endl;
         }

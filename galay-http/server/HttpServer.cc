@@ -12,11 +12,20 @@ namespace galay::http
         m_server.listenOn(host, DEFAULT_TCP_BACKLOG_SIZE);
     }
 
-    void HttpServer::run(std::function<Coroutine<nil>(HttpConnection, AsyncFactory)> callback)
+    void HttpServer::run(std::function<Coroutine<nil>(HttpConnection, AsyncFactory)> handler)
     {
-        m_server.run([this, callback](AsyncTcpSocket socket, AsyncFactory factory) mutable -> Coroutine<nil>{
-            HttpConnection connection(std::move(socket), factory.createTimerGenerator());
-            return callback(std::move(connection), factory);
+        m_server.run([handler](AsyncTcpSocket socket, AsyncFactory factory) -> Coroutine<nil> { 
+            HttpConnection conn(std::move(socket), factory.createTimerGenerator());
+            return handler(std::move(conn), factory);
+        });
+    }
+
+    void HttpServer::run(HttpRouter router, HttpParams params)
+    {
+        m_server.run([router, params](AsyncTcpSocket socket, AsyncFactory factory) -> Coroutine<nil> { 
+            HttpConnection conn(std::move(socket), factory.createTimerGenerator());
+            auto reader = conn.getRequestReader(params);
+            co_await reader.getRequest();
         });
     }
 
