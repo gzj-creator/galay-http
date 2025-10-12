@@ -29,7 +29,8 @@ Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, TimerGenerator&& generator)
     
 
     HttpWriter writer(socket, gen, {});
-    if(auto res = co_await writer.replyChunkHeader(HttpUtils::defaultOkHeader("txt")); !res) {
+    auto response = HttpUtils::defaultOk("txt", "");
+    if(auto res = co_await writer.replyChunkHeader(response.header()); !res) {
         std::cout << "reply chunk header error: " << res.error().message() << std::endl;
     }
     for(int i = 0; i < 10; ++i) {
@@ -46,8 +47,8 @@ Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, TimerGenerator&& generator)
 
 Coroutine<nil> test(Runtime& runtime)
 {
-    AsyncFactory factory(runtime);
-    auto socket = factory.createTcpSocket();
+    AsyncFactory factory = runtime.getAsyncFactory();
+    auto socket = factory.getTcpSocket();
     socket.socket();
     socket.options().handleReusePort();
     socket.options().handleReuseAddr();
@@ -62,7 +63,7 @@ Coroutine<nil> test(Runtime& runtime)
             co_return nil();
         }
         auto new_socket = builder.build();
-        runtime.schedule(test_chunk(std::move(new_socket), factory.createTimerGenerator()));
+        runtime.schedule(test_chunk(std::move(new_socket), factory.getTimerGenerator()));
     }
 }
 

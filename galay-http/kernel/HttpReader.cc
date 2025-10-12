@@ -1,11 +1,10 @@
 #include "HttpReader.h"
-#include "galay-http/utils/HttpUtils.h"
+#include "galay/common/Error.h"
 #include "galay-http/utils/HttpLogger.h"
-#include "HttpWriter.h"
 
 namespace galay::http 
 {
-    HttpReader::HttpReader(AsyncTcpSocket &socket, TimerGenerator& generator, HttpParams params)
+    HttpReader::HttpReader(AsyncTcpSocket &socket, TimerGenerator& generator, HttpSettings params)
         : m_socket(socket), m_params(params), m_generator(generator)
     {
     }
@@ -37,16 +36,18 @@ namespace galay::http
         size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
         if(m_buffer.capacity() == 0) m_buffer = Buffer(buffer_size);
         else m_buffer.clear();
+        if(timeout == std::chrono::milliseconds(-1)) {
+            timeout = m_params.recv_timeout;
+        }
         while(recv_size <= m_params.max_header_size) {
             std::expected<Bytes, CommonError> bytes;
-            if(timeout <= std::chrono::milliseconds(0)) {
+            if(timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, buffer_size - recv_size);
             } else {
                 auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, buffer_size - recv_size);
                 }, timeout);
                 if(!res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readRequest] timeout");
                     waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                     co_return nil();
                 }
@@ -54,7 +55,10 @@ namespace galay::http
             }
             // recv error
             if(!bytes) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readRequest] recv error: {}", bytes.error().message());
+                if(CommonError::contains(bytes.error().code(), error::DisConnectError)) {
+                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ConnectionClose));
+                    co_return nil();
+                }
                 waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
                 co_return nil();
             }
@@ -95,16 +99,18 @@ namespace galay::http
         size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
         if(m_buffer.capacity() == 0) m_buffer = Buffer(buffer_size);
         else m_buffer.clear();
+        if(timeout == std::chrono::milliseconds(-1)) {
+            timeout = m_params.recv_timeout;
+        }
         while(recv_size <= m_params.max_header_size) {
             std::expected<Bytes, CommonError> bytes;
-            if(timeout <= std::chrono::milliseconds(0)) {
+            if(timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, buffer_size - recv_size);
             } else {
                 auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.recv(m_buffer.data() + recv_size, buffer_size - recv_size);
                 }, timeout);
                 if(!res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readResponse] timeout");
                     waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                     co_return nil();
                 }
@@ -151,10 +157,13 @@ namespace galay::http
             m_buffer.resize(length);
         }
         size_t recv_size = m_buffer.length();
+        if(timeout == std::chrono::milliseconds(-1)) {
+            timeout = m_params.recv_timeout;
+        }
         while(length > recv_size)
         {
             std::expected<Bytes, CommonError> bytes;
-            if(timeout <= std::chrono::milliseconds(0)) {
+            if(timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, length - recv_size);
             }
             else {
@@ -162,7 +171,6 @@ namespace galay::http
                     return m_socket.recv(m_buffer.data() + recv_size, length - recv_size);
                 }, timeout);
                 if(!res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readRequest] timeout");
                     waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                     co_return nil();
                 }
@@ -175,6 +183,8 @@ namespace galay::http
             }
             recv_size += bytes.value().size();
         }
+        waiter->notify(m_buffer.toString());
+        m_buffer.clear();
         co_return nil();
     }
 
@@ -221,6 +231,10 @@ namespace galay::http
         catch(const std::exception& e)
         {
             waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ContentLengthConvertError));
+            co_return nil();
+        }
+        if(body_length == 0) {
+            waiter->notify(std::move(request));
             co_return nil();
         }
         
@@ -270,6 +284,10 @@ namespace galay::http
             waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ContentLengthConvertError));
             co_return nil();
         }
+        if(body_length == 0) {
+            waiter->notify(std::move(response));
+            co_return nil();
+        }
         std::shared_ptr<AsyncWaiter<std::string, HttpError>> body_waiter = std::make_shared<AsyncWaiter<std::string, HttpError>>();
         body_waiter->appendTask(readBody(body_waiter, body_length, timeout));
         auto body_res = co_await body_waiter->wait();
@@ -305,6 +323,9 @@ namespace galay::http
         std::string length_str;       // 块长度的十六进制字符串
         
         m_buffer.resize(std::max(recv_size, m_params.chunk_buffer_size));
+        if(timeout == std::chrono::milliseconds(-1)) {
+            timeout = m_params.recv_timeout;
+        }
         while(true)
         {
             size_t pos = 0;
@@ -318,14 +339,13 @@ namespace galay::http
                 if(m_buffer.length() < m_buffer.capacity()) {
                     std::expected<Bytes, CommonError> bytes;
                     // 接收数据，返回Bytes对象
-                    if(timeout <= std::chrono::milliseconds(0)) {
+                    if(timeout < std::chrono::milliseconds(0)) {
                         bytes = co_await m_socket.recv(m_buffer.data() , m_buffer.capacity());
                     } else {
                         auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
                             return m_socket.recv(m_buffer.data() , m_buffer.capacity());
                         }, timeout);
                         if(!res) {
-                            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[readChunkData] timeout");
                             waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                             co_return nil();
                         }

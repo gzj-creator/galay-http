@@ -19,7 +19,6 @@ namespace galay::http
         if(this != &other)
         {
             std::swap(m_headerPairs, other.m_headerPairs);
-            std::swap(m_stream, other.m_stream);
         }
     }
     bool HeaderPair::hasKey(const std::string &key) const
@@ -27,10 +26,10 @@ namespace galay::http
         return m_headerPairs.contains(key);
     }
 
-    std::string HeaderPair::getValue(const std::string& key)
+    std::string HeaderPair::getValue(const std::string& key) const
     {
         if (m_headerPairs.contains(key))
-            return m_headerPairs[key];
+            return m_headerPairs.at(key);
         return "";
     }
 
@@ -63,15 +62,14 @@ namespace galay::http
         return kHttpError_NoError;
     }
 
-    std::string HeaderPair::toString()
+    std::string HeaderPair::toString() const
     {
+        std::ostringstream stream;
         for (auto& [k, v] : m_headerPairs)
         {
-            m_stream << k << ": " << v << "\r\n";
+            stream << k << ": " << v << "\r\n";
         }
-        std::string result = m_stream.str();
-        m_stream.str("");
-        return result;
+        return stream.str();
     }
 
     void HeaderPair::clear()
@@ -81,14 +79,12 @@ namespace galay::http
 
     HeaderPair &HeaderPair::operator=(const HeaderPair &other)
     {
-        m_stream << other.m_stream.str();
         m_headerPairs = other.m_headerPairs;
         return *this;
     }
 
     HeaderPair &HeaderPair::operator=(HeaderPair &&other)
     {
-        std::swap(m_stream, other.m_stream);
         std::swap(m_headerPairs, other.m_headerPairs);
         return *this;
     }
@@ -167,9 +163,10 @@ namespace galay::http
         return kHttpError_NoError;
     }
 
-    std::string HttpRequestHeader::toString()
+    std::string HttpRequestHeader::toString() const
     {
-        m_stream << httpMethodToString(this->m_method) << " ";
+        std::ostringstream stream;
+        stream << httpMethodToString(this->m_method) << " ";
         std::ostringstream url;
         url << m_uri;
         if (!m_argList.empty())
@@ -184,24 +181,22 @@ namespace galay::http
                 }
             }
         }
-        m_stream << convertToUri(url.str());
-        m_stream << " " << httpVersionToString(this->m_version) << "\r\n" << m_headerPairs.toString() << "\r\n";
-        std::string result = m_stream.str();
-        m_stream.str("");
-        return result;
+        stream << convertToUri(url.str());
+        stream << " " << httpVersionToString(this->m_version) << "\r\n" << m_headerPairs.toString() << "\r\n";
+       return stream.str();
     }
 
-    bool HttpRequestHeader::isKeepAlive()
+    bool HttpRequestHeader::isKeepAlive() const
     {
         return m_headerPairs.getValue("Connection") == "keep-alive";
     }
 
-    bool HttpRequestHeader::isChunked()
+    bool HttpRequestHeader::isChunked() const
     {
         return m_headerPairs.getValue("Transfer-Encoding") == "chunked";
     }
 
-    bool HttpRequestHeader::isConnectionClose()
+    bool HttpRequestHeader::isConnectionClose() const
     {
         return m_headerPairs.getValue("Connection") == "close";
     }
@@ -330,7 +325,7 @@ namespace galay::http
         return result;
     }
 
-    std::string HttpRequestHeader::convertToUri(std::string&& url)
+    std::string HttpRequestHeader::convertToUri(std::string&& url) const
     {
         std::string result;
         size_t n = url.size();
@@ -486,17 +481,17 @@ namespace galay::http
         return this->m_headerPairs;
     }
 
-    bool HttpResponseHeader::isKeepAlive()
+    bool HttpResponseHeader::isKeepAlive() const
     {
         return m_headerPairs.getValue("Connection") == "keep-alive";
     }
 
-    bool HttpResponseHeader::isChunked()
+    bool HttpResponseHeader::isChunked() const
     {
         return m_headerPairs.getValue("Transfer-Encoding") == "chunked";
     }
 
-    bool HttpResponseHeader::isConnectionClose()
+    bool HttpResponseHeader::isConnectionClose() const
     {
         return m_headerPairs.getValue("Connection") == "close";
     }
@@ -512,13 +507,12 @@ namespace galay::http
     }
 
 
-    std::string HttpResponseHeader::toString()
+    std::string HttpResponseHeader::toString() const
     {
-        m_stream <<  httpVersionToString(m_version) << ' ' << std::to_string(static_cast<int>(this->m_code)) << ' ' << httpStatusCodeToString(m_code) << "\r\n" \
+        std::ostringstream stream;
+        stream <<  httpVersionToString(m_version) << ' ' << std::to_string(static_cast<int>(this->m_code)) << ' ' << httpStatusCodeToString(m_code) << "\r\n" \
             << m_headerPairs.toString() << "\r\n";
-        std::string result = m_stream.str();
-        m_stream.str("");
-        return result;
+        return stream.str();
     }
 
     HttpErrorCode HttpResponseHeader::fromString(std::string_view str)

@@ -148,6 +148,21 @@ namespace galay::http
     private:
         static std::unordered_map<std::string, std::string> mimeTypeMap;
     };
+
+    #define GET HttpMethod::Http_Method_Get
+    #define POST HttpMethod::Http_Method_Post
+    #define HEAD HttpMethod::Http_Method_Head
+    #define PUT HttpMethod::Http_Method_Put
+    #define DELETE HttpMethod::Http_Method_Delete
+    #define TRACE HttpMethod::Http_Method_Trace
+    #define OPTIONS HttpMethod::Http_Method_Options
+    #define CONNECT HttpMethod::Http_Method_Connect
+    #define PATCH HttpMethod::Http_Method_Patch
+    #define UNKNOWN HttpMethod::Http_Method_Unknown
+
+    #define HTTP_VERSION_1_0 HttpVersion::Http_Version_1_0
+    #define HTTP_VERSION_1_1 HttpVersion::Http_Version_1_1
+    #define HTTP_VERSION_2_0 HttpVersion::Http_Version_2_0
 }
 
 #endif

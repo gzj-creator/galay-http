@@ -9,9 +9,9 @@ using namespace galay::http;
 Coroutine<nil> test(Runtime& runtime)
 {
     std::cout << "test start" << std::endl;
-    AsyncFactory factory(runtime);
-    auto socket = factory.createTcpSocket();
-    auto generator = factory.createTimerGenerator();
+    AsyncFactory factory = runtime.getAsyncFactory();
+    auto socket = factory.getTcpSocket();
+    auto generator = factory.getTimerGenerator();
     if(auto res = socket.socket(); !res) {
         std::cout << "socket.socket() failed: " << res.error().message() << std::endl;
         co_return nil();
@@ -25,7 +25,8 @@ Coroutine<nil> test(Runtime& runtime)
         co_return nil();
     }
     HttpWriter writer(socket, generator, {});
-    auto wres = co_await writer.sendChunkHeader(HttpUtils::defaultGetHeader("/"));
+    HttpRequest request = HttpUtils::defaultGet("/");
+    auto wres = co_await writer.sendChunkHeader(request.header());
     if(!wres) {
         std::cout << "send chunk header failed: " << wres.error().message() << std::endl;
         co_return nil();

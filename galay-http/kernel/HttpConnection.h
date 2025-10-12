@@ -12,12 +12,14 @@ namespace galay::http
         HttpConnection(AsyncTcpSocket&& socket, TimerGenerator&& generator);
         HttpConnection(HttpConnection&& other);
 
-        HttpReader getRequestReader(const HttpParams& params);
-        HttpWriter getResponseWriter(const HttpParams& params);
+        HttpReader getRequestReader(const HttpSettings& params);
+        HttpWriter getResponseWriter(const HttpSettings& params);
         
         AsyncResult<std::expected<void, CommonError>> close();
+        bool isClosed() const;
         ~HttpConnection() = default;
     private:
+        bool m_is_closed = false;
         AsyncTcpSocket m_socket;
         TimerGenerator m_generator;
         std::unordered_map<std::string, std::string> m_params;

@@ -91,28 +91,33 @@ namespace galay::http
         return DEFAULT_LOG_STATUS_TEXT_LENGTH;
     }
 
-    #define SERVER_REQUEST_LOG(METHOD, URI, REMOTE) {\
+    #define SERVER_REQUEST_LOG(METHOD, URI) {\
         std::string method = fmt::format("[{}{}{}]", method_color(METHOD), httpMethodToString(METHOD), RESET_COLOR);\
         std::string uri = fmt::format("[{}{}{}]", method_color(METHOD), URI, RESET_COLOR);\
-        HttpLogger::getInstance()->getLogger()->SpdLogger()->info( \
-        "{:<{}} {:<{}} [{}Remote: {}{}]", \
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->info( \
+        "{:<{}} {:<{}}", \
         method, method_length(METHOD), \
-        uri, uri_length(URI), \
-        "\033[38;5;39m", REMOTE, RESET_COLOR); }
+        uri, uri_length(URI)); }
 
-    #define SERVER_RESPONSE_LOG(STATUS, DURING_MS)   {\
+    #define SERVER_RESPONSE_DURING_LOG(STATUS, DURING_MS)   {\
         std::string status = fmt::format("[{}{}{}]", status_color(STATUS), std::to_string(static_cast<int>(STATUS)), RESET_COLOR);\
         std::string status_text = fmt::format("[{}{}{}]", status_color(STATUS), httpStatusCodeToString(STATUS), RESET_COLOR);\
-        HttpLogger::getInstance()->getLogger()->SpdLogger()->info( \
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->info( \
         "{:<{}} {:<{}} [{}During: {}ms{}]", \
         status, status_length(STATUS),\
         status_text, status_code_length(STATUS), \
         resp_time_color(DURING_MS), std::to_string(DURING_MS), RESET_COLOR); }
 
+    #define SERVER_RESPONSE_LOG(STATUS)  {\
+        std::string status = fmt::format("[{}{}{}]", status_color(STATUS), std::to_string(static_cast<int>(STATUS)), RESET_COLOR);\
+        std::string status_text = fmt::format("[{}{}{}]", status_color(STATUS), httpStatusCodeToString(STATUS), RESET_COLOR);\
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->info( \
+        "{:<{}} {:<{}}", \
+        status, status_length(STATUS),\
+        status_text, status_code_length(STATUS)); }
 
-
-    #define CLIENT_REQUEST_LOG(METHOD, URI, REMOTE) SERVER_REQUEST_LOG(METHOD, URI, REMOTE)
-    #define CLIENT_RESPONSE_LOG(STATUS, DURING_MS)  SERVER_RESPONSE_LOG(STATUS, DURING_MS)
+    #define CLIENT_REQUEST_LOG(METHOD, URI) SERVER_REQUEST_LOG(METHOD, URI)
+    #define CLIENT_RESPONSE_LOG(STATUS)  SERVER_RESPONSE_LOG(STATUS)
 
 }
 

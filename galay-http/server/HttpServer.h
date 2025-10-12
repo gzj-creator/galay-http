@@ -10,12 +10,16 @@ namespace galay::http
     class HttpServer 
     {
     public:
-        HttpServer(TcpServer&& server);
+        using HttpConnFunc = std::function<Coroutine<nil>(HttpConnection)>;
+        HttpServer(TcpServer&& tcpServer) 
+            : m_server(std::move(tcpServer)) {}
         void listen(const Host& host);
-        void run(std::function<Coroutine<nil>(HttpConnection, AsyncFactory)> handler);
-        void run(HttpRouter router, HttpParams params = HttpParams());
+        void run(Runtime& runtime, const HttpConnFunc& handler);
+        void run(Runtime& runtime, HttpRouter& router, HttpSettings params = HttpSettings());
+        void wait();
         void stop();
     private:
+        Coroutine<nil> handleConnection(Runtime& runtime, HttpRouter& router, HttpSettings params, AsyncTcpSocket socket);
     private:
         TcpServer m_server;
     };

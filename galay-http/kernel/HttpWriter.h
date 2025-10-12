@@ -13,7 +13,7 @@ namespace galay::http
     class HttpWriter
     { 
     public:
-        HttpWriter(AsyncTcpSocket& socket, TimerGenerator& generator, const HttpParams& params);
+        HttpWriter(AsyncTcpSocket& socket, TimerGenerator& generator, const HttpSettings& params);
 
         AsyncResult<std::expected<void, HttpError>> 
             send(   HttpRequest& request, 
@@ -23,9 +23,6 @@ namespace galay::http
             sendChunkHeader(HttpRequestHeader& header,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
-        AsyncResult<std::expected<void, HttpError>> 
-            sendChunkHeader(HttpRequestHeader&& header,
-                            std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
 
          AsyncResult<std::expected<void, HttpError>> 
             sendChunkData(  std::string_view chunk,
@@ -38,10 +35,6 @@ namespace galay::http
         
         AsyncResult<std::expected<void, HttpError>> 
             replyChunkHeader(   HttpResponseHeader& header,
-                                std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
-        
-        AsyncResult<std::expected<void, HttpError>> 
-            replyChunkHeader(   HttpResponseHeader&& header,
                                 std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
         
         
@@ -63,7 +56,7 @@ namespace galay::http
 
     private:
         AsyncTcpSocket& m_socket;
-        HttpParams      m_params;
+        HttpSettings      m_params;
         TimerGenerator& m_generator;
     };
 }

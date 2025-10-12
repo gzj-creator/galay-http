@@ -2,6 +2,7 @@
 #define GALAY_HTTP_ERROR_H 
 
 #include <galay/common/Error.h>
+#include "HttpBase.h"
 
 namespace galay::http
 {
@@ -26,7 +27,6 @@ namespace galay::http
         kHttpError_BadRequest,               // 错误的请求格式
         kHttpError_UrlInvalid,               // URL格式无效
         kHttpError_PortInvalid,              // 端口号无效
-        kHttpError_UnkownError,              // 未知错误
         kHttpError_MethodNotAllow,           // HTTP方法不支持
         kHttpError_VersionNotSupport,        // HTTP版本不支持
         kHttpError_RequestEntityTooLarge,    // 请求体过大
@@ -37,14 +37,17 @@ namespace galay::http
         kHttpError_BodyLengthNotMatch,       // 请求体长度与Content-Length不匹配
         kHttpError_RecvTimeOut,              // 接收超时
         kHttpError_SendTimeOut,              // 发送超时
-        kHttpError_UnknownError,             // 未知错误(重复，建议删除)
+        kHttpError_NotFound,                 // 未找到
+        kHttpError_UnknownError,              // 未知错误
     };
 
     class HttpError
     {
     public:
         HttpError(HttpErrorCode code);
+        HttpErrorCode code() const;
         std::string message() const;
+        HttpStatusCode toHttpStatusCode() const;
     private:
         HttpErrorCode m_code;
     };

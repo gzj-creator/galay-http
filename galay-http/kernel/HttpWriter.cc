@@ -3,13 +3,14 @@
 
 namespace galay::http
 {
-    HttpWriter::HttpWriter(AsyncTcpSocket &socket, TimerGenerator& generator, const HttpParams& params)
+    HttpWriter::HttpWriter(AsyncTcpSocket &socket, TimerGenerator& generator, const HttpSettings& params)
         : m_socket(socket), m_params(params), m_generator(generator)
     {
     }
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::send(HttpRequest &request, std::chrono::milliseconds timeout)
     {
+        CLIENT_REQUEST_LOG(request.header().method(), request.header().uri());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendData(request.toString(), waiter, timeout));
         return waiter->wait();
@@ -17,16 +18,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::sendChunkHeader(HttpRequestHeader &header, std::chrono::milliseconds timeout)
     {
-        std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
-        if(!header.isChunked()) {
-            header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-        }
-        waiter->appendTask(sendData(header.toString(), waiter, timeout));
-        return waiter->wait();
-    }
-
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::sendChunkHeader(HttpRequestHeader &&header, std::chrono::milliseconds timeout)
-    {
+        CLIENT_REQUEST_LOG(header.method(), header.uri());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         if(!header.isChunked()) {
             header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
@@ -37,6 +29,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::reply(HttpResponse& response, std::chrono::milliseconds timeout)
     {
+        SERVER_RESPONSE_LOG(response.header().code());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendData(response.toString(), waiter, timeout));
         return waiter->wait();
@@ -44,16 +37,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::replyChunkHeader(HttpResponseHeader &header, std::chrono::milliseconds timeout)
     {
-        std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
-        if(!header.isChunked()) {
-            header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-        }
-        waiter->appendTask(sendData(header.toString(), waiter, timeout));
-        return waiter->wait();
-    }
-
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::replyChunkHeader(HttpResponseHeader &&header, std::chrono::milliseconds timeout)
-    {
+        SERVER_RESPONSE_LOG(header.code());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         if(!header.isChunked()) {
             header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
@@ -80,10 +64,13 @@ namespace galay::http
     {
         auto str = std::move(data);
         auto bytes = Bytes::fromString(str);
+        if(timeout == std::chrono::milliseconds(-1)) {
+            timeout = m_params.send_timeout;
+        }
         while (true)
         {
             std::expected<Bytes, CommonError> res;
-            if(timeout <= std::chrono::milliseconds(0)) {
+            if(timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
                 auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
@@ -120,11 +107,14 @@ namespace galay::http
         }
         std::string str = oss.str();
         Bytes bytes = Bytes::fromString(str);
+        if(timeout == std::chrono::milliseconds(-1)) {
+            timeout = m_params.send_timeout;
+        }
         //length
         while(true)
         {
             std::expected<Bytes, CommonError> res;
-            if(timeout <= std::chrono::milliseconds(0)) {
+            if(timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
                 auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){

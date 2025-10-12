@@ -15,16 +15,15 @@ namespace galay::http {
         HeaderPair(const HeaderPair& other);
         HeaderPair(HeaderPair&& other);
         bool hasKey(const std::string& key) const;
-        std::string getValue(const std::string& key);
+        std::string getValue(const std::string& key) const;
         HttpErrorCode removeHeaderPair(const std::string& key);
         HttpErrorCode addHeaderPairIfNotExist(const std::string& key, const std::string& value);
         HttpErrorCode addHeaderPair(const std::string& key, const std::string& value);
-        std::string toString();
+        std::string toString() const;
         void clear();
         HeaderPair& operator=(const HeaderPair& other);
         HeaderPair& operator=(HeaderPair&& other);
     private:
-        std::ostringstream m_stream;
         std::map<std::string, std::string> m_headerPairs;
     };
 
@@ -37,10 +36,10 @@ namespace galay::http {
         HttpVersion& version();
         std::map<std::string,std::string>& args();
         HeaderPair& headerPairs();
-        std::string toString();
-        bool isKeepAlive();
-        bool isChunked();
-        bool isConnectionClose();
+        std::string toString() const;
+        bool isKeepAlive() const;
+        bool isChunked() const;
+        bool isConnectionClose() const;
         std::string_view checkAndGetHeaderString(std::string_view str);
         /*
             ret:
@@ -54,12 +53,11 @@ namespace galay::http {
     private:
         void parseArgs(std::string uri);
         std::string convertFromUri(std::string_view url, bool convert_plus_to_space);
-        std::string convertToUri(std::string&& url);
+        std::string convertToUri(std::string&& url) const;
         bool isHex(char c, int &v);
         size_t toUtf8(int code, char *buff);
         bool fromHexToI(const std::string_view &s, size_t i, size_t cnt, int &val);
     private:
-        std::ostringstream m_stream;
         HttpMethod m_method;
         std::string m_uri;                                          // uri
         HttpVersion m_version;                                      // 版本号
@@ -74,11 +72,11 @@ namespace galay::http {
         HttpVersion& version();
         HttpStatusCode& code();
         HeaderPair& headerPairs();
-        bool isKeepAlive();
-        bool isChunked();
-        bool isConnectionClose();
+        bool isKeepAlive() const;
+        bool isChunked() const;
+        bool isConnectionClose() const;
         std::string_view checkAndGetHeaderString(std::string_view str);
-        std::string toString();
+        std::string toString() const;
         /*
             ret:
                 kHttpError_NoError
@@ -88,7 +86,6 @@ namespace galay::http {
         HttpErrorCode fromString(std::string_view str);
         void copyFrom(const HttpResponseHeader& header);
     private:
-        std::ostringstream m_stream;
         HttpStatusCode m_code;
         HttpVersion m_version;
         HeaderPair m_headerPairs;

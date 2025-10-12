@@ -1,37 +1,87 @@
 #include "HttpServer.h"
+#include "galay-http/kernel/HttpParams.hpp"
+#include "galay-http/utils/HttpUtils.h"
+#include "galay-http/utils/HttpLogger.h"
+#include "galay/kernel/runtime/Runtime.h"
 
 namespace galay::http
 {
-    HttpServer::HttpServer(TcpServer&& server)
-        : m_server(std::move(server))
-    {
-    }
 
     void HttpServer::listen(const Host &host)
     {
         m_server.listenOn(host, DEFAULT_TCP_BACKLOG_SIZE);
     }
 
-    void HttpServer::run(std::function<Coroutine<nil>(HttpConnection, AsyncFactory)> handler)
+    void HttpServer::run(Runtime& runtime, const HttpConnFunc& handler)
     {
-        m_server.run([handler](AsyncTcpSocket socket, AsyncFactory factory) -> Coroutine<nil> { 
-            HttpConnection conn(std::move(socket), factory.createTimerGenerator());
-            return handler(std::move(conn), factory);
+        m_server.run(runtime, [handler, &runtime](AsyncTcpSocket socket) -> Coroutine<nil> { 
+            AsyncFactory factory = runtime.getAsyncFactory();
+            HttpConnection conn(std::move(socket), factory.getTimerGenerator());
+            return handler(std::move(conn));
         });
     }
 
-    void HttpServer::run(HttpRouter router, HttpParams params)
+    void HttpServer::run(Runtime& runtime, HttpRouter& router, HttpSettings params)
     {
-        m_server.run([router, params](AsyncTcpSocket socket, AsyncFactory factory) -> Coroutine<nil> { 
-            HttpConnection conn(std::move(socket), factory.createTimerGenerator());
-            auto reader = conn.getRequestReader(params);
-            co_await reader.getRequest();
+        m_server.run(runtime, [this, &runtime, &router, params](AsyncTcpSocket socket) -> Coroutine<nil> {
+            return handleConnection(runtime, router, params, std::move(socket));
         });
     }
 
     void HttpServer::stop()
     {
         m_server.stop();
+    }
+
+    void HttpServer::wait()
+    {
+        m_server.wait();
+    }
+
+    Coroutine<nil> HttpServer::handleConnection(Runtime& runtime, HttpRouter& router, HttpSettings params, AsyncTcpSocket socket)
+    {
+        AsyncFactory factory = runtime.getAsyncFactory();
+        HttpConnection conn(std::move(socket), factory.getTimerGenerator());
+        while(true) 
+        {
+            auto reader = conn.getRequestReader(params);
+            auto writer = conn.getResponseWriter(params);
+            auto request_res = co_await reader.getRequest();
+            if(!request_res) {
+                if(request_res.error().code() == HttpErrorCode::kHttpError_ConnectionClose) {
+                    co_await conn.close();
+                    co_return nil();
+                }
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[getRequest] [{}]", request_res.error().message());
+                auto response = HttpUtils::defaultHttpResponse(request_res.error().toHttpStatusCode());
+                auto response_res = co_await writer.reply(response);
+                if(!response_res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[RespReply] [{}]", response_res.error().message());
+                } 
+                co_await conn.close();
+                co_return nil();
+            }
+            auto& request = request_res.value();
+            SERVER_REQUEST_LOG(request.header().method(), request.header().uri());
+            auto route_res = co_await router.route(request, reader, writer);
+            if(!route_res) {
+                auto response = HttpUtils::defaultHttpResponse(route_res.error().toHttpStatusCode());
+                auto response_res = co_await writer.reply(response);
+                if(!response_res) {
+                    co_await conn.close();
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[Resp] [{}]", response_res.error().message());
+                    co_return nil();
+                }
+                continue;
+            }
+            if(request.header().isConnectionClose()) {
+                if(!conn.isClosed()) {
+                    co_await conn.close();
+                    co_return nil();
+                }
+            } 
+            
+        }
     }
 
     HttpServerBuilder& HttpServerBuilder::addListen(const Host& host)
@@ -57,11 +107,7 @@ namespace galay::http
         TcpServerBuilder builder;
         auto server = builder.backlog(DEFAULT_TCP_BACKLOG_SIZE)
                             .addListen(m_host)
-                            .threads(m_threads)
-                            .timeout(-1)
-                            .startCoChecker(m_coCheckerInterval)
                             .build();
-        HttpParams params;
         return HttpServer(std::move(server));
     }
 }

@@ -14,8 +14,8 @@ namespace galay::http
     class HttpReader 
     {
     public:
-        HttpReader(AsyncTcpSocket& socket, TimerGenerator& generator, HttpParams params);
-        
+        HttpReader(AsyncTcpSocket& socket, TimerGenerator& generator, HttpSettings params);
+
         /*
             @param timeout 每次recv读取超时时间
         */
@@ -50,7 +50,7 @@ namespace galay::http
                                         
     private:
         AsyncTcpSocket& m_socket;
-        HttpParams      m_params;
+        HttpSettings      m_params;
         TimerGenerator& m_generator;
         Buffer          m_buffer;
     };

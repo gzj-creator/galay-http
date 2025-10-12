@@ -12,18 +12,24 @@ namespace galay::http
     {
     }
 
-    HttpReader HttpConnection::getRequestReader(const HttpParams& params)
+    HttpReader HttpConnection::getRequestReader(const HttpSettings& params)
     {
         return HttpReader(m_socket, m_generator, params);
     }
 
-    HttpWriter HttpConnection::getResponseWriter(const HttpParams& params)
+    HttpWriter HttpConnection::getResponseWriter(const HttpSettings& params)
     {
         return HttpWriter(m_socket, m_generator, params);
     }
 
     AsyncResult<std::expected<void, CommonError>> HttpConnection::close()
     {
+        m_is_closed = true;
         return m_socket.close();
+    }
+
+    bool HttpConnection::isClosed() const
+    {
+        return m_is_closed;
     }
 }
