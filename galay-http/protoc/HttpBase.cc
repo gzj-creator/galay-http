@@ -1,6 +1,5 @@
 #include "HttpBase.h"
 
-
 namespace galay::http 
 {
     std::vector<std::string> 
@@ -358,7 +357,7 @@ namespace galay::http
     {
         auto it = mimeTypeMap.find(type);
         if( it == mimeTypeMap.end() ) {
-            return "text/plain";
+            return "application/octet-stream";
         }
         return it->second;
     }

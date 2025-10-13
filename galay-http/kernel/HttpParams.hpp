@@ -5,9 +5,13 @@
 
 namespace galay::http
 {
+
+#define DEFAULT_HTTP_RECV_TIMEOUT  std::chrono::milliseconds(30000);
+#define DEFAULT_HTTP_SEND_TIMEOUT  std::chrono::milliseconds(30000);
+
     struct HttpSettings {
-        std::chrono::milliseconds recv_timeout = std::chrono::milliseconds(-1);
-        std::chrono::milliseconds send_timeout = std::chrono::milliseconds(-1);
+        std::chrono::milliseconds recv_timeout = DEFAULT_HTTP_RECV_TIMEOUT;
+        std::chrono::milliseconds send_timeout = DEFAULT_HTTP_SEND_TIMEOUT;
 
         size_t recv_incr_length     = DEFAULT_HTTP_PEER_STEP_SIZE;
         size_t max_header_size      = DEFAULT_HTTP_MAX_HEADER_SIZE;

@@ -3,6 +3,7 @@
 #include "galay-http/utils/HttpUtils.h"
 #include "galay-http/utils/HttpLogger.h"
 
+
 using namespace galay;
 using namespace galay::http;
 
@@ -29,7 +30,6 @@ Coroutine<nil> test(Runtime& runtime)
     }
     std::cout << "send success" << std::endl;
     auto response = co_await reader.getResponse();
-    std::cout << "response: " << response.value().toString() << std::endl;
     co_return nil();
 }
 

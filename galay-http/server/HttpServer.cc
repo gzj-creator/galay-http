@@ -54,6 +54,7 @@ namespace galay::http
                 }
                 HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[getRequest] [{}]", request_res.error().message());
                 auto response = HttpUtils::defaultHttpResponse(request_res.error().toHttpStatusCode());
+                response.header().headerPairs().addHeaderPair("Connection", "close");
                 auto response_res = co_await writer.reply(response);
                 if(!response_res) {
                     HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[RespReply] [{}]", response_res.error().message());
@@ -63,7 +64,7 @@ namespace galay::http
             }
             auto& request = request_res.value();
             SERVER_REQUEST_LOG(request.header().method(), request.header().uri());
-            auto route_res = co_await router.route(request, reader, writer);
+            auto route_res = co_await router.route(request, conn);
             if(!route_res) {
                 auto response = HttpUtils::defaultHttpResponse(route_res.error().toHttpStatusCode());
                 auto response_res = co_await writer.reply(response);
@@ -80,7 +81,9 @@ namespace galay::http
                     co_return nil();
                 }
             } 
-            
+            if (conn.isClosed()) {
+                co_return nil();
+            }
         }
     }
 

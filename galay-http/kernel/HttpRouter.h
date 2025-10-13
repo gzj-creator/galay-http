@@ -2,29 +2,35 @@
 #define GALAY_HTTP_ROUTER_H 
 
 #include "HttpConnection.h"
-#include "galay-http/protoc/HttpBase.h"
+
 
 namespace galay::http
 {
 
     using HttpParams = std::unordered_map<std::string, std::string>;
-    using HttpFunc = std::function<Coroutine<nil>(HttpRequest&, HttpReader&, HttpWriter&, HttpParams)>;
+    using HttpFunc = std::function<Coroutine<nil>(HttpRequest&, HttpConnection&, HttpParams)>;
     using HttpRouteMap = std::unordered_map<std::string, HttpFunc>;
     
     class HttpRouter
     {
     public:
         using ptr = std::shared_ptr<HttpRouter>;
-        
+        /*
+            @param prefix   路由前缀，用于匹配路由
+            @param path     文件路径，用于读取文件
+        */
+        void mount(const std::string& prefix, const std::string& path);
 
         template <HttpMethod ...Methods>
         void addRoute(const std::string& path, HttpFunc function);
         template <HttpMethod ...Methods>
         void addRoute(const HttpRouteMap& map);
         AsyncResult<std::expected<void, HttpError>> 
-            route(HttpRequest& request, HttpReader& reader, HttpWriter& writer);
+            route(HttpRequest& request, HttpConnection& conn);
         virtual ~HttpRouter() = default;
     private:
+        Coroutine<nil> staticFileRoute(std::string path, HttpRequest& request, HttpConnection& conn, HttpParams params);
+        
 
         /**
          * 判断路径是否为模板路径（包含参数或通配符）
@@ -140,6 +146,13 @@ namespace galay::http
                 while (true) {
                     std::unordered_map<std::string, std::string> tempParams = params;
                     if (matchPath(uri, uriNextPos, pattern, patternSegEnd, tempParams)) {
+                        // 提取通配符匹配的内容
+                        std::string wildcardContent(&uri[uriPos], uriNextPos - uriPos);
+                        // 移除尾部的斜杠（如果有）
+                        while (!wildcardContent.empty() && wildcardContent.back() == '/') {
+                            wildcardContent.pop_back();
+                        }
+                        tempParams["*"] = wildcardContent;
                         params = tempParams;
                         return true;
                     }

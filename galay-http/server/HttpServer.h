@@ -3,7 +3,7 @@
 
 #include <galay/kernel/server/TcpServer.h>
 #include "galay-http/kernel/HttpRouter.h"
-
+#include "galay-http/kernel/HttpConnection.h"
 
 namespace galay::http 
 {

@@ -31,7 +31,7 @@ namespace galay::http
 
     //log
     #define DEFAULT_LOG_METHOD_LENGTH       20
-    #define DEFAULT_LOG_URI_PEER_LIMIT      50
+    #define DEFAULT_LOG_URI_PEER_LIMIT      30
     #define DEFAULT_LOG_STATUS_LENGTH       20
     #define DEFAULT_LOG_STATUS_TEXT_LENGTH  50
 

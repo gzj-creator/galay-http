@@ -78,7 +78,9 @@ namespace galay::http
     inline int uri_length(const std::string& uri) 
     {
         int length = uri.length() + 2;
-        return (length / DEFAULT_LOG_URI_PEER_LIMIT + 1) * DEFAULT_LOG_URI_PEER_LIMIT; 
+        // 限制最大宽度为 60，避免终端换行
+        int aligned = (length / DEFAULT_LOG_URI_PEER_LIMIT + 1) * DEFAULT_LOG_URI_PEER_LIMIT;
+        return std::min(aligned, 60);
     }
 
     inline int status_length(HttpStatusCode code)

@@ -63,6 +63,10 @@ namespace galay::http
                 co_return nil();
             }
             recv_size += bytes.value().size();
+            
+    #ifdef ENABLE_DEBUG
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Recv Length: {}]\n[Recv Data: {}]", bytes.value().size(), bytes.value().toString());
+    #endif
             std::string_view view(std::string_view(m_buffer.data(), recv_size));
             auto header_str = header.checkAndGetHeaderString(view);
             if(!header_str.empty()) {
@@ -122,6 +126,9 @@ namespace galay::http
                 co_return nil();
             }
             recv_size += bytes.value().size();
+#ifdef ENABLE_DEBUG
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Recv Length: {}]\n[Recv Data: {}]", bytes.value().size(), bytes.value().toString());
+#endif
             std::string_view view(std::string_view(m_buffer.data(), recv_size));
             auto header_str = header.checkAndGetHeaderString(view);
             if(!header_str.empty()) {
@@ -182,6 +189,9 @@ namespace galay::http
                 co_return nil();
             }
             recv_size += bytes.value().size();
+#ifdef ENABLE_DEBUG
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Recv Length: {}]\n[Recv Data: {}]", bytes.value().size(), bytes.value().toString());
+#endif
         }
         waiter->notify(m_buffer.toString());
         m_buffer.clear();

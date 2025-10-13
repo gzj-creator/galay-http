@@ -67,6 +67,9 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.send_timeout;
         }
+#ifdef ENABLE_DEBUG
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Data]\n{}", str);
+#endif
         while (true)
         {
             std::expected<Bytes, CommonError> res;
