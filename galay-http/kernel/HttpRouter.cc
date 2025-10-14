@@ -28,12 +28,7 @@ namespace galay::http
         } else {
             lastSegment = routePrefix;
         }
-        
-        // 如果最后一个路径段不是 *，则添加 /*
-        if (lastSegment != "*") {
-            routePrefix += "/*";
-        }
-        
+
         // 2. 规范化基础路径并验证
         std::filesystem::path base_path(path);
         
@@ -50,9 +45,18 @@ namespace galay::http
         // 规范化为绝对路径
         base_path = std::filesystem::canonical(std::filesystem::absolute(base_path));
         std::string canonical_path = base_path.string();
-        
-        // 3. 绑定静态文件路由处理函数，传递规范化后的路径
+
         auto handler = std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
+            std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
+        m_routes[static_cast<int>(GET)].emplace(routePrefix, handler);
+
+        // 如果最后一个路径段不是 *，则添加 /*
+        if (lastSegment != "*") {
+            routePrefix += "/*";
+        }
+
+        // 3. 绑定静态文件路由处理函数，传递规范化后的路径
+        handler = std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
                                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
         m_temlate_routes[static_cast<int>(GET)].emplace(routePrefix, handler);
     }

@@ -17,7 +17,7 @@ int main()
     
     HttpServerBuilder builder;
     HttpServer server = builder.build();
-    server.listen(Host("0.0.0.0", 8080));
+    server.listen(Host("0.0.0.0", 8060));
     
     // 创建路由器并挂载静态文件目录
     HttpRouter router;
@@ -26,7 +26,7 @@ int main()
     // 注意：mount() 会立即验证路径，如果路径不存在会抛出异常
     try {
         // 例如: GET /static/css/style.css -> 会读取 ./public/css/style.css
-        router.mount("/static", "/Users/gongzhijie/Desktop/static");
+        router.mount("/questionnaire/static", "/Users/gongzhijie/Desktop/projects/cursor/questionnaire/dist");
         
         // 也可以挂载多个目录
         // router.mount("/assets", "./assets");
@@ -38,8 +38,8 @@ int main()
         return 1;
     }
     
-    std::cout << "Static file server started on http://0.0.0.0:8080" << std::endl;
-    std::cout << "Try: http://localhost:8080/static/index.html" << std::endl;
+    std::cout << "Static file server started on http://0.0.0.0:8060" << std::endl;
+    std::cout << "Try: http://localhost:8060/questionnaire/static/index.html" << std::endl;
     
     server.run(runtime, router);
     server.wait();
