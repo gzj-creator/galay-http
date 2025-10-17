@@ -1,4 +1,4 @@
-file(GLOB SRC_LIST "*.cc" "protoc/*.cc" "utils/*.cc" "kernel/*.cc" "server/*.cc" "client/*.cc")
+file(GLOB SRC_LIST "*.cc" "protoc/*/*.cc" "utils/*.cc" "kernel/*/*.cc" "server/*.cc" "client/*.cc")
 
 find_package(Galay REQUIRED)
 find_package(OpenSSL REQUIRED)

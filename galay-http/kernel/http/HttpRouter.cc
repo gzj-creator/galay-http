@@ -1,7 +1,7 @@
 #include "HttpRouter.h"
-#include "galay-http/kernel/HttpConnection.h"
-#include "galay-http/protoc/HttpBase.h"
-#include "galay-http/protoc/HttpError.h"
+#include "HttpConnection.h"
+#include "galay-http/protoc/http/HttpBase.h"
+#include "galay-http/protoc/http/HttpError.h"
 #include "galay-http/utils/HttpLogger.h"
 #include "galay-http/utils/HttpUtils.h"
 #include <filesystem>
@@ -69,23 +69,27 @@ namespace galay::http
         //middleware
         // 首先尝试精确匹配（性能更好）
         if(auto it = m_routes[static_cast<int>(header.method())].find(header.uri()); it != m_routes[static_cast<int>(header.method())].end()) {
+            // 每个请求使用独立的 waiter，避免并发冲突
+            auto waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
             auto co = it->second(request, conn, std::move(params));
-            co.then([this](){
-                m_waiter.notify({});
+            co.then([waiter](){
+                waiter->notify({});
             });
-            m_waiter.appendTask(std::move(co));
-            return m_waiter.wait();
+            waiter->appendTask(std::move(co));
+            return waiter->wait();
         } 
         
         
         for(auto& [template_uri, routes] : m_temlate_routes[static_cast<int>(header.method())]) {
             if(matchRoute(request.header().uri(), template_uri, params)) {
+                // 每个请求使用独立的 waiter，避免并发冲突
+                auto waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
                 auto co = routes(request, conn, std::move(params));
-                co.then([this](){
-                    m_waiter.notify({});
+                co.then([waiter](){
+                    waiter->notify({});
                 });
-                m_waiter.appendTask(std::move(co));
-                return m_waiter.wait();
+                waiter->appendTask(std::move(co));
+                return waiter->wait();
             }
         }
         return {std::unexpected(HttpError(HttpErrorCode::kHttpError_NotFound))};

@@ -1,5 +1,5 @@
-#include "kernel/HttpReader.h"
-#include "kernel/HttpWriter.h"
+#include "kernel/http/HttpReader.h"
+#include "kernel/http/HttpWriter.h"
 #include "utils/HttpUtils.h"
 #include <galay/kernel/async/AsyncFactory.h>
 

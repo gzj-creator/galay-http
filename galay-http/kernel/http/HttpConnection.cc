@@ -1,4 +1,5 @@
 #include "HttpConnection.h"
+#include "galay/common/Error.h"
 
 namespace galay::http 
 {
@@ -24,6 +25,9 @@ namespace galay::http
 
     AsyncResult<std::expected<void, CommonError>> HttpConnection::close()
     {
+        if(m_is_closed == true) {
+            return {std::expected<void, CommonError>()};
+        }
         m_is_closed = true;
         return m_socket.close();
     }

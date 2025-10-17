@@ -4,8 +4,8 @@
 #include <galay/kernel/async/Socket.h>
 #include <galay/kernel/async/TimerGenerator.h>
 #include <galay/kernel/coroutine/AsyncWaiter.hpp>
-#include "galay-http/protoc/HttpRequest.h"
-#include "galay-http/protoc/HttpResponse.h"
+#include "galay-http/protoc/http/HttpRequest.h"
+#include "galay-http/protoc/http/HttpResponse.h"
 #include "HttpParams.hpp"
 
 namespace galay::http

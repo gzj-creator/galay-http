@@ -2,8 +2,8 @@
 #define GALAY_HTTP_SERVER_H 
 
 #include <galay/kernel/server/TcpServer.h>
-#include "galay-http/kernel/HttpRouter.h"
-#include "galay-http/kernel/HttpConnection.h"
+#include "galay-http/kernel/http/HttpRouter.h"
+#include "galay-http/kernel/http/HttpConnection.h"
 
 namespace galay::http 
 {

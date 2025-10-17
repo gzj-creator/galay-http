@@ -1,8 +1,8 @@
 #ifndef GALAY_HTTP_UTILS_H
 #define GALAY_HTTP_UTILS_H 
 
-#include "galay-http/protoc/HttpRequest.h"
-#include "galay-http/protoc/HttpResponse.h"
+#include "galay-http/protoc/http/HttpRequest.h"
+#include "galay-http/protoc/http/HttpResponse.h"
 
 namespace galay::http 
 { 
@@ -82,6 +82,13 @@ namespace galay::http
         static HttpResponse defaultOk(const std::string& type, std::string&& body);
 
         static HttpResponse defaultHttpResponse(HttpStatusCode code);
+        
+        
+        static HttpResponse createWebSocketUpgradeResponse(const std::string& clientKey);
+
+    private:
+        // WebSocket 握手相关
+        static std::string generateWebSocketAcceptKey(const std::string& clientKey);
     };
 }
 

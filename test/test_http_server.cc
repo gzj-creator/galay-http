@@ -1,6 +1,6 @@
 #include "galay/kernel/runtime/Runtime.h"
-#include "kernel/HttpRouter.h"
-#include "protoc/HttpBase.h"
+#include "kernel/http/HttpRouter.h"
+#include "protoc/http/HttpBase.h"
 #include "server/HttpServer.h"
 #include "utils/HttpLogger.h"
 #include "utils/HttpUtils.h"

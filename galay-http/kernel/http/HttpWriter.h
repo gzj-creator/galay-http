@@ -4,8 +4,8 @@
 #include <galay/kernel/async/Socket.h>
 #include <galay/kernel/async/TimerGenerator.h>
 #include <galay/kernel/coroutine/AsyncWaiter.hpp>
-#include "galay-http/protoc/HttpResponse.h"
-#include "galay-http/protoc/HttpRequest.h"
+#include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/protoc/http/HttpRequest.h"
 #include "HttpParams.hpp" 
 
 namespace galay::http
@@ -42,6 +42,11 @@ namespace galay::http
             replyChunkData(  std::string_view chunk,
                             bool is_last,
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
+
+        // WebSocket 升级
+        AsyncResult<std::expected<void, HttpError>>
+            upgradeToWebSocket(HttpRequest& request,
+                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
        
                             
     private:

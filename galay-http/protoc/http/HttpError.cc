@@ -32,6 +32,8 @@ namespace galay::http
         "Recv time out",                       // kHttpError_RecvTimeOut
         "Send timeout",                         //kHttpError_SendTimeOut
         "Not found",                            // kHttpError_NotFound  
+        "Not implemented",                      // kHttpError_NotImplemented
+        "Upgrade failed",                       // kHttpError_UpgradeFailed
         "Unknown error",                      // kHttpError_UnknownError
     };
 
@@ -123,7 +125,10 @@ namespace galay::http
                 return HttpStatusCode::NotFound_404;
             case kHttpError_UnknownError:
                 return HttpStatusCode::InternalServerError_500;
-            
+            case kHttpError_NotImplemented:
+                return HttpStatusCode::NotImplemented_501;
+            case kHttpError_UpgradeFailed:
+                return HttpStatusCode::UpgradeRequired_426;
             default:
                 return HttpStatusCode::InternalServerError_500;
         }

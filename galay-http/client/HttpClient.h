@@ -2,9 +2,9 @@
 #define GALAY_HTTP_CLIENT_H
 
 #include <galay/kernel/async/Socket.h>
-#include "galay-http/kernel/HttpParams.hpp"
-#include "galay-http/kernel/HttpReader.h"
-#include "galay-http/kernel/HttpWriter.h"
+#include "galay-http/kernel/http/HttpParams.hpp"
+#include "galay-http/kernel/http/HttpReader.h"
+#include "galay-http/kernel/http/HttpWriter.h"
 #include "galay/kernel/runtime/Runtime.h"
 
 namespace galay::http

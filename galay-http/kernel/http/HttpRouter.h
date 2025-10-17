@@ -194,7 +194,7 @@ namespace galay::http
             return false;
         }
     private:
-        AsyncWaiter<void, HttpError> m_waiter;
+        // 移除了 m_waiter 成员变量 - 每个请求现在使用独立的局部 waiter，避免并发冲突
         std::array<std::unordered_map<std::string, HttpFunc>, static_cast<int>(HttpMethod::Http_Method_Size)> m_routes;
         std::array<std::unordered_map<std::string, HttpFunc>, static_cast<int>(HttpMethod::Http_Method_Size)> m_temlate_routes;
     };

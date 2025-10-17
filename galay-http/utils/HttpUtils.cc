@@ -1,4 +1,9 @@
 #include "HttpUtils.h"
+#include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <openssl/bio.h>
+#include <openssl/buffer.h>
+#include "galay-http/protoc/websocket/WsBase.h"
 
 namespace galay::http 
 {
@@ -1043,5 +1048,55 @@ namespace galay::http
             default:
                 return defaultInternalServerError();
         }
+    }
+
+    // WebSocket 相关实现
+    std::string HttpUtils::generateWebSocketAcceptKey(const std::string& clientKey)
+    {
+        
+        // 拼接客户端 key 和固定 GUID
+        std::string combined = clientKey + WS_MAGIC_STRING;
+        
+        // 计算 SHA-1
+        unsigned char hash[SHA_DIGEST_LENGTH];
+        SHA1(reinterpret_cast<const unsigned char*>(combined.c_str()), combined.length(), hash);
+        
+        // Base64 编码
+        BIO* bio = BIO_new(BIO_s_mem());
+        BIO* b64 = BIO_new(BIO_f_base64());
+        BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);  // 不添加换行符
+        bio = BIO_push(b64, bio);
+        
+        BIO_write(bio, hash, SHA_DIGEST_LENGTH);
+        BIO_flush(bio);
+        
+        BUF_MEM* buffer = nullptr;
+        BIO_get_mem_ptr(bio, &buffer);
+        
+        std::string result(buffer->data, buffer->length);
+        BIO_free_all(bio);
+        
+        return result;
+    }
+
+    HttpResponse HttpUtils::createWebSocketUpgradeResponse(const std::string& clientKey)
+    {
+        HttpResponse response;
+        HttpResponseHeader header;
+        
+        // 设置 101 Switching Protocols 状态码
+        header.code() = HttpStatusCode::SwitchingProtocol_101;
+        header.version() = HttpVersion::Http_Version_1_1;
+        
+        // 设置必需的 WebSocket 握手响应头
+        header.headerPairs().addHeaderPair("Upgrade", "websocket");
+        header.headerPairs().addHeaderPair("Connection", "Upgrade");
+        header.headerPairs().addHeaderPair("Sec-WebSocket-Accept", generateWebSocketAcceptKey(clientKey));
+        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
+        
+        response.setHeader(std::move(header));
+        // WebSocket 握手响应不包含 body
+        
+        return response;
     }
 }

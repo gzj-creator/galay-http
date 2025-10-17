@@ -1,7 +1,7 @@
 #ifndef GALAY_HTTP_PARAMS_H
 #define GALAY_HTTP_PARAMS_H 
 
-#include "galay-http/protoc/HttpBase.h"
+#include "galay-http/protoc/http/HttpBase.h"
 
 namespace galay::http
 {

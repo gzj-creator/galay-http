@@ -38,6 +38,8 @@ namespace galay::http
         kHttpError_RecvTimeOut,              // 接收超时
         kHttpError_SendTimeOut,              // 发送超时
         kHttpError_NotFound,                 // 未找到
+        kHttpError_NotImplemented,           // 未实现
+        kHttpError_UpgradeFailed,            // 升级失败
         kHttpError_UnknownError,              // 未知错误
     };
 

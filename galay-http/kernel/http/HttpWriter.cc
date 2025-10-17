@@ -1,5 +1,6 @@
 #include "HttpWriter.h"
 #include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/HttpUtils.h"
 
 namespace galay::http
 {
@@ -142,5 +143,49 @@ namespace galay::http
         }
         waiter->notify({});
         co_return nil();
+    }
+
+    AsyncResult<std::expected<void, HttpError>> HttpWriter::upgradeToWebSocket(HttpRequest& request, std::chrono::milliseconds timeout)
+    {
+        auto& header = request.header();
+        
+        // 验证 Upgrade 头
+        if (!header.headerPairs().hasKey("Upgrade")) {
+            return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
+        }
+        
+        std::string upgrade_value = header.headerPairs().getValue("Upgrade");
+        if (upgrade_value != "websocket") {
+            return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
+        }
+        
+        // 验证 Connection 头
+        if (!header.headerPairs().hasKey("Connection")) {
+            return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
+        }
+        
+        // 验证 Sec-WebSocket-Key 头
+        if (!header.headerPairs().hasKey("Sec-WebSocket-Key")) {
+            return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
+        }
+        
+        std::string client_key = header.headerPairs().getValue("Sec-WebSocket-Key");
+        if (client_key.empty()) {
+            return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
+        }
+        
+        // 可选：验证 Sec-WebSocket-Version（应该是 13）
+        if (header.headerPairs().hasKey("Sec-WebSocket-Version")) {
+            std::string version = header.headerPairs().getValue("Sec-WebSocket-Version");
+            if (version != "13") {
+                return {std::unexpected(HttpErrorCode::kHttpError_VersionNotSupport)};
+            }
+        }
+        
+        // 创建 WebSocket 升级响应
+        auto response = HttpUtils::createWebSocketUpgradeResponse(client_key);
+        
+        // 发送升级响应
+        return reply(response, timeout);
     }
 }
