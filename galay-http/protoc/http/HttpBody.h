@@ -28,12 +28,11 @@ namespace galay::http
 
 
     template<typename T>
-    concept HttpBodyType = requires(T t) {
-        std::derived_from<T, HttpBody>;
-        std::is_default_constructible_v<T>;
-        std::is_move_assignable_v<T>;
+    concept HttpBodyType = 
+        std::derived_from<T, HttpBody> &&
+        std::is_default_constructible_v<T> &&
+        std::is_move_assignable_v<T> &&
         std::is_move_constructible_v<T>;
-    };
 
 }
 

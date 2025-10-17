@@ -46,19 +46,20 @@ namespace galay::http
         base_path = std::filesystem::canonical(std::filesystem::absolute(base_path));
         std::string canonical_path = base_path.string();
 
-        auto handler = std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
-            std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
-        m_routes[static_cast<int>(GET)].emplace(routePrefix, handler);
+        // 注册精确路由
+        m_routes[static_cast<int>(GET)].emplace(routePrefix, 
+            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
+                std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
         // 如果最后一个路径段不是 *，则添加 /*
         if (lastSegment != "*") {
             routePrefix += "/*";
         }
 
-        // 3. 绑定静态文件路由处理函数，传递规范化后的路径
-        handler = std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
-                                std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
-        m_temlate_routes[static_cast<int>(GET)].emplace(routePrefix, handler);
+        // 注册模板路由（带通配符）
+        m_temlate_routes[static_cast<int>(GET)].emplace(routePrefix, 
+            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
+                std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
     }
 
     AsyncResult<std::expected<void, HttpError>> HttpRouter::route(HttpRequest &request, HttpConnection& conn)
