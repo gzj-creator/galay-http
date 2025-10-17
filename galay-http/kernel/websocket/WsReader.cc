@@ -12,6 +12,7 @@ namespace galay::http
     AsyncResult<std::expected<WsFrame, WsError>> 
     WsReader::readFrame(std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsReader] Reading frame");
         if (timeout.count() == -1) {
             timeout = m_params.recv_timeout;
         }
@@ -24,6 +25,7 @@ namespace galay::http
     AsyncResult<std::expected<std::string, WsError>> 
     WsReader::readMessage(std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsReader] Reading message");
         if (timeout.count() == -1) {
             timeout = m_params.recv_timeout;
         }
@@ -70,7 +72,6 @@ namespace galay::http
                     return m_socket.recv(m_buffer.data() + recv_size, m_buffer.capacity() - recv_size);
                 }, timeout);
                 if (!res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[{}] [WsReader] Recv timeout", __LINE__);
                     waiter->notify(std::unexpected(WsError(kWsError_RecvTimeOut)));
                     co_return nil{};
                 }
@@ -323,6 +324,7 @@ namespace galay::http
             }
         }
 
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsReader] Message read complete, size: {}", message.size());
         waiter->notify(std::move(message));
         co_return nil{};
     }

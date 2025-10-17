@@ -64,9 +64,6 @@ namespace galay::http
             }
             recv_size += bytes.value().size();
             
-    #ifdef ENABLE_DEBUG
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Recv Length: {}]\n[Recv Data: {}]", bytes.value().size(), bytes.value().toString());
-    #endif
             std::string_view view(std::string_view(m_buffer.data(), recv_size));
             auto header_str = header.checkAndGetHeaderString(view);
             if(!header_str.empty()) {
@@ -126,9 +123,6 @@ namespace galay::http
                 co_return nil();
             }
             recv_size += bytes.value().size();
-#ifdef ENABLE_DEBUG
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Recv Length: {}]\n[Recv Data: {}]", bytes.value().size(), bytes.value().toString());
-#endif
             std::string_view view(std::string_view(m_buffer.data(), recv_size));
             auto header_str = header.checkAndGetHeaderString(view);
             if(!header_str.empty()) {
@@ -189,9 +183,6 @@ namespace galay::http
                 co_return nil();
             }
             recv_size += bytes.value().size();
-#ifdef ENABLE_DEBUG
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Recv Length: {}]\n[Recv Data: {}]", bytes.value().size(), bytes.value().toString());
-#endif
         }
         waiter->notify(m_buffer.toString());
         m_buffer.clear();
@@ -201,6 +192,7 @@ namespace galay::http
     Coroutine<nil> HttpReader::readRequest(std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter, std::chrono::milliseconds timeout)
     {
         HttpRequest request;
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Reading request");
 
         std::shared_ptr<AsyncWaiter<HttpRequestHeader, HttpError>> header_waiter = std::make_shared<AsyncWaiter<HttpRequestHeader, HttpError>>();
         header_waiter->appendTask(readRequestHeader(header_waiter, timeout));
@@ -256,6 +248,7 @@ namespace galay::http
             co_return nil();
         }
         request.setBodyStr(std::move(*body_res));
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Request read complete");
         waiter->notify(std::move(request));
         co_return nil();
     }
@@ -263,6 +256,7 @@ namespace galay::http
     Coroutine<nil> HttpReader::readResponse(std::shared_ptr<AsyncWaiter<HttpResponse, HttpError>> waiter, std::chrono::milliseconds timeout)
     {
         HttpResponse response;
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Reading response");
         std::shared_ptr<AsyncWaiter<HttpResponseHeader, HttpError>> header_waiter = std::make_shared<AsyncWaiter<HttpResponseHeader, HttpError>>();
         header_waiter->appendTask(readResponseHeader(header_waiter, timeout));
         auto header_res = co_await header_waiter->wait();
@@ -306,6 +300,7 @@ namespace galay::http
             co_return nil();
         }
         response.setBodyStr(std::move(*body_res));
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Response read complete");
         waiter->notify(std::move(response));
         co_return nil();
     }

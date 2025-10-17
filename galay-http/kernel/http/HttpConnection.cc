@@ -1,5 +1,6 @@
 #include "HttpConnection.h"
 #include "galay/common/Error.h"
+#include "galay-http/utils/HttpLogger.h"
 
 namespace galay::http 
 {
@@ -28,6 +29,7 @@ namespace galay::http
         if(m_is_closed == true) {
             return {std::expected<void, CommonError>()};
         }
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpConnection] Close");
         m_is_closed = true;
         return m_socket.close();
     }

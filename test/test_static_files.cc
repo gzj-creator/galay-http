@@ -3,12 +3,16 @@
 #include "server/HttpServer.h"
 #include "utils/HttpLogger.h"
 #include <iostream>
+#include <signal.h>
 
 using namespace galay;
 using namespace galay::http;
 
 int main()
 {
+    // 忽略 SIGPIPE 信号，防止客户端断开连接时程序崩溃
+    signal(SIGPIPE, SIG_IGN);
+    
     HttpLogger::getInstance()->getLogger()->getSpdlogger()->set_level(spdlog::level::level_enum::debug);
     
     RuntimeBuilder runtimeBuilder;
@@ -17,7 +21,7 @@ int main()
     
     HttpServerBuilder builder;
     HttpServer server = builder.build();
-    server.listen(Host("0.0.0.0", 8060));
+    server.listen(Host("0.0.0.0", 80));
     
     // 创建路由器并挂载静态文件目录
     HttpRouter router;
@@ -26,7 +30,7 @@ int main()
     // 注意：mount() 会立即验证路径，如果路径不存在会抛出异常
     try {
         // 例如: GET /static/css/style.css -> 会读取 ./public/css/style.css
-        router.mount("/questionnaire/static", "/Users/gongzhijie/Desktop/projects/cursor/questionnaire/dist");
+        router.mount("/static", "/home/ubuntu/static");
         
         // 也可以挂载多个目录
         // router.mount("/assets", "./assets");
@@ -38,8 +42,8 @@ int main()
         return 1;
     }
     
-    std::cout << "Static file server started on http://0.0.0.0:8060" << std::endl;
-    std::cout << "Try: http://localhost:8060/questionnaire/static/index.html" << std::endl;
+    std::cout << "Static file server started on http://0.0.0.0:80" << std::endl;
+    std::cout << "Try: http://localhost:80/questionnaire/static/index.html" << std::endl;
     
     server.run(runtime, router);
     server.wait();

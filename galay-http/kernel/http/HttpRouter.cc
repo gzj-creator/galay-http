@@ -12,6 +12,8 @@ namespace galay::http
 {
     void HttpRouter::mount(const std::string& prefix, const std::string& path)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Mount {} -> {}", prefix, path);
+        
         // 1. 规范化路由前缀
         std::string routePrefix = prefix;
         
@@ -65,11 +67,14 @@ namespace galay::http
     AsyncResult<std::expected<void, HttpError>> HttpRouter::route(HttpRequest &request, HttpConnection& conn)
     {
         auto& header = request.header();
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Route {} {}", httpMethodToString(header.method()), header.uri());
+        
         // 尝试模板匹配（带参数或通配符）
         HttpParams params;
         //middleware
         // 首先尝试精确匹配（性能更好）
         if(auto it = m_routes[static_cast<int>(header.method())].find(header.uri()); it != m_routes[static_cast<int>(header.method())].end()) {
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Exact match found");
             // 每个请求使用独立的 waiter，避免并发冲突
             auto waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
             auto co = it->second(request, conn, std::move(params));
@@ -83,6 +88,7 @@ namespace galay::http
         
         for(auto& [template_uri, routes] : m_temlate_routes[static_cast<int>(header.method())]) {
             if(matchRoute(request.header().uri(), template_uri, params)) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Template match found: {}", template_uri);
                 // 每个请求使用独立的 waiter，避免并发冲突
                 auto waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
                 auto co = routes(request, conn, std::move(params));
@@ -93,13 +99,13 @@ namespace galay::http
                 return waiter->wait();
             }
         }
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] No route found");
         return {std::unexpected(HttpError(HttpErrorCode::kHttpError_NotFound))};
     }
 
     Coroutine<nil> HttpRouter::staticFileRoute(std::string path, HttpRequest& request, HttpConnection& conn, HttpParams params)
     {
         auto writer = conn.getResponseWriter({});
-        HttpResponse response;
         
         try {
             // path 已经是规范化的绝对路径（在 mount 中完成）
@@ -113,55 +119,104 @@ namespace galay::http
                 relative_file = "index.html";  // 默认文件
             }
             
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Serve file: {}", relative_file);
+            
             // 3. 构建完整文件路径
             std::filesystem::path full_path = base_path / relative_file;
             
             // 4. 检查文件是否存在
             if (!std::filesystem::exists(full_path)) {
-                response = HttpUtils::defaultNotFound();
-            } else {
-                // 5. 规范化完整路径（解析 .. 等）
-                full_path = std::filesystem::canonical(full_path);
+                auto response = HttpUtils::defaultNotFound();
+                co_await writer.reply(response);
+                co_return nil();
+            }
+            
+            // 5. 规范化完整路径（解析 .. 等）
+            full_path = std::filesystem::canonical(full_path);
+            
+            // 6. 安全检查：确保规范化后的路径仍在 base_path 下（防止路径遍历攻击）
+            auto full_path_str = full_path.string();
+            auto base_path_str = base_path.string();
+            if (full_path_str.substr(0, base_path_str.length()) != base_path_str) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Path traversal attempt blocked");
+                auto response = HttpUtils::defaultForbidden();
+                co_await writer.reply(response);
+                co_return nil();
+            }
+            
+            // 7. 检查是否是文件（不是目录）
+            if (!std::filesystem::is_regular_file(full_path)) {
+                auto response = HttpUtils::defaultForbidden();
+                co_await writer.reply(response);
+                co_return nil();
+            }
+            
+            // 8. 流式发送文件
+            auto file_size = std::filesystem::file_size(full_path);
+            auto extension = full_path.extension().string().substr(1);
+            
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Streaming file, size: {} bytes", file_size);
+            
+            // 准备响应头
+            HttpResponseHeader header;
+            header.setCode(HttpStatusCode::Http_Status_OK);
+            header.setVersion(HttpVersion::Http_Version_1_1);
+            header.headerPairs().addHeaderPair("Content-Length", std::to_string(file_size));
+            header.headerPairs().addHeaderPair("Content-Type", HttpUtils::getMimeType(extension));
+            header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+            
+            // 发送响应头
+            auto header_res = co_await writer.replyChunkHeader(header);
+            if (!header_res) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
+                co_await conn.close();
+                co_return nil();
+            }
+            
+            // 流式发送文件内容
+            constexpr size_t CHUNK_SIZE = 64 * 1024;  // 64KB 缓冲区
+            std::vector<char> buffer(CHUNK_SIZE);
+            std::ifstream file(full_path.string(), std::ios::binary);
+            
+            size_t total_sent = 0;
+            while (file && !file.eof()) {
+                file.read(buffer.data(), CHUNK_SIZE);
+                size_t bytes_read = file.gcount();
                 
-                // 6. 安全检查：确保规范化后的路径仍在 base_path 下（防止路径遍历攻击）
-                auto full_path_str = full_path.string();
-                auto base_path_str = base_path.string();
-                if (full_path_str.substr(0, base_path_str.length()) != base_path_str) {
-                    // 路径遍历攻击！返回 403 Forbidden
-                    response = HttpUtils::defaultForbidden();
-                } 
-                // 7. 检查是否是文件（不是目录）
-                else if (!std::filesystem::is_regular_file(full_path)) {
-                    response = HttpUtils::defaultForbidden();
-                } else {
-                    // 8. 读取文件内容
-                    try {
-                        auto content = utils::zeroReadFile(full_path.string());
-                        auto extension = full_path.extension().string().substr(1);
-#ifdef ENABLE_DEBUG
-                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Ext: {}]", extension);
-#endif
-                        response = HttpUtils::defaultOk(extension, std::move(content));
-                    } catch (std::exception& e) {
-                        response = HttpUtils::defaultInternalServerError();
+                if (bytes_read > 0) {
+                    total_sent += bytes_read;
+                    bool is_last = (total_sent >= file_size);
+                    
+                    auto chunk_res = co_await writer.replyChunkData(
+                        std::string_view(buffer.data(), bytes_read),
+                        is_last
+                    );
+                    
+                    if (!chunk_res) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                            "[HttpRouter] Send chunk failed at {}/{} bytes: {}", 
+                            total_sent, file_size, chunk_res.error().message()
+                        );
+                        co_await conn.close();
+                        co_return nil();
                     }
                 }
             }
             
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                "[HttpRouter] File sent successfully: {} bytes", total_sent
+            );
+            
         } catch (const std::filesystem::filesystem_error& e) {
-            // 文件系统错误（如路径不存在、权限问题等）
-            response = HttpUtils::defaultNotFound();
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Filesystem error: {}", e.what());
+            auto response = HttpUtils::defaultNotFound();
+            co_await writer.reply(response);
         } catch (const std::exception& e) {
-            // 其他异常
-            response = HttpUtils::defaultInternalServerError();
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Error: {}", e.what());
+            auto response = HttpUtils::defaultInternalServerError();
+            co_await writer.reply(response);
         }
         
-        // 发送响应
-        auto resp_res = co_await writer.reply(response);
-        if(!resp_res) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("staticFileRoute error: {}", resp_res.error().message());
-            co_return nil();
-        }
         co_return nil();
     }
 }

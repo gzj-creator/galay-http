@@ -1,4 +1,5 @@
 #include "WsWriter.h"
+#include "galay-http/utils/HttpLogger.h"
 
 namespace galay::http
 {
@@ -10,6 +11,7 @@ namespace galay::http
     AsyncResult<std::expected<void, WsError>> 
     WsWriter::sendFrame(WsFrame& frame, std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsWriter] Sending frame");
         if (timeout.count() == -1) {
             timeout = m_params.send_timeout;
         }
@@ -22,6 +24,7 @@ namespace galay::http
     AsyncResult<std::expected<void, WsError>> 
     WsWriter::sendText(const std::string& text, std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsWriter] Send text, size: {}", text.size());
         if (timeout.count() == -1) {
             timeout = m_params.send_timeout;
         }
@@ -34,6 +37,7 @@ namespace galay::http
     AsyncResult<std::expected<void, WsError>> 
     WsWriter::sendBinary(const std::string& data, std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsWriter] Send binary, size: {}", data.size());
         if (timeout.count() == -1) {
             timeout = m_params.send_timeout;
         }
@@ -68,6 +72,7 @@ namespace galay::http
     WsWriter::sendClose(WsCloseCode code, const std::string& reason, 
                        std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsWriter] Send close, code: {}", static_cast<int>(code));
         if (timeout.count() == -1) {
             timeout = m_params.send_timeout;
         }

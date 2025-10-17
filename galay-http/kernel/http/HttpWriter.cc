@@ -11,6 +11,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::send(HttpRequest &request, std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Send request");
         CLIENT_REQUEST_LOG(request.header().method(), request.header().uri());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendData(request.toString(), waiter, timeout));
@@ -30,6 +31,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::reply(HttpResponse& response, std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Reply response");
         SERVER_RESPONSE_LOG(response.header().code());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendData(response.toString(), waiter, timeout));
@@ -68,9 +70,6 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.send_timeout;
         }
-#ifdef ENABLE_DEBUG
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[Data]\n{}", str);
-#endif
         while (true)
         {
             std::expected<Bytes, CommonError> res;
@@ -93,7 +92,9 @@ namespace galay::http
                     break;
                 }
             } else {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Send failed: {}", res.error().message());
                 waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
+                co_return nil();
             }
         }
         waiter->notify({});
@@ -137,8 +138,9 @@ namespace galay::http
                     break;
                 }
             } else {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[sendChunkData] {}", res.error().message());
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Send chunk failed: {}", res.error().message());
                 waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
+                co_return nil();
             }
         }
         waiter->notify({});
@@ -147,6 +149,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, HttpError>> HttpWriter::upgradeToWebSocket(HttpRequest& request, std::chrono::milliseconds timeout)
     {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Upgrade to WebSocket");
         auto& header = request.header();
         
         // 验证 Upgrade 头
