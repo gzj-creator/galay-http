@@ -48,6 +48,11 @@ namespace galay::http
             upgradeToWebSocket(HttpRequest& request,
                              std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
        
+#ifdef __linux__
+        // 使用 sendfile 发送文件（零拷贝，仅 Linux）
+        AsyncResult<std::expected<long, HttpError>>
+            sendfile(int file_fd, off_t offset, size_t length);
+#endif
                             
     private:
         Coroutine<nil> sendData(    std::string data,
@@ -58,6 +63,13 @@ namespace galay::http
                                         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter,
                                         bool is_last,
                                         std::chrono::milliseconds timeout);
+
+#ifdef __linux__
+        Coroutine<nil> sendfileInternal(int file_fd, 
+                                        off_t offset, 
+                                        size_t length,
+                                        std::shared_ptr<AsyncWaiter<long, HttpError>> waiter);
+#endif
 
     private:
         AsyncTcpSocket& m_socket;

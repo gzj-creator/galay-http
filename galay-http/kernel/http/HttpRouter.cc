@@ -7,8 +7,15 @@
 #include <filesystem>
 #include <fstream>
 #include <vector>
+#include <algorithm>  // for std::min
+#include <chrono>     // for time measurement
 #include <galay/utils/System.h>
 #include <string>
+#ifdef __linux__
+#include <fcntl.h>
+#include <unistd.h>
+#include <cstring>  // for strerror
+#endif
 
 namespace galay::http
 {
@@ -173,11 +180,88 @@ namespace galay::http
                 co_return nil();
             }
             
-            // 8. 流式发送文件
+            // 8. 发送文件
             auto file_size = std::filesystem::file_size(full_path);
             auto extension = full_path.extension().string().substr(1);
             
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Streaming file, size: {} bytes", file_size);
+            // 解析 Range 请求头（断点续传支持）
+            bool is_range_request = false;
+            size_t range_start = 0;
+            size_t range_end = file_size - 1;
+            
+            if (settings.support_range && request.header().headerPairs().hasKey("Range")) {
+                std::string range_header = request.header().headerPairs().getValue("Range");
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    "[HttpRouter] Range request: {}", range_header
+                );
+                
+                // 解析 "bytes=start-end" 格式
+                if (range_header.substr(0, 6) == "bytes=") {
+                    std::string range_spec = range_header.substr(6);
+                    size_t dash_pos = range_spec.find('-');
+                    
+                    if (dash_pos != std::string::npos) {
+                        std::string start_str = range_spec.substr(0, dash_pos);
+                        std::string end_str = range_spec.substr(dash_pos + 1);
+                        
+                        try {
+                            if (!start_str.empty()) {
+                                range_start = std::stoull(start_str);
+                            }
+                            if (!end_str.empty()) {
+                                range_end = std::stoull(end_str);
+                            } else {
+                                range_end = file_size - 1;
+                            }
+                            
+                            // 验证范围
+                            if (range_start < file_size && range_end < file_size && range_start <= range_end) {
+                                is_range_request = true;
+                                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                                    "[HttpRouter] Valid range: {}-{}/{}", 
+                                    range_start, range_end, file_size
+                                );
+                            } else {
+                                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                                    "[HttpRouter] Invalid range: {}-{}/{}", 
+                                    range_start, range_end, file_size
+                                );
+                                // 返回 416 Range Not Satisfiable
+                                if (!conn.isClosed()) {
+                                    HttpResponse response;
+                                    response.header().code() = HttpStatusCode::RangeNotSatisfiable_416;
+                                    response.header().version() = HttpVersion::Http_Version_1_1;
+                                    response.header().headerPairs().addHeaderPair("Content-Range", "bytes */" + std::to_string(file_size));
+                                    co_await writer.reply(response, settings.send_timeout);
+                                }
+                                co_return nil();
+                            }
+                        } catch (const std::exception& e) {
+                            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                                "[HttpRouter] Failed to parse range: {}", e.what()
+                            );
+                        }
+                    }
+                }
+            }
+            
+            // 确定传输模式
+            std::string transfer_mode;
+#ifdef __linux__
+            if (settings.use_sendfile) {
+                transfer_mode = "sendfile (zero-copy)";
+            } else
+#endif
+            if (settings.use_chunked_transfer) {
+                transfer_mode = "chunked";
+            } else {
+                transfer_mode = "content-length";
+            }
+            
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    "[HttpRouter] Sending file, size: {} bytes, mode: {}, range: {}", 
+                    file_size, transfer_mode, is_range_request ? "yes" : "no"
+                );
             
             // 检查连接状态
             if (conn.isClosed()) {
@@ -185,78 +269,311 @@ namespace galay::http
                 co_return nil();
             }
             
-            // 准备响应头
-            HttpResponseHeader header;
-            header.code() = HttpStatusCode::OK_200;
-            header.version() = HttpVersion::Http_Version_1_1;
-            header.headerPairs().addHeaderPair("Content-Length", std::to_string(file_size));
-            header.headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(extension));
-            header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-            
-            // 发送响应头
-            auto header_res = co_await writer.replyChunkHeader(header, settings.send_timeout);
-            if (!header_res) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
-                // 发送失败说明连接已被对端关闭，只标记状态，不执行 I/O 操作避免 SIGPIPE
-                conn.markClosed();
-                co_return nil();
-            }
-            
-            std::vector<char> buffer(settings.chunk_buffer_size);
-            std::ifstream file(full_path.string(), std::ios::binary);
-            
-            if (!file) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file");
-                // 文件打开失败，需要关闭连接（连接仍然有效）
-                if (!conn.isClosed()) {
-                    co_await conn.close();
+#ifdef __linux__
+            if (settings.use_sendfile) {
+                // ========== 模式3: Sendfile 零拷贝传输（仅 Linux，性能最佳，支持断点续传） ==========
+                HttpResponseHeader header;
+                
+                // Range 请求返回 206，否则返回 200
+                if (is_range_request) {
+                    header.code() = HttpStatusCode::PartialContent_206;
+                } else {
+                    header.code() = HttpStatusCode::OK_200;
                 }
-                co_return nil();
-            }
-            
-            size_t total_sent = 0;
-            while (file && !file.eof()) {
-                // 检查连接是否在传输过程中被关闭
-                if (conn.isClosed()) {
+                
+                header.version() = HttpVersion::Http_Version_1_1;
+                
+                // 计算实际发送的内容长度
+                size_t content_length = range_end - range_start + 1;
+                header.headerPairs().addHeaderPair("Content-Length", std::to_string(content_length));
+                header.headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(extension));
+                
+                // 添加 Accept-Ranges 表示支持断点续传
+                if (settings.support_range) {
+                    header.headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+                }
+                
+                // Range 请求需要添加 Content-Range 头
+                if (is_range_request) {
+                    std::string content_range = "bytes " + std::to_string(range_start) + "-" + 
+                                                std::to_string(range_end) + "/" + std::to_string(file_size);
+                    header.headerPairs().addHeaderPair("Content-Range", content_range);
                     HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
-                        "[HttpRouter] Connection closed during transfer at {}/{} bytes", 
-                        total_sent, file_size
+                        "[HttpRouter] Range response: {} bytes ({}-{}/{})",
+                        content_length, range_start, range_end, file_size
                     );
-                    file.close();
+                }
+                
+                // 发送响应头
+                HttpResponse response;
+                response.setHeader(header);
+                auto header_res = co_await writer.reply(response, settings.send_timeout);
+                if (!header_res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
+                    conn.markClosed();
                     co_return nil();
                 }
                 
-                file.read(buffer.data(), settings.chunk_buffer_size);
-                size_t bytes_read = file.gcount();
+                // 打开文件获取文件描述符
+                // 注意：sendfile() 的文件 fd 必须是阻塞模式！
+                // O_NONBLOCK 会导致 sendfile() 立即返回 EAGAIN
+                // 只有 socket fd 需要 O_NONBLOCK，文件 fd 必须是阻塞的
+                int file_fd = open(full_path.string().c_str(), O_RDONLY);
+                if (file_fd < 0) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file for sendfile: {}", strerror(errno));
+                    if (!conn.isClosed()) {
+                        co_await conn.close();
+                    }
+                    co_return nil();
+                }
                 
-                if (bytes_read > 0) {
-                    total_sent += bytes_read;
-                    bool is_last = (total_sent >= file_size);
+                // 应用层循环发送文件，记录详细的性能数据
+                // Range 请求从 range_start 开始
+                off_t offset = range_start;
+                size_t total_sent = 0;
+                size_t bytes_to_send = content_length;  // 需要发送的总字节数
+                
+                auto start_time = std::chrono::steady_clock::now();
+                int iteration_count = 0;
+                
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                    "[HttpRouter] ========== Sendfile Start: {} bytes ==========",
+                    bytes_to_send
+                );
+                
+                while (total_sent < bytes_to_send) {
+                    iteration_count++;
+                    auto iter_start = std::chrono::steady_clock::now();
                     
-                    auto chunk_res = co_await writer.replyChunkData(
-                        std::string_view(buffer.data(), bytes_read),
-                        is_last,
-                        settings.send_timeout
+                    // 检查连接状态
+                    if (conn.isClosed()) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->warn(
+                            "[HttpRouter] Connection closed during sendfile at {}/{} bytes (iteration: {})",
+                            total_sent, bytes_to_send, iteration_count
+                        );
+                        close(file_fd);
+                        co_return nil();
+                    }
+                    
+                    // 计算剩余字节数
+                    size_t remaining = bytes_to_send - total_sent;
+                    size_t chunk_size = std::min(settings.sendfile_chunk_size, remaining);
+                    
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                        "[HttpRouter] [Iter {}] Before sendfile: sent={}/{} ({:.1f}%), offset={}, chunk_size={}",
+                        iteration_count, total_sent, bytes_to_send, 
+                        (total_sent * 100.0 / bytes_to_send), offset, chunk_size
                     );
                     
-                    if (!chunk_res) {
-                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
-                            "[HttpRouter] Send chunk failed at {}/{} bytes: {}", 
-                            total_sent, file_size, chunk_res.error().message()
+                    // 发送数据
+                    auto sendfile_res = co_await writer.sendfile(file_fd, offset, chunk_size);
+                    auto iter_end = std::chrono::steady_clock::now();
+                    auto iter_duration = std::chrono::duration_cast<std::chrono::milliseconds>(iter_end - iter_start).count();
+                    
+                    if (!sendfile_res) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->error(
+                            "[HttpRouter] [Iter {}] Sendfile failed at {}/{} bytes: {}",
+                            iteration_count, total_sent, bytes_to_send, sendfile_res.error().message()
                         );
-                        file.close();
-                        // 发送失败说明连接已被对端关闭，只标记状态，不执行 I/O 操作避免 SIGPIPE
+                        close(file_fd);
                         conn.markClosed();
                         co_return nil();
                     }
+                    
+                    long bytes_sent = sendfile_res.value();
+                    total_sent += bytes_sent;
+                    offset += bytes_sent;
+                    
+                    // 计算速度
+                    double speed_kbps = (bytes_sent / 1024.0) / (iter_duration / 1000.0);
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(iter_end - start_time).count();
+                    double avg_speed_kbps = (total_sent / 1024.0) / (elapsed / 1000.0);
+                    
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                        "[HttpRouter] [Iter {}] Sent: {} bytes in {} ms ({:.1f} KB/s), total={}/{} ({:.1f}%), avg_speed={:.1f} KB/s",
+                        iteration_count, bytes_sent, iter_duration, speed_kbps,
+                        total_sent, bytes_to_send, (total_sent * 100.0 / bytes_to_send), avg_speed_kbps
+                    );
+                    
+                    // 如果单次发送字节数异常小，警告
+                    if (bytes_sent < 8192 && remaining >= 8192) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->warn(
+                            "[HttpRouter] [Iter {}] WARNING: Only sent {} bytes (expected more)",
+                            iteration_count, bytes_sent
+                        );
+                    }
                 }
+                
+                // 关闭文件描述符
+                close(file_fd);
+                
+                auto end_time = std::chrono::steady_clock::now();
+                auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+                double total_speed_kbps = (total_sent / 1024.0) / (total_duration / 1000.0);
+                
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                    "[HttpRouter] ========== Sendfile Complete: {} bytes in {} ms ({:.1f} KB/s, {} iterations) ==========",
+                    total_sent, total_duration, total_speed_kbps, iteration_count
+                );
+                
+            } else
+#endif
+            if (settings.use_chunked_transfer && !is_range_request) {
+                // ========== 模式1: Chunked 传输（内存占用小，但浏览器无法显示完整进度） ==========
+                // 注意：Chunked 模式不支持 Range 请求，Range 请求会自动降级到 Content-Length 模式
+                HttpResponseHeader header;
+                header.code() = HttpStatusCode::OK_200;
+                header.version() = HttpVersion::Http_Version_1_1;
+                header.headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(extension));
+                
+                // 添加 Accept-Ranges 表示支持断点续传（但当前 chunked 传输不支持）
+                if (settings.support_range) {
+                    header.headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+                }
+                
+                // replyChunkHeader 会自动添加 Transfer-Encoding: chunked
+                
+                // 发送响应头
+                auto header_res = co_await writer.replyChunkHeader(header, settings.send_timeout);
+                if (!header_res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
+                    conn.markClosed();
+                    co_return nil();
+                }
+                
+                // 流式发送文件内容
+                std::vector<char> buffer(settings.chunk_buffer_size);
+                std::ifstream file(full_path.string(), std::ios::binary);
+                
+                if (!file) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file");
+                    if (!conn.isClosed()) {
+                        co_await conn.close();
+                    }
+                    co_return nil();
+                }
+                
+                size_t total_sent = 0;
+                while (file && !file.eof()) {
+                    if (conn.isClosed()) {
+                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                            "[HttpRouter] Connection closed during transfer at {}/{} bytes", 
+                            total_sent, file_size
+                        );
+                        file.close();
+                        co_return nil();
+                    }
+                    
+                    file.read(buffer.data(), settings.chunk_buffer_size);
+                    size_t bytes_read = file.gcount();
+                    
+                    if (bytes_read > 0) {
+                        total_sent += bytes_read;
+                        bool is_last = (total_sent >= file_size);
+                        
+                        auto chunk_res = co_await writer.replyChunkData(
+                            std::string_view(buffer.data(), bytes_read),
+                            is_last,
+                            settings.send_timeout
+                        );
+                        
+                        if (!chunk_res) {
+                            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                                "[HttpRouter] Send chunk failed at {}/{} bytes: {}", 
+                                total_sent, file_size, chunk_res.error().message()
+                            );
+                            file.close();
+                            conn.markClosed();
+                            co_return nil();
+                        }
+                    }
+                }
+                
+                file.close();
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    "[HttpRouter] File sent successfully (chunked): {} bytes", total_sent
+                );
+                
+            } else {
+                // ========== 模式2: Content-Length 传输（浏览器显示完整进度，支持断点续传） ==========
+                HttpResponse response;
+                
+                // Range 请求返回 206，否则返回 200
+                if (is_range_request) {
+                    response.header().code() = HttpStatusCode::PartialContent_206;
+                } else {
+                    response.header().code() = HttpStatusCode::OK_200;
+                }
+                
+                response.header().version() = HttpVersion::Http_Version_1_1;
+                
+                // 计算实际发送的内容长度
+                size_t content_length = range_end - range_start + 1;
+                response.header().headerPairs().addHeaderPair("Content-Length", std::to_string(content_length));
+                response.header().headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(extension));
+                
+                // 添加 Accept-Ranges 表示支持断点续传
+                if (settings.support_range) {
+                    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+                }
+                
+                // Range 请求需要添加 Content-Range 头
+                if (is_range_request) {
+                    std::string content_range = "bytes " + std::to_string(range_start) + "-" + 
+                                                std::to_string(range_end) + "/" + std::to_string(file_size);
+                    response.header().headerPairs().addHeaderPair("Content-Range", content_range);
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                        "[HttpRouter] Range response: {} bytes ({}-{}/{})",
+                        content_length, range_start, range_end, file_size
+                    );
+                }
+                
+                // 读取文件（Range 请求只读取指定范围）
+                std::ifstream file(full_path.string(), std::ios::binary);
+                if (!file) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file");
+                    if (!conn.isClosed()) {
+                        co_await conn.close();
+                    }
+                    co_return nil();
+                }
+                
+                // 如果是 Range 请求，跳到起始位置
+                if (is_range_request) {
+                    file.seekg(range_start);
+                }
+                
+                std::string file_content;
+                file_content.resize(content_length);
+                file.read(file_content.data(), content_length);
+                size_t bytes_read = file.gcount();
+                file.close();
+                
+                if (bytes_read != content_length) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                        "[HttpRouter] Failed to read complete range: expected {}, got {}", 
+                        content_length, bytes_read
+                    );
+                    if (!conn.isClosed()) {
+                        co_await conn.close();
+                    }
+                    co_return nil();
+                }
+                
+                response.setBodyStr(std::move(file_content));
+                
+                // 发送完整响应
+                auto send_res = co_await writer.reply(response, settings.send_timeout);
+                if (!send_res) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send response failed: {}", send_res.error().message());
+                    conn.markClosed();
+                    co_return nil();
+                }
+                
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    "[HttpRouter] File sent successfully (content-length): {} bytes", file_size
+                );
             }
-            
-            file.close();
-            
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
-                "[HttpRouter] File sent successfully: {} bytes", total_sent
-            );
             
         } catch (const std::filesystem::filesystem_error& e) {
             has_error = true;

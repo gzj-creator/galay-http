@@ -147,6 +147,33 @@ namespace galay::http
         co_return nil();
     }
 
+#ifdef __linux__
+    AsyncResult<std::expected<long, HttpError>> HttpWriter::sendfile(int file_fd, off_t offset, size_t length)
+    {
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Sendfile {} bytes from offset {}", length, offset);
+        auto waiter = std::make_shared<AsyncWaiter<long, HttpError>>();
+        waiter->appendTask(sendfileInternal(file_fd, offset, length, waiter));
+        return waiter->wait();
+    }
+
+    Coroutine<nil> HttpWriter::sendfileInternal(int file_fd, off_t offset, size_t length, 
+                                                 std::shared_ptr<AsyncWaiter<long, HttpError>> waiter)
+    {
+        GHandle file_handle{.fd = file_fd};
+        auto result = co_await m_socket.sendfile(file_handle, offset, length);
+        
+        if (!result) {
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpWriter] Sendfile failed: {}", result.error().message());
+            waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
+            co_return nil();
+        }
+        
+        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Sendfile successfully sent {} bytes", result.value());
+        waiter->notify(result.value());
+        co_return nil();
+    }
+#endif
+
     AsyncResult<std::expected<void, HttpError>> HttpWriter::upgradeToWebSocket(HttpRequest& request, std::chrono::milliseconds timeout)
     {
         HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpWriter] Upgrade to WebSocket");
