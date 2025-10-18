@@ -1,7 +1,7 @@
-// ========== 性能调试开关 ==========
-// 取消注释下面这行可以启用详细的 sendfile 性能日志
+// ========== 调试开关 ==========
+// 取消注释下面这行可以启用所有 debug 日志
 // 注意：启用后会严重影响性能！仅用于诊断问题
-// #define ENABLE_SENDFILE_PERFORMANCE_DEBUG
+// #define ENABLE_DEBUG
 // ==================================
 
 #include "galay/kernel/runtime/Runtime.h"

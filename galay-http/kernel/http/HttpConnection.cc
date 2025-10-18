@@ -1,6 +1,6 @@
 #include "HttpConnection.h"
 #include "galay/common/Error.h"
-#include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/HttpDebugLog.h"
 
 namespace galay::http 
 {
@@ -29,7 +29,7 @@ namespace galay::http
         if(m_is_closed == true) {
             return {std::expected<void, CommonError>()};
         }
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpConnection] Close");
+        HTTP_LOG_DEBUG("[HttpConnection] Close");
         m_is_closed = true;
         return m_socket.close();
     }
@@ -42,7 +42,7 @@ namespace galay::http
     void HttpConnection::markClosed()
     {
         if (!m_is_closed) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpConnection] Mark as closed (peer disconnected)");
+            HTTP_LOG_DEBUG("[HttpConnection] Mark as closed (peer disconnected)");
             m_is_closed = true;
         }
     }

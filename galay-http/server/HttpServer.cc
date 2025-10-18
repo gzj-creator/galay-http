@@ -1,7 +1,7 @@
 #include "HttpServer.h"
 #include "galay-http/kernel/http/HttpParams.hpp"
 #include "galay-http/utils/HttpUtils.h"
-#include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/HttpDebugLog.h"
 #include "galay/kernel/runtime/Runtime.h"
 
 namespace galay::http
@@ -43,13 +43,13 @@ namespace galay::http
         AsyncFactory factory = runtime.getAsyncFactory();
         HttpConnection conn(std::move(socket), factory.getTimerGenerator());
         
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpServer] New connection");
+        HTTP_LOG_DEBUG("[HttpServer] New connection");
         
         while(true) 
         {
             // 检查连接状态
             if (conn.isClosed()) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpServer] Connection already closed");
+                HTTP_LOG_DEBUG("[HttpServer] Connection already closed");
                 co_return nil();
             }
             
@@ -60,16 +60,16 @@ namespace galay::http
             
             if(!request_res) {
                 if(request_res.error().code() == HttpErrorCode::kHttpError_ConnectionClose) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpServer] Connection closed by peer");
+                    HTTP_LOG_DEBUG("[HttpServer] Connection closed by peer");
                     co_await conn.close();
                     co_return nil();
                 }
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpServer] Request error: {}", request_res.error().message());
+                HTTP_LOG_DEBUG("[HttpServer] Request error: {}", request_res.error().message());
                 auto response = HttpUtils::defaultHttpResponse(request_res.error().toHttpStatusCode());
                 response.header().headerPairs().addHeaderPair("Connection", "close");
                 auto response_res = co_await writer.reply(response);
                 if(!response_res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpServer] Reply error: {}", response_res.error().message());
+                    HTTP_LOG_ERROR("[HttpServer] Reply error: {}", response_res.error().message());
                 } 
                 co_await conn.close();
                 co_return nil();
@@ -80,12 +80,12 @@ namespace galay::http
             auto route_res = co_await router.route(request, conn);
             
             if(!route_res) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpServer] Route error: {}", route_res.error().message());
+                HTTP_LOG_DEBUG("[HttpServer] Route error: {}", route_res.error().message());
                 auto response = HttpUtils::defaultHttpResponse(route_res.error().toHttpStatusCode());
                 auto response_res = co_await writer.reply(response);
                 if(!response_res) {
                     co_await conn.close();
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpServer] Reply error: {}", response_res.error().message());
+                    HTTP_LOG_ERROR("[HttpServer] Reply error: {}", response_res.error().message());
                     co_return nil();
                 }
                 continue;
@@ -97,7 +97,7 @@ namespace galay::http
                 }
             } 
             if (conn.isClosed()) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpServer] Connection closed");
+                HTTP_LOG_DEBUG("[HttpServer] Connection closed");
                 co_return nil();
             }
         }

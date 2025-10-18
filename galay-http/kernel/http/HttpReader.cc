@@ -1,6 +1,6 @@
 #include "HttpReader.h"
 #include "galay/common/Error.h"
-#include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/HttpDebugLog.h"
 
 namespace galay::http 
 {
@@ -192,7 +192,7 @@ namespace galay::http
     Coroutine<nil> HttpReader::readRequest(std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter, std::chrono::milliseconds timeout)
     {
         HttpRequest request;
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Reading request");
+        HTTP_LOG_DEBUG("[HttpReader] Reading request");
 
         std::shared_ptr<AsyncWaiter<HttpRequestHeader, HttpError>> header_waiter = std::make_shared<AsyncWaiter<HttpRequestHeader, HttpError>>();
         header_waiter->appendTask(readRequestHeader(header_waiter, timeout));
@@ -248,7 +248,7 @@ namespace galay::http
             co_return nil();
         }
         request.setBodyStr(std::move(*body_res));
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Request read complete");
+        HTTP_LOG_DEBUG("[HttpReader] Request read complete");
         waiter->notify(std::move(request));
         co_return nil();
     }
@@ -256,7 +256,7 @@ namespace galay::http
     Coroutine<nil> HttpReader::readResponse(std::shared_ptr<AsyncWaiter<HttpResponse, HttpError>> waiter, std::chrono::milliseconds timeout)
     {
         HttpResponse response;
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Reading response");
+        HTTP_LOG_DEBUG("[HttpReader] Reading response");
         std::shared_ptr<AsyncWaiter<HttpResponseHeader, HttpError>> header_waiter = std::make_shared<AsyncWaiter<HttpResponseHeader, HttpError>>();
         header_waiter->appendTask(readResponseHeader(header_waiter, timeout));
         auto header_res = co_await header_waiter->wait();
@@ -300,7 +300,7 @@ namespace galay::http
             co_return nil();
         }
         response.setBodyStr(std::move(*body_res));
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpReader] Response read complete");
+        HTTP_LOG_DEBUG("[HttpReader] Response read complete");
         waiter->notify(std::move(response));
         co_return nil();
     }

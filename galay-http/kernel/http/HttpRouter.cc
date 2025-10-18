@@ -3,6 +3,7 @@
 #include "galay-http/protoc/http/HttpBase.h"
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/HttpUtils.h"
 #include <filesystem>
 #include <fstream>
@@ -21,7 +22,7 @@ namespace galay::http
 {
     void HttpRouter::mount(const std::string& prefix, const std::string& path, HttpSettings setting)
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Mount {} -> {}", prefix, path);
+        HTTP_LOG_DEBUG("[HttpRouter] Mount {} -> {}", prefix, path);
         
         // 1. 规范化路由前缀
         std::string routePrefix = prefix;
@@ -76,14 +77,14 @@ namespace galay::http
     AsyncResult<std::expected<void, HttpError>> HttpRouter::route(HttpRequest &request, HttpConnection& conn)
     {
         auto& header = request.header();
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Route {} {}", httpMethodToString(header.method()), header.uri());
+        HTTP_LOG_DEBUG("[HttpRouter] Route {} {}", httpMethodToString(header.method()), header.uri());
         
         // 尝试模板匹配（带参数或通配符）
         HttpParams params;
         //middleware
         // 首先尝试精确匹配（性能更好）
         if(auto it = m_routes[static_cast<int>(header.method())].find(header.uri()); it != m_routes[static_cast<int>(header.method())].end()) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Exact match found");
+            HTTP_LOG_DEBUG("[HttpRouter] Exact match found");
             // 每个请求使用独立的 waiter，避免并发冲突
             auto waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
             auto co = it->second(request, conn, std::move(params));
@@ -97,7 +98,7 @@ namespace galay::http
         
         for(auto& [template_uri, routes] : m_temlate_routes[static_cast<int>(header.method())]) {
             if(matchRoute(request.header().uri(), template_uri, params)) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Template match found: {}", template_uri);
+                HTTP_LOG_DEBUG("[HttpRouter] Template match found: {}", template_uri);
                 // 每个请求使用独立的 waiter，避免并发冲突
                 auto waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
                 auto co = routes(request, conn, std::move(params));
@@ -108,7 +109,7 @@ namespace galay::http
                 return waiter->wait();
             }
         }
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] No route found");
+        HTTP_LOG_DEBUG("[HttpRouter] No route found");
         return {std::unexpected(HttpError(HttpErrorCode::kHttpError_NotFound))};
     }
 
@@ -116,7 +117,7 @@ namespace galay::http
     {
         // 检查连接是否已关闭
         if (conn.isClosed()) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Connection already closed");
+            HTTP_LOG_DEBUG("[HttpRouter] Connection already closed");
             co_return nil();
         }
         
@@ -136,7 +137,7 @@ namespace galay::http
                 relative_file = "index.html";  // 默认文件
             }
             
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Serve file: {}", relative_file);
+            HTTP_LOG_DEBUG("[HttpRouter] Serve file: {}", relative_file);
             
             // 3. 构建完整文件路径
             std::filesystem::path full_path = base_path / relative_file;
@@ -159,7 +160,7 @@ namespace galay::http
             auto full_path_str = full_path.string();
             auto base_path_str = base_path.string();
             if (full_path_str.substr(0, base_path_str.length()) != base_path_str) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Path traversal attempt blocked");
+                HTTP_LOG_DEBUG("[HttpRouter] Path traversal attempt blocked");
                 // 检查连接状态
                 if (conn.isClosed()) {
                     co_return nil();
@@ -191,7 +192,7 @@ namespace galay::http
             
             if (settings.support_range && request.header().headerPairs().hasKey("Range")) {
                 std::string range_header = request.header().headerPairs().getValue("Range");
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                HTTP_LOG_DEBUG(
                     "[HttpRouter] Range request: {}", range_header
                 );
                 
@@ -217,12 +218,12 @@ namespace galay::http
                             // 验证范围
                             if (range_start < file_size && range_end < file_size && range_start <= range_end) {
                                 is_range_request = true;
-                                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                                HTTP_LOG_DEBUG(
                                     "[HttpRouter] Valid range: {}-{}/{}", 
                                     range_start, range_end, file_size
                                 );
                             } else {
-                                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                                HTTP_LOG_DEBUG(
                                     "[HttpRouter] Invalid range: {}-{}/{}", 
                                     range_start, range_end, file_size
                                 );
@@ -237,7 +238,7 @@ namespace galay::http
                                 co_return nil();
                             }
                         } catch (const std::exception& e) {
-                            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                            HTTP_LOG_DEBUG(
                                 "[HttpRouter] Failed to parse range: {}", e.what()
                             );
                         }
@@ -258,14 +259,14 @@ namespace galay::http
                 transfer_mode = "content-length";
             }
             
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                HTTP_LOG_DEBUG(
                     "[HttpRouter] Sending file, size: {} bytes, mode: {}, range: {}", 
                     file_size, transfer_mode, is_range_request ? "yes" : "no"
                 );
             
             // 检查连接状态
             if (conn.isClosed()) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Connection closed before sending");
+                HTTP_LOG_DEBUG("[HttpRouter] Connection closed before sending");
                 co_return nil();
             }
             
@@ -298,7 +299,7 @@ namespace galay::http
                     std::string content_range = "bytes " + std::to_string(range_start) + "-" + 
                                                 std::to_string(range_end) + "/" + std::to_string(file_size);
                     header.headerPairs().addHeaderPair("Content-Range", content_range);
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    HTTP_LOG_DEBUG(
                         "[HttpRouter] Range response: {} bytes ({}-{}/{})",
                         content_length, range_start, range_end, file_size
                     );
@@ -309,7 +310,7 @@ namespace galay::http
                 response.setHeader(header);
                 auto header_res = co_await writer.reply(response, settings.send_timeout);
                 if (!header_res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
+                    HTTP_LOG_DEBUG("[HttpRouter] Send header failed: {}", header_res.error().message());
                     conn.markClosed();
                     co_return nil();
                 }
@@ -320,7 +321,7 @@ namespace galay::http
                 // 只有 socket fd 需要 O_NONBLOCK，文件 fd 必须是阻塞的
                 int file_fd = open(full_path.string().c_str(), O_RDONLY);
                 if (file_fd < 0) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file for sendfile: {}", strerror(errno));
+                    HTTP_LOG_DEBUG("[HttpRouter] Failed to open file for sendfile: {}", strerror(errno));
                     if (!conn.isClosed()) {
                         co_await conn.close();
                     }
@@ -336,7 +337,7 @@ namespace galay::http
                 auto start_time = std::chrono::steady_clock::now();
                 int iteration_count = 0;
                 
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                HTTP_LOG_INFO(
                     "[HttpRouter] ========== Sendfile Start: {} bytes ==========",
                     bytes_to_send
                 );
@@ -347,7 +348,7 @@ namespace galay::http
                     
                     // 检查连接状态
                     if (conn.isClosed()) {
-                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->warn(
+                        HTTP_LOG_WARN(
                             "[HttpRouter] Connection closed during sendfile at {}/{} bytes (iteration: {})",
                             total_sent, bytes_to_send, iteration_count
                         );
@@ -359,7 +360,7 @@ namespace galay::http
                     size_t remaining = bytes_to_send - total_sent;
                     size_t chunk_size = std::min(settings.sendfile_chunk_size, remaining);
                     
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                    HTTP_LOG_INFO(
                         "[HttpRouter] [Iter {}] Before sendfile: sent={}/{} ({:.1f}%), offset={}, chunk_size={}",
                         iteration_count, total_sent, bytes_to_send, 
                         (total_sent * 100.0 / bytes_to_send), offset, chunk_size
@@ -371,7 +372,7 @@ namespace galay::http
                     auto iter_duration = std::chrono::duration_cast<std::chrono::milliseconds>(iter_end - iter_start).count();
                     
                     if (!sendfile_res) {
-                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->error(
+                        HTTP_LOG_ERROR(
                             "[HttpRouter] [Iter {}] Sendfile failed at {}/{} bytes: {}",
                             iteration_count, total_sent, bytes_to_send, sendfile_res.error().message()
                         );
@@ -389,7 +390,7 @@ namespace galay::http
                     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(iter_end - start_time).count();
                     double avg_speed_kbps = (total_sent / 1024.0) / (elapsed / 1000.0);
                     
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                    HTTP_LOG_INFO(
                         "[HttpRouter] [Iter {}] Sent: {} bytes in {} ms ({:.1f} KB/s), total={}/{} ({:.1f}%), avg_speed={:.1f} KB/s",
                         iteration_count, bytes_sent, iter_duration, speed_kbps,
                         total_sent, bytes_to_send, (total_sent * 100.0 / bytes_to_send), avg_speed_kbps
@@ -397,7 +398,7 @@ namespace galay::http
                     
                     // 如果单次发送字节数异常小，警告
                     if (bytes_sent < 8192 && remaining >= 8192) {
-                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->warn(
+                        HTTP_LOG_WARN(
                             "[HttpRouter] [Iter {}] WARNING: Only sent {} bytes (expected more)",
                             iteration_count, bytes_sent
                         );
@@ -411,7 +412,7 @@ namespace galay::http
                 auto total_duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
                 double total_speed_kbps = (total_sent / 1024.0) / (total_duration / 1000.0);
                 
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->info(
+                HTTP_LOG_INFO(
                     "[HttpRouter] ========== Sendfile Complete: {} bytes in {} ms ({:.1f} KB/s, {} iterations) ==========",
                     total_sent, total_duration, total_speed_kbps, iteration_count
                 );
@@ -436,7 +437,7 @@ namespace galay::http
                 // 发送响应头
                 auto header_res = co_await writer.replyChunkHeader(header, settings.send_timeout);
                 if (!header_res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
+                    HTTP_LOG_DEBUG("[HttpRouter] Send header failed: {}", header_res.error().message());
                     conn.markClosed();
                     co_return nil();
                 }
@@ -446,7 +447,7 @@ namespace galay::http
                 std::ifstream file(full_path.string(), std::ios::binary);
                 
                 if (!file) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file");
+                    HTTP_LOG_DEBUG("[HttpRouter] Failed to open file");
                     if (!conn.isClosed()) {
                         co_await conn.close();
                     }
@@ -456,7 +457,7 @@ namespace galay::http
                 size_t total_sent = 0;
                 while (file && !file.eof()) {
                     if (conn.isClosed()) {
-                        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                        HTTP_LOG_DEBUG(
                             "[HttpRouter] Connection closed during transfer at {}/{} bytes", 
                             total_sent, file_size
                         );
@@ -478,7 +479,7 @@ namespace galay::http
                         );
                         
                         if (!chunk_res) {
-                            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                            HTTP_LOG_DEBUG(
                                 "[HttpRouter] Send chunk failed at {}/{} bytes: {}", 
                                 total_sent, file_size, chunk_res.error().message()
                             );
@@ -490,7 +491,7 @@ namespace galay::http
                 }
                 
                 file.close();
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                HTTP_LOG_DEBUG(
                     "[HttpRouter] File sent successfully (chunked): {} bytes", total_sent
                 );
                 
@@ -522,7 +523,7 @@ namespace galay::http
                     std::string content_range = "bytes " + std::to_string(range_start) + "-" + 
                                                 std::to_string(range_end) + "/" + std::to_string(file_size);
                     response.header().headerPairs().addHeaderPair("Content-Range", content_range);
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    HTTP_LOG_DEBUG(
                         "[HttpRouter] Range response: {} bytes ({}-{}/{})",
                         content_length, range_start, range_end, file_size
                     );
@@ -531,7 +532,7 @@ namespace galay::http
                 // 读取文件（Range 请求只读取指定范围）
                 std::ifstream file(full_path.string(), std::ios::binary);
                 if (!file) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file");
+                    HTTP_LOG_DEBUG("[HttpRouter] Failed to open file");
                     if (!conn.isClosed()) {
                         co_await conn.close();
                     }
@@ -550,7 +551,7 @@ namespace galay::http
                 file.close();
                 
                 if (bytes_read != content_length) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                    HTTP_LOG_DEBUG(
                         "[HttpRouter] Failed to read complete range: expected {}, got {}", 
                         content_length, bytes_read
                     );
@@ -565,12 +566,12 @@ namespace galay::http
                 // 发送完整响应
                 auto send_res = co_await writer.reply(response, settings.send_timeout);
                 if (!send_res) {
-                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send response failed: {}", send_res.error().message());
+                    HTTP_LOG_DEBUG("[HttpRouter] Send response failed: {}", send_res.error().message());
                     conn.markClosed();
                     co_return nil();
                 }
                 
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                HTTP_LOG_DEBUG(
                     "[HttpRouter] File sent successfully (content-length): {} bytes", file_size
                 );
             }
@@ -578,21 +579,21 @@ namespace galay::http
         } catch (const std::filesystem::filesystem_error& e) {
             has_error = true;
             error_msg = std::string("Filesystem error: ") + e.what();
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpRouter] {}", error_msg);
+            HTTP_LOG_ERROR("[HttpRouter] {}", error_msg);
         } catch (const std::exception& e) {
             has_error = true;
             error_msg = std::string("Error: ") + e.what();
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpRouter] {}", error_msg);
+            HTTP_LOG_ERROR("[HttpRouter] {}", error_msg);
         }
         
         // 在 catch 块外处理错误，这里可以使用 co_await
         if (has_error && !conn.isClosed()) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Handling error: {}", error_msg);
+            HTTP_LOG_DEBUG("[HttpRouter] Handling error: {}", error_msg);
             auto response = HttpUtils::defaultInternalServerError();
             auto result = co_await writer.reply(response, settings.send_timeout);
             if (!result) {
                 // 如果发送错误响应失败，说明连接已断开，只标记状态
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpRouter] Failed to send error response");
+                HTTP_LOG_ERROR("[HttpRouter] Failed to send error response");
                 conn.markClosed();
                 co_return nil();
             }
