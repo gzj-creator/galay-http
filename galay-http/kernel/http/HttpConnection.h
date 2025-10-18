@@ -19,6 +19,8 @@ namespace galay::http
         
         AsyncResult<std::expected<void, CommonError>> close();
         bool isClosed() const;
+        // 标记连接为已关闭，不执行任何 I/O 操作（用于连接已被对端关闭的情况）
+        void markClosed();
         ~HttpConnection() = default;
     private:
         bool m_is_closed = false;

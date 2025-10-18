@@ -38,4 +38,12 @@ namespace galay::http
     {
         return m_is_closed;
     }
+
+    void HttpConnection::markClosed()
+    {
+        if (!m_is_closed) {
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpConnection] Mark as closed (peer disconnected)");
+            m_is_closed = true;
+        }
+    }
 }

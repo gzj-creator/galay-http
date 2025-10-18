@@ -5,12 +5,14 @@
 #include "galay-http/utils/HttpLogger.h"
 #include "galay-http/utils/HttpUtils.h"
 #include <filesystem>
+#include <fstream>
+#include <vector>
 #include <galay/utils/System.h>
 #include <string>
 
 namespace galay::http
 {
-    void HttpRouter::mount(const std::string& prefix, const std::string& path)
+    void HttpRouter::mount(const std::string& prefix, const std::string& path, HttpSettings setting)
     {
         HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Mount {} -> {}", prefix, path);
         
@@ -50,7 +52,7 @@ namespace galay::http
 
         // 注册精确路由
         m_routes[static_cast<int>(GET)].emplace(routePrefix, 
-            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
+            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, setting,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
         // 如果最后一个路径段不是 *，则添加 /*
@@ -60,7 +62,7 @@ namespace galay::http
 
         // 注册模板路由（带通配符）
         m_temlate_routes[static_cast<int>(GET)].emplace(routePrefix, 
-            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, 
+            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, setting,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
     }
 
@@ -103,9 +105,17 @@ namespace galay::http
         return {std::unexpected(HttpError(HttpErrorCode::kHttpError_NotFound))};
     }
 
-    Coroutine<nil> HttpRouter::staticFileRoute(std::string path, HttpRequest& request, HttpConnection& conn, HttpParams params)
+    Coroutine<nil> HttpRouter::staticFileRoute(std::string path, HttpSettings settings, HttpRequest& request, HttpConnection& conn, HttpParams params)
     {
+        // 检查连接是否已关闭
+        if (conn.isClosed()) {
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Connection already closed");
+            co_return nil();
+        }
+        
         auto writer = conn.getResponseWriter({});
+        bool has_error = false;
+        std::string error_msg;
         
         try {
             // path 已经是规范化的绝对路径（在 mount 中完成）
@@ -126,6 +136,10 @@ namespace galay::http
             
             // 4. 检查文件是否存在
             if (!std::filesystem::exists(full_path)) {
+                // 检查连接状态
+                if (conn.isClosed()) {
+                    co_return nil();
+                }
                 auto response = HttpUtils::defaultNotFound();
                 co_await writer.reply(response);
                 co_return nil();
@@ -139,6 +153,10 @@ namespace galay::http
             auto base_path_str = base_path.string();
             if (full_path_str.substr(0, base_path_str.length()) != base_path_str) {
                 HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Path traversal attempt blocked");
+                // 检查连接状态
+                if (conn.isClosed()) {
+                    co_return nil();
+                }
                 auto response = HttpUtils::defaultForbidden();
                 co_await writer.reply(response);
                 co_return nil();
@@ -146,6 +164,10 @@ namespace galay::http
             
             // 7. 检查是否是文件（不是目录）
             if (!std::filesystem::is_regular_file(full_path)) {
+                // 检查连接状态
+                if (conn.isClosed()) {
+                    co_return nil();
+                }
                 auto response = HttpUtils::defaultForbidden();
                 co_await writer.reply(response);
                 co_return nil();
@@ -157,30 +179,54 @@ namespace galay::http
             
             HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Streaming file, size: {} bytes", file_size);
             
-            // 准备响应头
-            HttpResponseHeader header;
-            header.setCode(HttpStatusCode::Http_Status_OK);
-            header.setVersion(HttpVersion::Http_Version_1_1);
-            header.headerPairs().addHeaderPair("Content-Length", std::to_string(file_size));
-            header.headerPairs().addHeaderPair("Content-Type", HttpUtils::getMimeType(extension));
-            header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-            
-            // 发送响应头
-            auto header_res = co_await writer.replyChunkHeader(header);
-            if (!header_res) {
-                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
-                co_await conn.close();
+            // 检查连接状态
+            if (conn.isClosed()) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Connection closed before sending");
                 co_return nil();
             }
             
-            // 流式发送文件内容
-            constexpr size_t CHUNK_SIZE = 64 * 1024;  // 64KB 缓冲区
-            std::vector<char> buffer(CHUNK_SIZE);
+            // 准备响应头
+            HttpResponseHeader header;
+            header.code() = HttpStatusCode::OK_200;
+            header.version() = HttpVersion::Http_Version_1_1;
+            header.headerPairs().addHeaderPair("Content-Length", std::to_string(file_size));
+            header.headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(extension));
+            header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+            
+            // 发送响应头
+            auto header_res = co_await writer.replyChunkHeader(header, settings.send_timeout);
+            if (!header_res) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Send header failed: {}", header_res.error().message());
+                // 发送失败说明连接已被对端关闭，只标记状态，不执行 I/O 操作避免 SIGPIPE
+                conn.markClosed();
+                co_return nil();
+            }
+            
+            std::vector<char> buffer(settings.chunk_buffer_size);
             std::ifstream file(full_path.string(), std::ios::binary);
+            
+            if (!file) {
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Failed to open file");
+                // 文件打开失败，需要关闭连接（连接仍然有效）
+                if (!conn.isClosed()) {
+                    co_await conn.close();
+                }
+                co_return nil();
+            }
             
             size_t total_sent = 0;
             while (file && !file.eof()) {
-                file.read(buffer.data(), CHUNK_SIZE);
+                // 检查连接是否在传输过程中被关闭
+                if (conn.isClosed()) {
+                    HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
+                        "[HttpRouter] Connection closed during transfer at {}/{} bytes", 
+                        total_sent, file_size
+                    );
+                    file.close();
+                    co_return nil();
+                }
+                
+                file.read(buffer.data(), settings.chunk_buffer_size);
                 size_t bytes_read = file.gcount();
                 
                 if (bytes_read > 0) {
@@ -189,7 +235,8 @@ namespace galay::http
                     
                     auto chunk_res = co_await writer.replyChunkData(
                         std::string_view(buffer.data(), bytes_read),
-                        is_last
+                        is_last,
+                        settings.send_timeout
                     );
                     
                     if (!chunk_res) {
@@ -197,24 +244,43 @@ namespace galay::http
                             "[HttpRouter] Send chunk failed at {}/{} bytes: {}", 
                             total_sent, file_size, chunk_res.error().message()
                         );
-                        co_await conn.close();
+                        file.close();
+                        // 发送失败说明连接已被对端关闭，只标记状态，不执行 I/O 操作避免 SIGPIPE
+                        conn.markClosed();
                         co_return nil();
                     }
                 }
             }
+            
+            file.close();
             
             HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug(
                 "[HttpRouter] File sent successfully: {} bytes", total_sent
             );
             
         } catch (const std::filesystem::filesystem_error& e) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Filesystem error: {}", e.what());
-            auto response = HttpUtils::defaultNotFound();
-            co_await writer.reply(response);
+            has_error = true;
+            error_msg = std::string("Filesystem error: ") + e.what();
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpRouter] {}", error_msg);
         } catch (const std::exception& e) {
-            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Error: {}", e.what());
+            has_error = true;
+            error_msg = std::string("Error: ") + e.what();
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpRouter] {}", error_msg);
+        }
+        
+        // 在 catch 块外处理错误，这里可以使用 co_await
+        if (has_error && !conn.isClosed()) {
+            HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpRouter] Handling error: {}", error_msg);
             auto response = HttpUtils::defaultInternalServerError();
-            co_await writer.reply(response);
+            auto result = co_await writer.reply(response, settings.send_timeout);
+            if (!result) {
+                // 如果发送错误响应失败，说明连接已断开，只标记状态
+                HttpLogger::getInstance()->getLogger()->getSpdlogger()->error("[HttpRouter] Failed to send error response");
+                conn.markClosed();
+                co_return nil();
+            }
+            // 发送错误响应成功，正常关闭连接
+            co_await conn.close();
         }
         
         co_return nil();
