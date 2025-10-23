@@ -1,5 +1,5 @@
 #include "WsReader.h"
-#include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/WsDebugLog.h"
 
 namespace galay::http
 {
@@ -12,7 +12,7 @@ namespace galay::http
     AsyncResult<std::expected<WsFrame, WsError>> 
     WsReader::readFrame(std::chrono::milliseconds timeout)
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsReader] Reading frame");
+        WS_LOG_DEBUG("[WsReader] Reading frame");
         if (timeout.count() == -1) {
             timeout = m_params.recv_timeout;
         }
@@ -25,7 +25,7 @@ namespace galay::http
     AsyncResult<std::expected<std::string, WsError>> 
     WsReader::readMessage(std::chrono::milliseconds timeout)
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsReader] Reading message");
+        WS_LOG_DEBUG("[WsReader] Reading message");
         if (timeout.count() == -1) {
             timeout = m_params.recv_timeout;
         }
@@ -324,7 +324,7 @@ namespace galay::http
             }
         }
 
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsReader] Message read complete, size: {}", message.size());
+        WS_LOG_DEBUG("[WsReader] Message read complete, size: {}", message.size());
         waiter->notify(std::move(message));
         co_return nil{};
     }

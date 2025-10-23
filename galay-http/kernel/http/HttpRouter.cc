@@ -20,7 +20,8 @@
 
 namespace galay::http
 {
-    void HttpRouter::mount(const std::string& prefix, const std::string& path, HttpSettings setting)
+    void HttpRouter::mount(const std::string& prefix, const std::string& path, 
+                           FileTransferProgressCallback callback, HttpSettings settings)
     {
         HTTP_LOG_DEBUG("[HttpRouter] Mount {} -> {}", prefix, path);
         
@@ -60,7 +61,7 @@ namespace galay::http
 
         // 注册精确路由
         m_routes[static_cast<int>(GET)].emplace(routePrefix, 
-            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, setting,
+            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, callback, settings,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
 
         // 如果最后一个路径段不是 *，则添加 /*
@@ -70,7 +71,7 @@ namespace galay::http
 
         // 注册模板路由（带通配符）
         m_temlate_routes[static_cast<int>(GET)].emplace(routePrefix, 
-            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, setting,
+            std::bind(&HttpRouter::staticFileRoute, this, canonical_path, callback, settings,
                 std::placeholders::_1, std::placeholders::_2, std::placeholders::_3));
     }
 
@@ -113,7 +114,9 @@ namespace galay::http
         return {std::unexpected(HttpError(HttpErrorCode::kHttpError_NotFound))};
     }
 
-    Coroutine<nil> HttpRouter::staticFileRoute(std::string path, HttpSettings settings, HttpRequest& request, HttpConnection& conn, HttpParams params)
+    Coroutine<nil> HttpRouter::staticFileRoute(std::string path, FileTransferProgressCallback callback, 
+                                                HttpSettings settings, HttpRequest& request, 
+                                                HttpConnection& conn, HttpParams params)
     {
         // 检查连接是否已关闭
         if (conn.isClosed()) {
@@ -270,6 +273,16 @@ namespace galay::http
                 co_return nil();
             }
             
+            // 构建文件传输信息（用于回调）
+            FileTransferInfo file_info;
+            file_info.file_path = full_path.string();
+            file_info.relative_path = relative_file;
+            file_info.mime_type = MimeType::convertToMimeType(extension);
+            file_info.file_size = file_size;
+            file_info.range_start = range_start;
+            file_info.range_end = range_end;
+            file_info.is_range_request = is_range_request;
+            
 #ifdef __linux__
             if (settings.use_sendfile) {
                 // ========== 模式3: Sendfile 零拷贝传输（仅 Linux，性能最佳，支持断点续传） ==========
@@ -342,6 +355,11 @@ namespace galay::http
                     bytes_to_send
                 );
                 
+                // 调用开始传输回调
+                if (callback) {
+                    callback(request, 0, bytes_to_send, file_info);
+                }
+                
                 while (total_sent < bytes_to_send) {
                     iteration_count++;
                     auto iter_start = std::chrono::steady_clock::now();
@@ -384,6 +402,11 @@ namespace galay::http
                     long bytes_sent = sendfile_res.value();
                     total_sent += bytes_sent;
                     offset += bytes_sent;
+                    
+                    // 调用传输进度回调
+                    if (callback) {
+                        callback(request, total_sent, bytes_to_send, file_info);
+                    }
                     
                     // 计算速度
                     double speed_kbps = (bytes_sent / 1024.0) / (iter_duration / 1000.0);
@@ -454,6 +477,11 @@ namespace galay::http
                     co_return nil();
                 }
                 
+                // 调用开始传输回调
+                if (callback) {
+                    callback(request, 0, file_size, file_info);
+                }
+                
                 size_t total_sent = 0;
                 while (file && !file.eof()) {
                     if (conn.isClosed()) {
@@ -486,6 +514,11 @@ namespace galay::http
                             file.close();
                             conn.markClosed();
                             co_return nil();
+                        }
+                        
+                        // 调用传输进度回调
+                        if (callback) {
+                            callback(request, total_sent, file_size, file_info);
                         }
                     }
                 }
@@ -527,6 +560,11 @@ namespace galay::http
                         "[HttpRouter] Range response: {} bytes ({}-{}/{})",
                         content_length, range_start, range_end, file_size
                     );
+                }
+                
+                // 调用开始传输回调
+                if (callback) {
+                    callback(request, 0, content_length, file_info);
                 }
                 
                 // 读取文件（Range 请求只读取指定范围）
@@ -571,8 +609,13 @@ namespace galay::http
                     co_return nil();
                 }
                 
+                // 调用传输完成回调
+                if (callback) {
+                    callback(request, content_length, content_length, file_info);
+                }
+                
                 HTTP_LOG_DEBUG(
-                    "[HttpRouter] File sent successfully (content-length): {} bytes", file_size
+                    "[HttpRouter] File sent successfully (content-length): {} bytes", content_length
                 );
             }
             

@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.22)
 project(galay-http)
 
+# 设置默认构建类型为 Release（如果用户没有指定）
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
+endif()
+
+message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
 # 查找OpenSSL
 find_package(OpenSSL REQUIRED)
 

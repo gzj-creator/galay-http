@@ -18,8 +18,12 @@ namespace galay::http
         /*
             @param prefix   路由前缀，用于匹配路由
             @param path     文件路径，用于读取文件
+            @param callback 文件传输进度回调函数（可选）
+            @param settings HTTP 设置参数（可选）
         */
-        void mount(const std::string& prefix, const std::string& path, HttpSettings setting = {});
+        void mount(const std::string& prefix, const std::string& path, 
+                   FileTransferProgressCallback callback = nullptr,
+                   HttpSettings settings = {});
 
         template <HttpMethod ...Methods>
         void addRoute(const std::string& path, HttpFunc function);
@@ -29,7 +33,9 @@ namespace galay::http
             route(HttpRequest& request, HttpConnection& conn);
         virtual ~HttpRouter() = default;
     private:
-        Coroutine<nil> staticFileRoute(std::string path, HttpSettings settings, HttpRequest& request, HttpConnection& conn, HttpParams params);
+        Coroutine<nil> staticFileRoute(std::string path, FileTransferProgressCallback callback, 
+                                        HttpSettings settings, HttpRequest& request, 
+                                        HttpConnection& conn, HttpParams params);
         
 
         /**

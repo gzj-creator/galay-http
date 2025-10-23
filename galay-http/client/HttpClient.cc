@@ -1,5 +1,5 @@
 #include "HttpClient.h"
-#include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/HttpDebugLog.h"
 #include <galay/kernel/async/AsyncFactory.h>
 
 
@@ -12,7 +12,7 @@ namespace galay::http
 
     std::expected<void, CommonError> HttpClient::init()
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpClient] Init");
+        HTTP_LOG_DEBUG("[HttpClient] Init");
         if(auto res = m_socket.socket(); !res) {
             return std::unexpected(res.error());
         }
@@ -28,7 +28,7 @@ namespace galay::http
 
     std::expected<void, CommonError> HttpClient::init(const Host& host)
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpClient] Init with bind {}:{}", host.ip, host.port);
+        HTTP_LOG_DEBUG("[HttpClient] Init with bind {}:{}", host.ip, host.port);
         if(auto res = m_socket.socket(); !res) {
             return std::unexpected(res.error());
         }
@@ -47,7 +47,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, CommonError>> HttpClient::connect(const Host& host)
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[HttpClient] Connect to {}:{}", host.ip, host.port);
+        HTTP_LOG_DEBUG("[HttpClient] Connect to {}:{}", host.ip, host.port);
         return m_socket.connect(host);
     }
 

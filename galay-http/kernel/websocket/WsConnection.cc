@@ -1,11 +1,11 @@
 #include "WsConnection.h"
-#include "galay-http/utils/HttpLogger.h"
+#include "galay-http/utils/WsDebugLog.h"
 
 namespace galay::http
 {
     WsConnection WsConnection::from(HttpConnection& httpConnection)
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsConnection] Upgrade from HTTP");
+        WS_LOG_DEBUG("[WsConnection] Upgrade from HTTP");
         return WsConnection(httpConnection);
     }
 
@@ -26,7 +26,7 @@ namespace galay::http
 
     AsyncResult<std::expected<void, CommonError>> WsConnection::close()
     {
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->debug("[WsConnection] Close");
+        WS_LOG_DEBUG("[WsConnection] Close");
         return m_connection.close();
     }
 

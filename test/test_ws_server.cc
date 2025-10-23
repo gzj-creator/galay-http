@@ -1,3 +1,9 @@
+// ========== 调试开关 ==========
+// 取消注释下面这行可以启用所有 debug 日志
+// 注意：启用后会严重影响性能！仅用于诊断问题
+// #define ENABLE_DEBUG
+// ==================================
+
 #include "galay/common/Error.h"
 #include "galay/kernel/coroutine/AsyncWaiter.hpp"
 #include "galay/kernel/runtime/Runtime.h"

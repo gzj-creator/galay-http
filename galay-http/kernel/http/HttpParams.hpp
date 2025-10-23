@@ -22,30 +22,73 @@
  * custom_settings.recv_timeout = std::chrono::milliseconds(5000);  // 5秒超时
  * custom_settings.send_timeout = std::chrono::milliseconds(5000);
  * custom_settings.chunk_buffer_size = 64 * 1024;  // 64KB 缓冲区
- * 
- * // 示例 3：配置静态文件服务（使用 sendfile 零拷贝）
- * HttpSettings file_settings;
- * file_settings.use_sendfile = true;        // 启用 sendfile（Linux）
- * file_settings.support_range = true;       // 支持断点续传
- * router.mount("/static", "./public", file_settings);
- * 
- * // 示例 4：配置静态文件服务（使用 chunked 传输）
- * HttpSettings chunked_settings;
- * chunked_settings.use_chunked_transfer = true;
- * chunked_settings.chunk_buffer_size = 128 * 1024;  // 128KB 每块
- * router.mount("/downloads", "./files", chunked_settings);
  * @endcode
 */
 
 #include "galay-http/protoc/http/HttpBase.h"
-#include <cstddef>  // for SIZE_MAX
+#include <cstddef>      // for SIZE_MAX
+#include <functional>   // for std::function
+#include <string>
 
 namespace galay::http
 {
 
+// 前向声明
+class HttpRequest;
+
 // HTTP 默认超时配置（30秒）
 #define DEFAULT_HTTP_RECV_TIMEOUT  std::chrono::milliseconds(30000);
 #define DEFAULT_HTTP_SEND_TIMEOUT  std::chrono::milliseconds(30000);
+
+    /**
+     * @brief 文件传输详细信息
+     * 
+     * 在文件传输过程中提供给回调函数的文件信息
+     */
+    struct FileTransferInfo {
+        std::string file_path;       ///< 完整文件路径（绝对路径）
+        std::string relative_path;   ///< 相对于挂载点的路径（用户请求的路径）
+        std::string mime_type;       ///< MIME 类型（如 "text/html", "image/png"）
+        size_t file_size;            ///< 文件总大小（字节）
+        size_t range_start;          ///< Range 请求的起始位置（0 表示从头开始）
+        size_t range_end;            ///< Range 请求的结束位置（file_size-1 表示到文件末尾）
+        bool is_range_request;       ///< 是否是 HTTP Range 请求（断点续传）
+        
+        /// 获取实际传输的字节数（Range 请求可能小于文件总大小）
+        size_t getTransferSize() const {
+            return range_end - range_start + 1;
+        }
+    };
+
+    /**
+     * @brief 文件传输进度回调函数类型
+     * 
+     * @param request HTTP 请求对象（包含请求头、URI、查询参数等）
+     * @param bytes_sent 已发送的字节数
+     * @param total_bytes 总共需要发送的字节数（对于 Range 请求，这是 Range 的大小）
+     * @param file_info 文件详细信息
+     * 
+     * @note 此回调可能在传输过程中被多次调用
+     * @note 回调应该尽快返回，避免阻塞传输过程
+     * @note 在 chunked 传输模式下，每发送一块数据就会调用一次
+     * @note 在 sendfile 模式下，可能只在开始和结束时调用
+     * 
+     * @example 进度条示例
+     * @code
+     * auto callback = [](const HttpRequest& req, size_t sent, size_t total, const FileTransferInfo& info) {
+     *     double progress = (sent * 100.0) / total;
+     *     std::cout << info.relative_path << ": " << progress << "% (" << sent << "/" << total << ")" << std::endl;
+     * };
+     * 
+     * router.mount("/files", "./uploads", callback);
+     * @endcode
+     */
+    using FileTransferProgressCallback = std::function<void(
+        const HttpRequest&,           // HTTP 请求
+        size_t,                       // 已发送字节数
+        size_t,                       // 总字节数
+        const FileTransferInfo&       // 文件信息
+    )>;
 
     /**
      * @brief HTTP 连接配置参数

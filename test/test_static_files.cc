@@ -51,27 +51,27 @@ int main()
     // 注意：mount() 会立即验证路径，如果路径不存在会抛出异常
     try {
         // 方式1: 使用 chunked 传输（默认，内存占用小，但浏览器无法显示完整进度）
-        // router.mount("/static", "/home/ubuntu/static", {
+        // router.mount("/static", "/home/ubuntu/static", nullptr, {
         //     .chunk_buffer_size = 128*1024,     // 128KB 缓冲区
         //     .use_chunked_transfer = true        // 默认值
         // });
         
         // 方式2: 使用 Content-Length 传输（浏览器显示完整进度，但需要一次性读取文件到内存）
-        // router.mount("/static", "/home/ubuntu/static", {
+        // router.mount("/static", "/home/ubuntu/static", nullptr, {
         //     .use_chunked_transfer = false       // 禁用 chunked，使用 Content-Length
         // });
         
         // 方式3: 使用 sendfile 零拷贝传输（仅 Linux，性能最佳，浏览器显示完整进度，支持断点续传）
-        router.mount("/static", "/home/ubuntu/static", {
+        router.mount("/static", "/home/ubuntu/static", nullptr, {
             .use_sendfile = true,                // 启用 sendfile（底层自动循环发送）
             .sendfile_chunk_size = SIZE_MAX,     // 不分块，让底层 sendfile 循环自动处理
             .support_range = true                 // 支持 HTTP Range 断点续传（默认开启）
         });
         
         // 也可以挂载多个目录，使用不同的传输模式
-        // router.mount("/assets", "./assets", {.use_chunked_transfer = true});      // 小文件用 chunked
-        // router.mount("/videos", "./videos", {.use_sendfile = true});              // 大文件用 sendfile（零拷贝）
-        // router.mount("/images", "./images", {.use_chunked_transfer = false});     // 需要进度的用 content-length
+        // router.mount("/assets", "./assets", nullptr, {.use_chunked_transfer = true});      // 小文件用 chunked
+        // router.mount("/videos", "./videos", nullptr, {.use_sendfile = true});              // 大文件用 sendfile（零拷贝）
+        // router.mount("/images", "./images", nullptr, {.use_chunked_transfer = false});     // 需要进度的用 content-length
         
     } catch (const std::runtime_error& e) {
         std::cerr << "Mount failed: " << e.what() << std::endl;
