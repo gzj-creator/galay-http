@@ -133,7 +133,12 @@ namespace galay::http
                 if(temp_end == std::string::npos) {
                     return kHttpError_BadRequest;
                 }
-                m_uri = convertFromUri(str.substr(start, temp_end - start), false);
+                std::string full_uri = convertFromUri(str.substr(start, temp_end - start), false);
+                parseArgs(full_uri);  // 解析查询参数，分离路径和参数
+                // 如果没有查询参数，parseArgs 不会修改 m_uri，需要手动设置
+                if(m_uri.empty()) {
+                    m_uri = full_uri;
+                }
             
                 start = temp_end + 1;
                 //version
