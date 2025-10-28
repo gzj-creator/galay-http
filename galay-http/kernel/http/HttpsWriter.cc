@@ -1,24 +1,24 @@
-#include "HttpWriter.h"
+#include "HttpsWriter.h"
 #include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/HttpUtils.h"
 
 namespace galay::http
 {
-    HttpWriter::HttpWriter(AsyncTcpSocket &socket, TimerGenerator& generator, const HttpSettings& params)
+    HttpsWriter::HttpsWriter(AsyncSslSocket &socket, TimerGenerator& generator, const HttpSettings& params)
         : m_socket(socket), m_params(params), m_generator(generator)
     {
     }
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::send(HttpRequest &request, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::send(HttpRequest &request, std::chrono::milliseconds timeout)
     {
-        HTTP_LOG_DEBUG("[HttpWriter] Send request");
+        HTTP_LOG_DEBUG("[HttpsWriter] Send request");
         CLIENT_REQUEST_LOG(request.header().method(), request.header().uri());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendData(request.toString(), waiter, timeout));
         return waiter->wait();
     }
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::sendChunkHeader(HttpRequestHeader &header, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::sendChunkHeader(HttpRequestHeader &header, std::chrono::milliseconds timeout)
     {
         CLIENT_REQUEST_LOG(header.method(), header.uri());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
@@ -29,16 +29,16 @@ namespace galay::http
         return waiter->wait();
     }
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::reply(HttpResponse& response, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::reply(HttpResponse& response, std::chrono::milliseconds timeout)
     {
-        HTTP_LOG_DEBUG("[HttpWriter] Reply response");
+        HTTP_LOG_DEBUG("[HttpsWriter] Reply response");
         SERVER_RESPONSE_LOG(response.header().code());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendData(response.toString(), waiter, timeout));
         return waiter->wait();
     }
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::replyChunkHeader(HttpResponseHeader &header, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::replyChunkHeader(HttpResponseHeader &header, std::chrono::milliseconds timeout)
     {
         SERVER_RESPONSE_LOG(header.code());
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
@@ -49,21 +49,21 @@ namespace galay::http
         return waiter->wait();
     }
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::replyChunkData(std::string_view chunk, bool is_last, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::replyChunkData(std::string_view chunk, bool is_last, std::chrono::milliseconds timeout)
     {
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendChunkData(chunk, waiter, is_last, timeout));
         return waiter->wait();
     }
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::sendChunkData(std::string_view chunk, bool is_last, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::sendChunkData(std::string_view chunk, bool is_last, std::chrono::milliseconds timeout)
     {
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter = std::make_shared<AsyncWaiter<void, HttpError>>();
         waiter->appendTask(sendChunkData(chunk, waiter, is_last, timeout));
         return waiter->wait();
     }
 
-    Coroutine<nil> HttpWriter::sendData(std::string data, std::shared_ptr<AsyncWaiter<void, HttpError>> waiter, std::chrono::milliseconds timeout)
+    Coroutine<nil> HttpsWriter::sendData(std::string data, std::shared_ptr<AsyncWaiter<void, HttpError>> waiter, std::chrono::milliseconds timeout)
     {
         auto str = std::move(data);
         auto bytes = Bytes::fromString(str);
@@ -74,10 +74,10 @@ namespace galay::http
         {
             std::expected<Bytes, CommonError> res;
             if(timeout < std::chrono::milliseconds(0)) {
-                res = co_await m_socket.send(std::move(bytes));
+                res = co_await m_socket.sslSend(std::move(bytes));
             } else {
                 auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
-                    return m_socket.send(std::move(bytes));
+                    return m_socket.sslSend(std::move(bytes));
                 }, timeout);
                 if(!temp) {
                     HTTP_LOG_ERROR("[sendData] timeout");
@@ -92,7 +92,7 @@ namespace galay::http
                     break;
                 }
             } else {
-                HTTP_LOG_DEBUG("[HttpWriter] Send failed: {}", res.error().message());
+                HTTP_LOG_DEBUG("[HttpsWriter] Send failed: {}", res.error().message());
                 waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
                 co_return nil();
             }
@@ -101,7 +101,7 @@ namespace galay::http
         co_return nil();
     }
 
-    Coroutine<nil> HttpWriter::sendChunkData(std::string_view chunk, \
+    Coroutine<nil> HttpsWriter::sendChunkData(std::string_view chunk, \
         std::shared_ptr<AsyncWaiter<void, HttpError>> waiter, 
         bool is_last, std::chrono::milliseconds timeout)
     {
@@ -120,10 +120,10 @@ namespace galay::http
         {
             std::expected<Bytes, CommonError> res;
             if(timeout < std::chrono::milliseconds(0)) {
-                res = co_await m_socket.send(std::move(bytes));
+                res = co_await m_socket.sslSend(std::move(bytes));
             } else {
                 auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
-                    return m_socket.send(std::move(bytes));
+                    return m_socket.sslSend(std::move(bytes));
                 }, timeout);
                 if(!temp) {
                     HTTP_LOG_ERROR("[sendData] timeout");
@@ -138,7 +138,7 @@ namespace galay::http
                     break;
                 }
             } else {
-                HTTP_LOG_DEBUG("[HttpWriter] Send chunk failed: {}", res.error().message());
+                HTTP_LOG_DEBUG("[HttpsWriter] Send chunk failed: {}", res.error().message());
                 waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
                 co_return nil();
             }
@@ -148,35 +148,35 @@ namespace galay::http
     }
 
 #ifdef __linux__
-    AsyncResult<std::expected<long, HttpError>> HttpWriter::sendfile(int file_fd, off_t offset, size_t length)
+    AsyncResult<std::expected<long, HttpError>> HttpsWriter::sendfile(int file_fd, off_t offset, size_t length)
     {
-        HTTP_LOG_DEBUG("[HttpWriter] Sendfile {} bytes from offset {}", length, offset);
+        HTTP_LOG_DEBUG("[HttpsWriter] Sendfile {} bytes from offset {}", length, offset);
         auto waiter = std::make_shared<AsyncWaiter<long, HttpError>>();
         waiter->appendTask(sendfileInternal(file_fd, offset, length, waiter));
         return waiter->wait();
     }
 
-    Coroutine<nil> HttpWriter::sendfileInternal(int file_fd, off_t offset, size_t length, 
+    Coroutine<nil> HttpsWriter::sendfileInternal(int file_fd, off_t offset, size_t length, 
                                                  std::shared_ptr<AsyncWaiter<long, HttpError>> waiter)
     {
         GHandle file_handle{.fd = file_fd};
         auto result = co_await m_socket.sendfile(file_handle, offset, length);
         
         if (!result) {
-            HTTP_LOG_ERROR("[HttpWriter] Sendfile failed: {}", result.error().message());
+            HTTP_LOG_ERROR("[HttpsWriter] Sendfile failed: {}", result.error().message());
             waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
             co_return nil();
         }
         
-        HTTP_LOG_DEBUG("[HttpWriter] Sendfile successfully sent {} bytes", result.value());
+        HTTP_LOG_DEBUG("[HttpsWriter] Sendfile successfully sent {} bytes", result.value());
         waiter->notify(result.value());
         co_return nil();
     }
 #endif
 
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::upgradeToWebSocket(HttpRequest& request, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::upgradeToWebSocket(HttpRequest& request, std::chrono::milliseconds timeout)
     {
-        HTTP_LOG_DEBUG("[HttpWriter] Upgrade to WebSocket");
+        HTTP_LOG_DEBUG("[HttpsWriter] Upgrade to WebSocket");
         auto& header = request.header();
         
         // 验证 Upgrade 头
@@ -219,34 +219,34 @@ namespace galay::http
         return reply(response, timeout);
     }
     
-    AsyncResult<std::expected<void, HttpError>> HttpWriter::upgradeToHttp2(HttpRequest& request, std::chrono::milliseconds timeout)
+    AsyncResult<std::expected<void, HttpError>> HttpsWriter::upgradeToHttp2(HttpRequest& request, std::chrono::milliseconds timeout)
     {
-        HTTP_LOG_DEBUG("[HttpWriter] Upgrade to HTTP/2");
+        HTTP_LOG_DEBUG("[HttpsWriter] Upgrade to HTTP/2");
         auto& header = request.header();
         
         // 验证 Upgrade 头
         if (!header.headerPairs().hasKey("Upgrade")) {
-            HTTP_LOG_ERROR("[HttpWriter] Missing Upgrade header");
+            HTTP_LOG_ERROR("[HttpsWriter] Missing Upgrade header");
             return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
         }
         
         std::string upgrade_value = header.headerPairs().getValue("Upgrade");
         // HTTP/2 使用 h2c (HTTP/2 over cleartext)
         if (upgrade_value != "h2c" && upgrade_value != "h2") {
-            HTTP_LOG_ERROR("[HttpWriter] Invalid Upgrade value: {}", upgrade_value);
+            HTTP_LOG_ERROR("[HttpsWriter] Invalid Upgrade value: {}", upgrade_value);
             return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
         }
         
         // 验证 Connection 头
         if (!header.headerPairs().hasKey("Connection")) {
-            HTTP_LOG_ERROR("[HttpWriter] Missing Connection header");
+            HTTP_LOG_ERROR("[HttpsWriter] Missing Connection header");
             return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
         }
         
         // 验证 HTTP2-Settings 头（可选，但推荐）
         if (header.headerPairs().hasKey("HTTP2-Settings")) {
             std::string http2_settings = header.headerPairs().getValue("HTTP2-Settings");
-            HTTP_LOG_DEBUG("[HttpWriter] HTTP2-Settings: {}", http2_settings);
+            HTTP_LOG_DEBUG("[HttpsWriter] HTTP2-Settings: {}", http2_settings);
             // TODO: 解析 HTTP2-Settings 并应用
         }
         
@@ -257,7 +257,7 @@ namespace galay::http
         response.header().headerPairs().addHeaderPair("Connection", "Upgrade");
         response.header().headerPairs().addHeaderPair("Upgrade", "h2c");
         
-        HTTP_LOG_INFO("[HttpWriter] Sending HTTP/2 upgrade response (101 Switching Protocols)");
+        HTTP_LOG_INFO("[HttpsWriter] Sending HTTP/2 upgrade response (101 Switching Protocols)");
         
         // 发送升级响应
         return reply(response, timeout);

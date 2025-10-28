@@ -7,9 +7,11 @@
 namespace galay::http
 { 
     class WsConnection;
+    class Http2Connection;
     class HttpConnection 
     {
         friend class WsConnection;
+        friend class Http2Connection;
     public:
         HttpConnection(AsyncTcpSocket&& socket, TimerGenerator&& generator);
         HttpConnection(HttpConnection&& other);

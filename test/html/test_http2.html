@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTTP/2 测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 1.1em;
+        }
+        
+        .status {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #f8f9fa;
+            border-radius: 5px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .status-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .status-label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .status-value {
+            color: #667eea;
+            font-weight: 600;
+        }
+        
+        .status-value.success {
+            color: #28a745;
+        }
+        
+        .status-value.error {
+            color: #dc3545;
+        }
+        
+        .controls {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        button {
+            flex: 1;
+            min-width: 150px;
+            padding: 15px 30px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: white;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+        }
+        
+        .btn-info {
+            background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);
+        }
+        
+        .log-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .log-header h2 {
+            color: #333;
+            font-size: 1.5em;
+        }
+        
+        .clear-log {
+            padding: 8px 20px;
+            font-size: 14px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        
+        .log-content {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+            line-height: 1.6;
+        }
+        
+        .log-entry {
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+        }
+        
+        .log-entry:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+        }
+        
+        .log-time {
+            color: #858585;
+            margin-right: 10px;
+        }
+        
+        .log-info {
+            color: #4ec9b0;
+        }
+        
+        .log-success {
+            color: #4ec9b0;
+        }
+        
+        .log-error {
+            color: #f48771;
+        }
+        
+        .log-warning {
+            color: #dcdcaa;
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .metric-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+        
+        .metric-value {
+            font-size: 2.5em;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+        
+        .metric-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 HTTP/2 测试页面</h1>
+            <p>测试 HTTP/2 连接、HPACK 压缩和多路复用功能</p>
+        </div>
+        
+        <div class="status">
+            <div class="status-item">
+                <span class="status-label">协议版本:</span>
+                <span class="status-value" id="protocol">检测中...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">连接状态:</span>
+                <span class="status-value" id="connection">未连接</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">服务器地址:</span>
+                <span class="status-value" id="server">http://localhost:8080</span>
+            </div>
+        </div>
+        
+        <div class="metrics">
+            <div class="metric-card">
+                <div class="metric-value" id="requestCount">0</div>
+                <div class="metric-label">总请求数</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="successCount">0</div>
+                <div class="metric-label">成功请求</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="errorCount">0</div>
+                <div class="metric-label">失败请求</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-value" id="avgTime">0ms</div>
+                <div class="metric-label">平均响应时间</div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="button-group">
+                <button class="btn-primary" onclick="testSimpleRequest()">简单请求</button>
+                <button class="btn-success" onclick="testMultipleRequests()">并发请求 (x10)</button>
+                <button class="btn-info" onclick="testLargeHeaders()">大头部测试</button>
+                <button class="btn-warning" onclick="testStreamPriority()">流优先级测试</button>
+            </div>
+        </div>
+        
+        <div class="log-container">
+            <div class="log-header">
+                <h2>📋 请求日志</h2>
+                <button class="clear-log" onclick="clearLog()">清空日志</button>
+            </div>
+            <div class="log-content" id="logContent"></div>
+        </div>
+    </div>
+
+    <script>
+        let requestCount = 0;
+        let successCount = 0;
+        let errorCount = 0;
+        let totalTime = 0;
+        
+        // 检测协议
+        window.addEventListener('load', () => {
+            const protocol = window.location.protocol === 'https:' ? 
+                (performance.getEntriesByType('navigation')[0]?.nextHopProtocol || 'unknown') : 
+                'http/1.1 (需要 HTTPS 才能使用 h2)';
+            
+            document.getElementById('protocol').textContent = protocol;
+            
+            if (protocol.startsWith('h2')) {
+                document.getElementById('protocol').classList.add('success');
+                log('检测到 HTTP/2 协议', 'success');
+            } else {
+                document.getElementById('protocol').classList.add('warning');
+                log('当前使用 ' + protocol + '，测试 h2c (HTTP/2 over cleartext)', 'warning');
+            }
+        });
+        
+        function log(message, type = 'info') {
+            const logContent = document.getElementById('logContent');
+            const time = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-${type}">${message}</span>`;
+            logContent.appendChild(entry);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+        
+        function clearLog() {
+            document.getElementById('logContent').innerHTML = '';
+        }
+        
+        function updateMetrics() {
+            document.getElementById('requestCount').textContent = requestCount;
+            document.getElementById('successCount').textContent = successCount;
+            document.getElementById('errorCount').textContent = errorCount;
+            const avgTime = requestCount > 0 ? Math.round(totalTime / requestCount) : 0;
+            document.getElementById('avgTime').textContent = avgTime + 'ms';
+        }
+        
+        async function makeRequest(url, options = {}) {
+            const startTime = performance.now();
+            requestCount++;
+            
+            try {
+                log(`发送请求: ${url}`, 'info');
+                const response = await fetch(url, {
+                    ...options,
+                    mode: 'cors',
+                    cache: 'no-cache'
+                });
+                
+                const endTime = performance.now();
+                const duration = Math.round(endTime - startTime);
+                totalTime += duration;
+                
+                if (response.ok) {
+                    successCount++;
+                    const data = await response.text();
+                    log(`✓ 请求成功 (${duration}ms) - 状态: ${response.status}, 大小: ${data.length} 字节`, 'success');
+                    
+                    // 显示响应头
+                    const headers = {};
+                    response.headers.forEach((value, key) => {
+                        headers[key] = value;
+                    });
+                    log(`响应头: ${JSON.stringify(headers, null, 2)}`, 'info');
+                } else {
+                    errorCount++;
+                    log(`✗ 请求失败 (${duration}ms) - 状态: ${response.status}`, 'error');
+                }
+                
+                updateMetrics();
+                return response;
+            } catch (error) {
+                errorCount++;
+                const endTime = performance.now();
+                const duration = Math.round(endTime - startTime);
+                totalTime += duration;
+                log(`✗ 请求异常 (${duration}ms): ${error.message}`, 'error');
+                updateMetrics();
+                throw error;
+            }
+        }
+        
+        async function testSimpleRequest() {
+            log('========== 简单请求测试 ==========', 'info');
+            try {
+                await makeRequest('/api/test', {
+                    method: 'GET',
+                    headers: {
+                        'X-Test-Header': 'simple-request'
+                    }
+                });
+            } catch (error) {
+                // Error already logged
+            }
+        }
+        
+        async function testMultipleRequests() {
+            log('========== 并发请求测试 (10个) ==========', 'info');
+            const promises = [];
+            
+            for (let i = 0; i < 10; i++) {
+                promises.push(
+                    makeRequest(`/api/concurrent/${i}`, {
+                        method: 'GET',
+                        headers: {
+                            'X-Request-ID': `request-${i}`,
+                            'X-Timestamp': Date.now().toString()
+                        }
+                    }).catch(() => {}) // 忽略错误继续
+                );
+            }
+            
+            try {
+                await Promise.all(promises);
+                log('所有并发请求完成', 'success');
+            } catch (error) {
+                log('部分请求失败', 'warning');
+            }
+        }
+        
+        async function testLargeHeaders() {
+            log('========== 大头部测试 (HPACK 压缩) ==========', 'info');
+            
+            const largeHeaders = {
+                'X-Custom-Header-1': 'value-'.repeat(50),
+                'X-Custom-Header-2': 'data-'.repeat(50),
+                'X-Custom-Header-3': 'test-'.repeat(50),
+                'X-Custom-Header-4': 'http2-'.repeat(50),
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+                'Accept-Encoding': 'gzip, deflate, br'
+            };
+            
+            log(`发送大头部 (${Object.keys(largeHeaders).length} 个头部字段)`, 'info');
+            
+            try {
+                await makeRequest('/api/headers', {
+                    method: 'POST',
+                    headers: largeHeaders,
+                    body: JSON.stringify({ test: 'large headers' })
+                });
+            } catch (error) {
+                // Error already logged
+            }
+        }
+        
+        async function testStreamPriority() {
+            log('========== 流优先级测试 ==========', 'info');
+            
+            // 发送多个优先级不同的请求
+            const requests = [
+                { url: '/api/priority/high', priority: 'high' },
+                { url: '/api/priority/medium', priority: 'medium' },
+                { url: '/api/priority/low', priority: 'low' }
+            ];
+            
+            for (const req of requests) {
+                log(`发送 ${req.priority} 优先级请求`, 'info');
+                try {
+                    await makeRequest(req.url, {
+                        method: 'GET',
+                        headers: {
+                            'X-Priority': req.priority
+                        }
+                    });
+                } catch (error) {
+                    // Error already logged
+                }
+                // 小延迟以便观察
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+        
+        // 定期更新连接状态
+        setInterval(() => {
+            if (navigator.onLine) {
+                document.getElementById('connection').textContent = '在线';
+                document.getElementById('connection').classList.add('success');
+                document.getElementById('connection').classList.remove('error');
+            } else {
+                document.getElementById('connection').textContent = '离线';
+                document.getElementById('connection').classList.add('error');
+                document.getElementById('connection').classList.remove('success');
+            }
+        }, 1000);
+        
+        // 初始化
+        log('HTTP/2 测试页面已加载', 'success');
+        log('提示: 浏览器原生支持 HTTP/2 需要 HTTPS (h2)，HTTP 使用 h2c', 'info');
+    </script>
+</body>
+</html>
+

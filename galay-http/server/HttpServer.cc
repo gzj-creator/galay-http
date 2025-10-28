@@ -23,8 +23,8 @@ namespace galay::http
 
     void HttpServer::run(Runtime& runtime, HttpRouter& router, HttpSettings params)
     {
-        m_server.run(runtime, [this, &runtime, &router, params](AsyncTcpSocket socket) -> Coroutine<nil> {
-            return handleConnection(runtime, router, params, std::move(socket));
+        m_server.run(runtime, [this, &runtime, prouter = &router, params](AsyncTcpSocket socket) -> Coroutine<nil> {
+            return handleConnection(runtime, *prouter, params, std::move(socket));
         });
     }
 

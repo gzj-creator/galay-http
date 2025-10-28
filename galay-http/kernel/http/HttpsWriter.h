@@ -1,5 +1,5 @@
-#ifndef GALAY_HTTP_WRITER_H
-#define GALAY_HTTP_WRITER_H 
+#ifndef GALAY_HTTPS_WRITER_H
+#define GALAY_HTTPS_WRITER_H 
 
 #include <galay/kernel/async/Socket.h>
 #include <galay/kernel/async/TimerGenerator.h>
@@ -10,10 +10,10 @@
 
 namespace galay::http
 {
-    class HttpWriter
+    class HttpsWriter
     { 
     public:
-        HttpWriter(AsyncTcpSocket& socket, TimerGenerator& generator, const HttpSettings& params);
+        HttpsWriter(AsyncSslSocket& socket, TimerGenerator& generator, const HttpSettings& params);
 
         AsyncResult<std::expected<void, HttpError>> 
             send(   HttpRequest& request, 
@@ -77,7 +77,7 @@ namespace galay::http
 #endif
 
     private:
-        AsyncTcpSocket& m_socket;
+        AsyncSslSocket& m_socket;
         HttpSettings      m_params;
         TimerGenerator& m_generator;
     };
