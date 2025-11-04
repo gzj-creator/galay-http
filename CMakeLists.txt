@@ -22,6 +22,9 @@ set(CMAKE_LIBRARY_PATH ${OPENSSL_LIBRARIES}:${CMAKE_LIBRARY_PATH})
 
 include_directories(${PROJECT_SOURCE_DIR})
 
+# 启用 spdlog 源代码位置捕获（用于显示文件名和行号）
+add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
+
 add_subdirectory(galay-http)
 add_subdirectory(test)
 

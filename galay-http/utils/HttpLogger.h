@@ -58,6 +58,7 @@ namespace galay::http
         case Http_Method_Patch:   return "\033[35;1m"; // 亮品红 - 部分更新
         case Http_Method_Trace:   return "\033[37m"; // 灰色 - 诊断用途
         case Http_Method_Connect: return "\033[33;1m"; // 亮黄色 - 隧道连接
+        case Http_Method_PRI:     return "\033[36;1m"; // 亮青色 - HTTP/2 升级
         case Http_Method_Unknown: 
         default:                  return "\033[90m"; // 暗灰色 - 未知方法
         }
@@ -93,33 +94,7 @@ namespace galay::http
         return DEFAULT_LOG_STATUS_TEXT_LENGTH;
     }
 
-    #define SERVER_REQUEST_LOG(METHOD, URI) {\
-        std::string method = fmt::format("[{}{}{}]", method_color(METHOD), httpMethodToString(METHOD), RESET_COLOR);\
-        std::string uri = fmt::format("[{}{}{}]", method_color(METHOD), URI, RESET_COLOR);\
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->info( \
-        "{:<{}} {:<{}}", \
-        method, method_length(METHOD), \
-        uri, uri_length(URI)); }
-
-    #define SERVER_RESPONSE_DURING_LOG(STATUS, DURING_MS)   {\
-        std::string status = fmt::format("[{}{}{}]", status_color(STATUS), std::to_string(static_cast<int>(STATUS)), RESET_COLOR);\
-        std::string status_text = fmt::format("[{}{}{}]", status_color(STATUS), httpStatusCodeToString(STATUS), RESET_COLOR);\
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->info( \
-        "{:<{}} {:<{}} [{}During: {}ms{}]", \
-        status, status_length(STATUS),\
-        status_text, status_code_length(STATUS), \
-        resp_time_color(DURING_MS), std::to_string(DURING_MS), RESET_COLOR); }
-
-    #define SERVER_RESPONSE_LOG(STATUS)  {\
-        std::string status = fmt::format("[{}{}{}]", status_color(STATUS), std::to_string(static_cast<int>(STATUS)), RESET_COLOR);\
-        std::string status_text = fmt::format("[{}{}{}]", status_color(STATUS), httpStatusCodeToString(STATUS), RESET_COLOR);\
-        HttpLogger::getInstance()->getLogger()->getSpdlogger()->info( \
-        "{:<{}} {:<{}}", \
-        status, status_length(STATUS),\
-        status_text, status_code_length(STATUS)); }
-
-    #define CLIENT_REQUEST_LOG(METHOD, URI) SERVER_REQUEST_LOG(METHOD, URI)
-    #define CLIENT_RESPONSE_LOG(STATUS)  SERVER_RESPONSE_LOG(STATUS)
+    
 
 }
 

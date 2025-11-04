@@ -29,9 +29,9 @@ namespace galay::http
                    HttpSettings settings = {});
 
         template <HttpMethod ...Methods>
-        void addRoute(const std::string& path, HttpsFunc function);
+        void addRoute(const std::string& path, HttpsFunc function, bool use_template = false);
         template <HttpMethod ...Methods>
-        void addRoute(const HttpsRouteMap& map);
+        void addRoute(const HttpsRouteMap& map, bool use_template = false);
         AsyncResult<std::expected<void, HttpError>> 
             route(HttpRequest& request, HttpsConnection& conn);
         virtual ~HttpsRouter() = default;
@@ -210,10 +210,10 @@ namespace galay::http
 
 
     template <HttpMethod... Methods>
-    inline void HttpsRouter::addRoute(const std::string& path, HttpsFunc function)
+    inline void HttpsRouter::addRoute(const std::string& path, HttpsFunc function, bool use_template)
     {
         // 判断路径是否为模板路径
-        if (isTemplatePath(path)) {
+        if (use_template && isTemplatePath(path)) {
             // 模板路径（包含参数或通配符），添加到模板路由表
             ([&](){
                 this->m_temlate_routes[static_cast<int>(Methods)].emplace(path, function);
@@ -227,11 +227,11 @@ namespace galay::http
     }
 
     template <HttpMethod ...Methods>
-    inline void HttpsRouter::addRoute(const HttpsRouteMap& map)
+    inline void HttpsRouter::addRoute(const HttpsRouteMap& map, bool use_template)
     {
         // 遍历 map 中的每个路由，根据路径类型分发
         for (const auto& [path, func] : map) {
-            if (isTemplatePath(path)) {
+            if (use_template && isTemplatePath(path)) {
                 // 模板路径，添加到模板路由表
                 ([&](){
                     this->m_temlate_routes[static_cast<int>(Methods)].emplace(path, func);

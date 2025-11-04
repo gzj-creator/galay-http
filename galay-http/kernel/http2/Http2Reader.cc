@@ -3,7 +3,7 @@
 
 namespace galay::http
 {
-    Http2Reader::Http2Reader(AsyncTcpSocket& socket, TimerGenerator& generator,
+    Http2Reader::Http2Reader(Http2SocketAdapter socket, TimerGenerator& generator,
                             Http2StreamManager& stream_manager, Http2Settings params)
         : m_socket(socket)
         , m_generator(generator)

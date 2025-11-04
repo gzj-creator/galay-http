@@ -19,8 +19,8 @@ namespace galay::http
         using HttpsConnFunc = std::function<Coroutine<nil>(HttpsConnection)>;
         using Http2ConnFunc = std::function<Coroutine<nil>(Http2Connection)>;
         
-        HttpsServer(TcpSslServer&& tcpSslServer, bool enable_http2 = true) 
-            : m_server(std::move(tcpSslServer)), m_http2_enabled(enable_http2) {}
+        HttpsServer(TcpSslServer&& tcpSslServer, const std::string& cert, const std::string& key, bool enable_http2 = true) 
+            : m_server(std::move(tcpSslServer)), m_cert(cert), m_key(key), m_http2_enabled(enable_http2), m_ssl_configured(false) {}
         
         void listen(const Host& host);
         
@@ -59,6 +59,9 @@ namespace galay::http
         bool isHttp2Enabled() const { return m_http2_enabled; }
         
     private:
+        // 辅助方法：确保 ALPN 已配置
+        void ensureALPNConfigured();
+        
         Coroutine<nil> handleConnection(Runtime& runtime, HttpsRouter& router, HttpSettings params, AsyncSslSocket socket);
         Coroutine<nil> handleConnectionWithHttp2(Runtime& runtime, 
                                                  HttpsRouter& http1Router,
@@ -77,7 +80,10 @@ namespace galay::http
                                           const Http2Settings& params);
     private:
         TcpSslServer m_server;
+        std::string m_cert;
+        std::string m_key;
         bool m_http2_enabled = true;  // 默认启用 HTTP/2
+        bool m_ssl_configured = false;
     };
 
 

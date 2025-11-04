@@ -3,6 +3,7 @@
 #include "galay-http/utils/HttpUtils.h"
 #include "galay-http/utils/HttpDebugLog.h"
 #include "galay/kernel/runtime/Runtime.h"
+#include "galay/kernel/async/AsyncFactory.h"
 
 namespace galay::http
 {
@@ -75,7 +76,6 @@ namespace galay::http
                 co_return nil();
             }
             auto& request = request_res.value();
-            SERVER_REQUEST_LOG(request.header().method(), request.header().uri());
             
             auto route_res = co_await router.route(request, conn);
             

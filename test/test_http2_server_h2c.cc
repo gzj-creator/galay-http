@@ -28,9 +28,11 @@ using namespace galay::http;
  */
 
 // HTTP/2 处理函数
-Coroutine<nil> handleHttp2(Http2Connection http2Conn, AsyncWaiter<void, Infallible>& waiter, Http2Settings settings)
+// is_prior_knowledge: true 表示 Prior Knowledge h2c（直接发送 PRI），false 表示 Upgrade h2c
+Coroutine<nil> handleHttp2(Http2Connection http2Conn, AsyncWaiter<void, Infallible>& waiter, Http2Settings settings, bool is_prior_knowledge = true)
 {
     HTTP2_LOG_INFO("[HTTP/2] ======== HTTP/2 connection established ========");
+    HTTP2_LOG_INFO("[HTTP/2] Mode: {}", is_prior_knowledge ? "Prior Knowledge" : "Upgrade");
     HTTP2_LOG_DEBUG("[HTTP/2] Connection isClosed: {}", http2Conn.isClosed());
     
     int frame_count = 0;
@@ -42,7 +44,7 @@ Coroutine<nil> handleHttp2(Http2Connection http2Conn, AsyncWaiter<void, Infallib
     HTTP2_LOG_INFO("[HTTP/2] Reader and Writer created successfully");
     
     try {
-        // 发送服务器的 SETTINGS 帧（在 HTTP/1.1 升级场景下，应该先发送）
+        // 发送服务器的 SETTINGS 帧
         HTTP2_LOG_INFO("[HTTP/2] Sending server SETTINGS...");
         HTTP2_LOG_DEBUG("[HTTP/2]   max_concurrent_streams: {}", settings.max_concurrent_streams);
         HTTP2_LOG_DEBUG("[HTTP/2]   initial_window_size: {}", settings.initial_window_size);
@@ -54,56 +56,62 @@ Coroutine<nil> handleHttp2(Http2Connection http2Conn, AsyncWaiter<void, Infallib
         }
         HTTP2_LOG_INFO("[HTTP/2] Server SETTINGS sent");
         
-        // 服务器端：读取客户端的连接前言
-        HTTP2_LOG_INFO("[HTTP/2] Waiting for client preface...");
-        auto preface_result = co_await reader.readPreface();
-        if (!preface_result.has_value()) {
-            HTTP2_LOG_ERROR("[HTTP/2] Failed to read preface: {}", preface_result.error().message());
-            goto cleanup;
+        // 根据模式决定是否读取前言
+        if (is_prior_knowledge) {
+            // Prior Knowledge: HttpReader 已经读取并验证了 PRI 前言
+            // HttpReader 的 buffer 中还有客户端的 SETTINGS 帧，但 Http2Reader 无法访问
+            // 我们直接进入帧处理循环，让 Http2Reader 从 socket 读取后续帧
+            HTTP2_LOG_INFO("[HTTP/2] Prior Knowledge mode - PRI already validated by HttpReader");
+            HTTP2_LOG_INFO("[HTTP/2] Note: HttpReader's buffer contains client SETTINGS, skipping initial response");
+        } else {
+            // Upgrade: 需要读取客户端的 PRI 前言
+            HTTP2_LOG_INFO("[HTTP/2] Upgrade mode - waiting for client preface...");
+            auto preface_result = co_await reader.readPreface();
+            if (!preface_result.has_value()) {
+                HTTP2_LOG_ERROR("[HTTP/2] Failed to read preface: {}", preface_result.error().message());
+                goto cleanup;
+            }
+            HTTP2_LOG_INFO("[HTTP/2] Client preface received");
+            
+            // 在 Upgrade 模式下，为初始请求（stream 1）创建响应
+            HTTP2_LOG_INFO("[HTTP/2] Creating stream 1 for initial request");
+            auto stream1 = http2Conn.streamManager().createStream(1);
+            if (!stream1) {
+                HTTP2_LOG_ERROR("[HTTP/2] Failed to create stream 1");
+                goto cleanup;
+            }
+            HTTP2_LOG_DEBUG("[HTTP/2] Stream 1 created successfully");
+            
+            // 发送对 stream 1 的响应
+            HTTP2_LOG_INFO("[HTTP/2] Sending response to stream 1");
+            
+            // 使用 HPACK 编码头部
+            std::string body = "Hello from HTTP/2!";
+            HpackEncoder encoder;
+            std::vector<HpackHeaderField> response_headers = {
+                {":status", "200"},
+                {"content-type", "text/plain; charset=utf-8"},
+                {"content-length", std::to_string(body.size())},
+                {"server", "galay-http2/0.1"}
+            };
+            std::string encoded_headers = encoder.encodeHeaders(response_headers);
+            
+            // 发送 HEADERS 帧
+            auto headers_result = co_await writer.sendHeaders(1, encoded_headers, false, true);
+            if (!headers_result.has_value()) {
+                HTTP2_LOG_ERROR("[HTTP/2] Failed to send HEADERS: {}", headers_result.error().message());
+                goto cleanup;
+            }
+            HTTP2_LOG_INFO("[HTTP/2] HEADERS sent for stream 1");
+            
+            // 发送 DATA 帧
+            auto data_result = co_await writer.sendData(1, body, true);
+            if (!data_result.has_value()) {
+                HTTP2_LOG_ERROR("[HTTP/2] Failed to send DATA: {}", data_result.error().message());
+                goto cleanup;
+            }
+            HTTP2_LOG_INFO("[HTTP/2] DATA sent for stream 1, response complete");
         }
-        HTTP2_LOG_INFO("[HTTP/2] Client preface received");
-        
-        // 在 HTTP/1.1 升级场景中，初始请求被视为 stream ID 1
-        // 客户端的设置已通过 HTTP2-Settings 头发送，可能不会再发送 SETTINGS 帧
-        // 所以我们直接创建 stream 1 并发送响应
-        HTTP2_LOG_INFO("[HTTP/2] Creating stream 1 for initial request");
-        // 创建 stream 1（HTTP/1.1 升级请求）
-        auto stream1 = http2Conn.streamManager().createStream(1);
-        if (!stream1) {
-            HTTP2_LOG_ERROR("[HTTP/2] Failed to create stream 1");
-            goto cleanup;
-        }
-        HTTP2_LOG_DEBUG("[HTTP/2] Stream 1 created successfully");
-        
-        // 发送对 stream 1 的响应
-        HTTP2_LOG_INFO("[HTTP/2] Sending response to stream 1");
-        
-        // 使用 HPACK 编码头部
-        std::string body = "Hello from HTTP/2!";
-        HpackEncoder encoder;
-        std::vector<HpackHeaderField> response_headers = {
-            {":status", "200"},
-            {"content-type", "text/plain; charset=utf-8"},
-            {"content-length", std::to_string(body.size())},
-            {"server", "galay-http2/0.1"}
-        };
-        std::string encoded_headers = encoder.encodeHeaders(response_headers);
-        
-        // 发送 HEADERS 帧（不带 END_STREAM，因为还要发送 DATA）
-        auto headers_result = co_await writer.sendHeaders(1, encoded_headers, false, true);
-        if (!headers_result.has_value()) {
-            HTTP2_LOG_ERROR("[HTTP/2] Failed to send HEADERS: {}", headers_result.error().message());
-            goto cleanup;
-        }
-        HTTP2_LOG_INFO("[HTTP/2] HEADERS sent for stream 1");
-        
-        // 发送 DATA 帧（带 END_STREAM 标志）
-        auto data_result = co_await writer.sendData(1, body, true);
-        if (!data_result.has_value()) {
-            HTTP2_LOG_ERROR("[HTTP/2] Failed to send DATA: {}", data_result.error().message());
-            goto cleanup;
-        }
-        HTTP2_LOG_INFO("[HTTP/2] DATA sent for stream 1, response complete");
         
         // 主循环：处理帧
         while (!http2Conn.isClosed()) {
@@ -233,9 +241,9 @@ Coroutine<nil> http2Upgrade(HttpRequest& request, HttpConnection& conn, HttpPara
     settings.send_timeout = std::chrono::milliseconds(30000);
     
     AsyncWaiter<void, Infallible> waiter;
-    // 处理 HTTP/2 通信
-    HTTP2_LOG_DEBUG("[HTTP] Starting HTTP/2 handler task...");
-    waiter.appendTask(handleHttp2(std::move(http2Conn), waiter, settings));
+    // 处理 HTTP/2 通信，传递 is_prior_knowledge=false (Upgrade 模式)
+    HTTP2_LOG_DEBUG("[HTTP] Starting HTTP/2 handler task (Upgrade mode)...");
+    waiter.appendTask(handleHttp2(std::move(http2Conn), waiter, settings, false));  // false = Upgrade mode
     co_await waiter.wait();
     HTTP2_LOG_INFO("[HTTP] HTTP/2 handler finished, waiter done");
     
@@ -274,11 +282,42 @@ Coroutine<nil> httpIndex(HttpRequest& request, HttpConnection& conn, HttpParams 
     co_return nil();
 }
 
+// Prior Knowledge h2c 处理函数（直接发送 PRI）
+Coroutine<nil> http2PriorKnowledge(HttpRequest& request, HttpConnection& conn, HttpParams params)
+{
+    HTTP2_LOG_INFO("========================================");
+    HTTP2_LOG_INFO("[HTTP] Prior Knowledge h2c detected (direct PRI)");
+    HTTP2_LOG_INFO("[HTTP] Method: PRI, URI: *");
+    
+    // 创建 HTTP/2 连接
+    HTTP2_LOG_DEBUG("[HTTP] Creating Http2Connection...");
+    Http2Connection http2Conn = Http2Connection::from(conn);
+    HTTP2_LOG_DEBUG("[HTTP] Http2Connection created");
+    
+    Http2Settings settings;
+    settings.max_concurrent_streams = 100;
+    settings.initial_window_size = 65535;
+    settings.recv_timeout = std::chrono::milliseconds(30000);
+    settings.send_timeout = std::chrono::milliseconds(30000);
+    
+    AsyncWaiter<void, Infallible> waiter;
+    // 处理 HTTP/2 通信，传递 is_prior_knowledge=true
+    HTTP2_LOG_DEBUG("[HTTP] Starting HTTP/2 handler task (Prior Knowledge mode)...");
+    waiter.appendTask(handleHttp2(std::move(http2Conn), waiter, settings, true));  // true = Prior Knowledge
+    co_await waiter.wait();
+    HTTP2_LOG_INFO("[HTTP] HTTP/2 handler finished, waiter done");
+    
+    // HTTP/2 处理完成后，主动关闭连接
+    HTTP2_LOG_DEBUG("[HTTP] Closing connection...");
+    co_await conn.close();
+    HTTP2_LOG_INFO("========================================");
+    co_return nil();
+}
+
 HttpRouteMap map = {
     {"/", {httpIndex}},
     {"/h2", {http2Upgrade}},
-    {"/api/test", {http2Upgrade}},
-    {"/api/data", {http2Upgrade}}
+    {"*", {http2PriorKnowledge}},  // 处理 PRI * HTTP/2.0 (Prior Knowledge)
 };
 
 int main()
@@ -317,8 +356,8 @@ int main()
     });
     
     HttpRouter router;
+    router.addRoute<PRI>("*", http2PriorKnowledge);
     router.addRoute<GET>(map);
-    router.addRoute<POST>(map);
     
     HTTP2_LOG_INFO("服务器启动中...");
     server.run(runtime, router);

@@ -46,7 +46,8 @@ namespace galay::http
         Http_Method_Options = 6,
         Http_Method_Connect = 7,
         Http_Method_Patch = 8,
-        Http_Method_Unknown = 9,
+        Http_Method_PRI = 9,        // HTTP/2 connection preface
+        Http_Method_Unknown = 10,
         Http_Method_Size = Http_Method_Unknown
     };
 
@@ -158,6 +159,7 @@ namespace galay::http
     #define OPTIONS HttpMethod::Http_Method_Options
     #define CONNECT HttpMethod::Http_Method_Connect
     #define PATCH HttpMethod::Http_Method_Patch
+    #define PRI HttpMethod::Http_Method_PRI
     #define UNKNOWN HttpMethod::Http_Method_Unknown
 
     #define HTTP_VERSION_1_0 HttpVersion::Http_Version_1_0

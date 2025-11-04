@@ -2,9 +2,12 @@
 #define GALAY_HTTP2_CONNECTION_H
 
 #include "galay-http/kernel/http/HttpConnection.h"
+#include "galay-http/kernel/http/HttpsConnection.h"
 #include "Http2Reader.h"
 #include "Http2Writer.h"
 #include "Http2Stream.h"
+#include <variant>
+#include <functional>
 
 namespace galay::http
 {
@@ -12,12 +15,15 @@ namespace galay::http
      * @brief HTTP/2 连接
      * 
      * 类似于 WsConnection，封装 HTTP/2 连接的读写操作
+     * 支持 HTTP（AsyncTcpSocket）和 HTTPS（AsyncSslSocket）
      */
     class Http2Connection
     {
     public:
         static Http2Connection from(HttpConnection& httpConnection);
+        static Http2Connection from(HttpsConnection& httpsConnection);
         Http2Connection(HttpConnection& httpConnection);
+        Http2Connection(HttpsConnection& httpsConnection);
         
         // 获取读写器
         Http2Reader getReader(const Http2Settings& params);
@@ -34,7 +40,11 @@ namespace galay::http
         ~Http2Connection() = default;
         
     private:
-        HttpConnection& m_connection;
+        // 使用 variant 存储两种连接类型的引用包装器
+        std::variant<
+            std::reference_wrapper<HttpConnection>,
+            std::reference_wrapper<HttpsConnection>
+        > m_connection;
         Http2StreamManager m_stream_manager;
     };
 }

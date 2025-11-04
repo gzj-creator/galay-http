@@ -1,6 +1,8 @@
 #include "HttpsReader.h"
 #include "galay/common/Error.h"
 #include "galay-http/utils/HttpDebugLog.h"
+#include "galay-http/utils/HttpsDebugLog.h"
+#include <cstring>
 
 namespace galay::http 
 {
@@ -65,6 +67,21 @@ namespace galay::http
             recv_size += bytes.value().size();
             
             std::string_view view(std::string_view(m_buffer.data(), recv_size));
+            HTTP_LOG_INFO("recv_size: {}, view: {}", recv_size, view);
+            
+            // 检测 HTTP/2 客户端前言 (PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n)
+            if (recv_size >= 4 && std::strncmp(m_buffer.data(), "PRI ", 4) == 0) {
+                HTTPS_LOG_INFO("[HttpsReader] Detected HTTP/2 PRI preface");
+                // 创建一个特殊的 HttpRequestHeader 表示 HTTP/2 升级
+                HttpRequestHeader pri_header;
+                pri_header.method() = HttpMethod::Http_Method_PRI;
+                pri_header.uri() = "*";
+                pri_header.version() = HttpVersion::Http_Version_2_0;
+                // 将整个前言保留在 buffer 中，供 HTTP/2 reader 使用
+                waiter->notify(std::move(pri_header));
+                co_return nil();
+            }
+            
             auto header_str = header.checkAndGetHeaderString(view);
             if(!header_str.empty()) {
                 //header end
@@ -202,6 +219,11 @@ namespace galay::http
             co_return nil();
         }
         request.setHeader(std::move(*header_res));
+        
+        if(request.header().method() == HttpMethod::Http_Method_PRI) {
+            waiter->notify(std::move(request));
+            co_return nil();
+        }
 
         //chunk 不接收body
         if(request.header().isChunked()) {

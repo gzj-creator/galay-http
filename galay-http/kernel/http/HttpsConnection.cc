@@ -1,7 +1,6 @@
 #include "HttpsConnection.h"
 #include "HttpsReader.h"
 #include "HttpsWriter.h"
-#include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/HttpsDebugLog.h"
 #include "galay-http/protoc/alpn/AlpnProtocol.h"
 #include <openssl/ssl.h>

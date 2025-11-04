@@ -8,6 +8,7 @@
 #include "galay-http/protoc/http2/Http2Error.h"
 #include "Http2Params.hpp"
 #include "Http2Stream.h"
+#include "Http2SocketAdapter.h"
 
 namespace galay::http
 {
@@ -15,11 +16,12 @@ namespace galay::http
      * @brief HTTP/2 写入器
      * 
      * 类似于 WsWriter，负责发送 HTTP/2 帧
+     * 支持 AsyncTcpSocket 和 AsyncSslSocket 通过 Http2SocketAdapter
      */
     class Http2Writer
     {
     public:
-        Http2Writer(AsyncTcpSocket& socket, TimerGenerator& generator, 
+        Http2Writer(Http2SocketAdapter socket, TimerGenerator& generator, 
                    Http2StreamManager& stream_manager, const Http2Settings& params);
         
         // ==================== 连接级别的帧 ====================
@@ -101,7 +103,7 @@ namespace galay::http
             std::chrono::milliseconds timeout);
         
     private:
-        AsyncTcpSocket& m_socket;
+        Http2SocketAdapter m_socket;
         Http2Settings m_params;
         TimerGenerator& m_generator;
         Http2StreamManager& m_stream_manager;

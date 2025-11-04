@@ -4,7 +4,7 @@
 
 namespace galay::http
 {
-    Http2Writer::Http2Writer(AsyncTcpSocket& socket, TimerGenerator& generator,
+    Http2Writer::Http2Writer(Http2SocketAdapter socket, TimerGenerator& generator,
                             Http2StreamManager& stream_manager, const Http2Settings& params)
         : m_socket(socket)
         , m_params(params)

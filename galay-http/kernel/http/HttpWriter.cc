@@ -224,24 +224,19 @@ namespace galay::http
         HTTP_LOG_DEBUG("[HttpWriter] Upgrade to HTTP/2");
         auto& header = request.header();
         
-        // 验证 Upgrade 头
-        if (!header.headerPairs().hasKey("Upgrade")) {
-            HTTP_LOG_ERROR("[HttpWriter] Missing Upgrade header");
+        // 验证 Upgrade 头 或 PRI 头
+        if (header.method() != HttpMethod::Http_Method_PRI &&!header.headerPairs().hasKey("Upgrade")) {
+            HTTP_LOG_ERROR("[HttpWriter] Missing Upgrade header OR PRI header");
             return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
         }
         
         std::string upgrade_value = header.headerPairs().getValue("Upgrade");
         // HTTP/2 使用 h2c (HTTP/2 over cleartext)
-        if (upgrade_value != "h2c" && upgrade_value != "h2") {
+        if (header.method() != HttpMethod::Http_Method_PRI && (upgrade_value != "h2c" && upgrade_value != "h2")) {
             HTTP_LOG_ERROR("[HttpWriter] Invalid Upgrade value: {}", upgrade_value);
             return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
         }
         
-        // 验证 Connection 头
-        if (!header.headerPairs().hasKey("Connection")) {
-            HTTP_LOG_ERROR("[HttpWriter] Missing Connection header");
-            return {std::unexpected(HttpErrorCode::kHttpError_BadRequest)};
-        }
         
         // 验证 HTTP2-Settings 头（可选，但推荐）
         if (header.headerPairs().hasKey("HTTP2-Settings")) {

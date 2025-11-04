@@ -4,7 +4,7 @@ namespace galay::http
 {
     std::vector<std::string> 
     g_HttpMethods = {
-        "GET", "POST", "HEAD", "PUT", "DELETE", "TRACE", "OPTIONS", "CONNECT" , "PATCH", "UNKNOWN"
+        "GET", "POST", "HEAD", "PUT", "DELETE", "TRACE", "OPTIONS", "CONNECT" , "PATCH", "PRI", "UNKNOWN"
     };
 
     std::vector<std::string> 

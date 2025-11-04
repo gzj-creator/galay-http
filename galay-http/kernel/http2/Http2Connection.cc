@@ -1,6 +1,5 @@
 #include "Http2Connection.h"
 #include "galay-http/utils/Http2DebugLog.h"
-#include <memory>
 
 namespace galay::http
 {
@@ -10,30 +9,52 @@ namespace galay::http
         return Http2Connection(httpConnection);
     }
     
+    Http2Connection Http2Connection::from(HttpsConnection& httpsConnection)
+    {
+        HTTP2_LOG_DEBUG("[Http2Connection] Upgrade from HTTPS to HTTP/2");
+        return Http2Connection(httpsConnection);
+    }
+    
     Http2Connection::Http2Connection(HttpConnection& httpConnection)
-        : m_connection(httpConnection)
+        : m_connection(std::ref(httpConnection))
+        , m_stream_manager(Http2Settings{})
+    {
+    }
+    
+    Http2Connection::Http2Connection(HttpsConnection& httpsConnection)
+        : m_connection(std::ref(httpsConnection))
         , m_stream_manager(Http2Settings{})
     {
     }
     
     Http2Reader Http2Connection::getReader(const Http2Settings& params)
     {
-        return Http2Reader(m_connection.m_socket, m_connection.m_generator, m_stream_manager, params);
+        return std::visit([&](auto&& conn) -> Http2Reader {
+            Http2SocketAdapter adapter(conn.get().m_socket);
+            return Http2Reader(adapter, conn.get().m_generator, m_stream_manager, params);
+        }, m_connection);
     }
     
     Http2Writer Http2Connection::getWriter(const Http2Settings& params)
     {
-        return Http2Writer(m_connection.m_socket, m_connection.m_generator, m_stream_manager, params);
+        return std::visit([&](auto&& conn) -> Http2Writer {
+            Http2SocketAdapter adapter(conn.get().m_socket);
+            return Http2Writer(adapter, conn.get().m_generator, m_stream_manager, params);
+        }, m_connection);
     }
     
     AsyncResult<std::expected<void, CommonError>> Http2Connection::close()
     {
         HTTP2_LOG_DEBUG("[Http2Connection] Close");
-        return m_connection.close();
+        return std::visit([](auto&& conn) {
+            return conn.get().close();
+        }, m_connection);
     }
     
     bool Http2Connection::isClosed() const
     {
-        return m_connection.isClosed();
+        return std::visit([](auto&& conn) {
+            return conn.get().isClosed();
+        }, m_connection);
     }
 }

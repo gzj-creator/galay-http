@@ -5,12 +5,10 @@
 // #define ENABLE_DEBUG
 // ==================================
 
-#include "galay/common/Error.h"
 #include "galay/kernel/runtime/Runtime.h"
 #include "galay-http/server/HttpsServer.h"
 #include "galay-http/kernel/http/HttpsRouter.h"
 #include "galay-http/kernel/http/HttpsWriter.h"
-#include "galay-http/protoc/alpn/AlpnProtocol.h"
 #include "galay-http/utils/HttpLogger.h"
 #include "galay-http/utils/HttpUtils.h"
 #include <galay/utils/SignalHandler.hpp>
@@ -104,6 +102,7 @@ int main()
     
     HttpsServer server = HttpsServerBuilder("server.crt", "server.key")
                             .addListen(Host("0.0.0.0", 8443))
+                            .enableHttp2(false)  // 此测试只支持 HTTP/1.1
                             .build();
     
     HttpsRouter router;
