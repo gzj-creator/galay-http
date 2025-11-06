@@ -102,7 +102,6 @@ int main()
     
     HttpsServer server = HttpsServerBuilder("server.crt", "server.key")
                             .addListen(Host("0.0.0.0", 8443))
-                            .enableHttp2(false)  // 此测试只支持 HTTP/1.1
                             .build();
     
     HttpsRouter router;

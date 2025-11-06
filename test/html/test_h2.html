@@ -359,16 +359,62 @@
         
         // 检测协议和安全性
         window.addEventListener('load', async () => {
-            // 检查是否使用 HTTPS
-            if (window.location.protocol === 'https:') {
-                document.getElementById('security').textContent = '✓ HTTPS 加密';
-                document.getElementById('security').classList.add('success');
-                log('✓ 使用 HTTPS 安全连接', 'success');
+            log('正在检测服务器连接...', 'info');
+            
+            // 由于测试页面可能通过 file:// 或 http:// 访问，
+            // 我们直接测试服务器是否支持 HTTPS 和 HTTP/2
+            document.getElementById('security').textContent = '检测中...';
+            document.getElementById('protocol').textContent = '检测中...';
+            document.getElementById('alpn').textContent = '检测中...';
+            
+            // 测试服务器连接并检测协议
+            await testConnection();
+        });
+        
+        async function testConnection() {
+            try {
+                const startTime = performance.now();
+                const response = await fetch(SERVER_URL + '/api/hello', {
+                    method: 'GET',
+                    cache: 'no-cache'
+                });
                 
-                // 检测 HTTP/2
-                try {
-                    const navEntry = performance.getEntriesByType('navigation')[0];
-                    const protocol = navEntry?.nextHopProtocol || 'unknown';
+                if (response.ok) {
+                    const duration = Math.round(performance.now() - startTime);
+                    log(`✓ 服务器连接成功 (${duration}ms)`, 'success');
+                    
+                    // 标记安全连接
+                    document.getElementById('security').textContent = '✓ HTTPS 加密';
+                    document.getElementById('security').classList.add('success');
+                    
+                    // 检查响应头中的服务器信息
+                    const server = response.headers.get('server');
+                    if (server) {
+                        log(`服务器: ${server}`, 'info');
+                    }
+                    
+                    // 优先从响应头读取协议信息
+                    let protocol = response.headers.get('x-protocol');
+                    
+                    if (!protocol) {
+                        // 回退：通过 Performance API 检测资源加载的协议
+                        const entries = performance.getEntriesByType('resource');
+                        const serverEntry = entries.find(e => e.name.includes('localhost:8443'));
+                        
+                        if (serverEntry) {
+                            protocol = serverEntry.nextHopProtocol || 'unknown';
+                        } else {
+                            // 如果找不到资源条目，尝试从 navigation 条目获取
+                            const navEntry = performance.getEntriesByType('navigation')[0];
+                            if (navEntry && navEntry.nextHopProtocol) {
+                                // 注意：这可能是页面本身的协议，不是 API 请求的协议
+                                log('⚠ 无法准确检测 API 请求的协议，显示页面协议作为参考', 'warning');
+                                protocol = navEntry.nextHopProtocol;
+                            } else {
+                                protocol = 'unknown';
+                            }
+                        }
+                    }
                     
                     document.getElementById('protocol').textContent = protocol;
                     
@@ -378,55 +424,35 @@
                         document.getElementById('alpn').classList.add('success');
                         log('✓ 检测到 HTTP/2 (h2) 协议', 'success');
                         log('✓ ALPN 协商成功，使用 h2', 'success');
-                    } else if (protocol.startsWith('http/1')) {
+                    } else if (protocol && protocol.startsWith('http/1')) {
                         document.getElementById('protocol').classList.add('warning');
                         document.getElementById('alpn').textContent = '✗ 降级到 HTTP/1.1';
                         document.getElementById('alpn').classList.add('warning');
                         log('⚠ 当前使用 ' + protocol + '，服务器可能不支持 HTTP/2', 'warning');
                     } else {
                         document.getElementById('protocol').classList.add('warning');
-                        document.getElementById('alpn').textContent = '未知';
+                        document.getElementById('alpn').textContent = '未知 (无法检测)';
                         document.getElementById('alpn').classList.add('warning');
-                        log('⚠ 无法检测协议版本: ' + protocol, 'warning');
-                    }
-                } catch (error) {
-                    log('⚠ 无法检测协议: ' + error.message, 'error');
-                }
-            } else {
-                document.getElementById('security').textContent = '✗ HTTP (不安全)';
-                document.getElementById('security').classList.add('error');
-                document.getElementById('alpn').textContent = 'N/A (需要 HTTPS)';
-                document.getElementById('alpn').classList.add('error');
-                log('✗ 当前使用 HTTP，h2 需要 HTTPS', 'error');
-                log('请通过 HTTPS 访问此页面', 'warning');
-            }
-            
-            // 测试服务器连接
-            await testConnection();
-        });
-        
-        async function testConnection() {
-            log('测试服务器连接...', 'info');
-            try {
-                const response = await fetch(SERVER_URL + '/', {
-                    method: 'GET',
-                    cache: 'no-cache'
-                });
-                
-                if (response.ok) {
-                    log('✓ 服务器连接成功', 'success');
-                    
-                    // 检查响应头中的服务器信息
-                    const server = response.headers.get('server');
-                    if (server) {
-                        log(`服务器: ${server}`, 'info');
+                        log('⚠ 无法通过浏览器 API 检测协议版本', 'warning');
+                        log('💡 提示: 浏览器通过 fetch() 发送的请求协议信息可能无法获取', 'info');
+                        log('💡 但服务器实际上可能正在使用 HTTP/2 处理请求', 'info');
                     }
                 } else {
                     log(`⚠ 服务器响应异常: ${response.status}`, 'warning');
+                    document.getElementById('security').textContent = '✗ 连接失败';
+                    document.getElementById('security').classList.add('error');
+                    document.getElementById('protocol').textContent = 'N/A';
+                    document.getElementById('alpn').textContent = 'N/A';
                 }
             } catch (error) {
                 log(`✗ 无法连接到服务器: ${error.message}`, 'error');
                 log('请确保服务器已启动并监听在 https://localhost:8443', 'warning');
+                log('如果看到证书错误，请在浏览器中直接访问 https://localhost:8443 并接受证书', 'warning');
+                
+                document.getElementById('security').textContent = '✗ 连接失败';
+                document.getElementById('security').classList.add('error');
+                document.getElementById('protocol').textContent = 'N/A';
+                document.getElementById('alpn').textContent = 'N/A';
             }
         }
         
@@ -475,7 +501,7 @@
                     
                     // 显示重要的响应头
                     const headers = {};
-                    const importantHeaders = ['content-type', 'content-length', 'server', 'x-stream-id'];
+                    const importantHeaders = ['content-type', 'content-length', 'server', 'x-stream-id', 'x-protocol'];
                     importantHeaders.forEach(key => {
                         const value = response.headers.get(key);
                         if (value) headers[key] = value;

@@ -5,108 +5,94 @@
 #include "galay-http/kernel/http/HttpsRouter.h"
 #include "galay-http/kernel/http/HttpsConnection.h"
 #include "galay-http/kernel/http/HttpParams.hpp"
-#include "galay-http/kernel/http2/Http2Params.hpp"
-#include "galay-http/kernel/http2/Http2Callbacks.h"
 
 namespace galay::http 
 {
-    // 前向声明
-    class Http2Connection;
-    
+    /**
+     * @brief HTTPS 服务器（HTTP/1.x over TLS）
+     * 
+     * 这个类专门用于处理 HTTPS + HTTP/1.x 连接。
+     * 如果需要 HTTP/2 over TLS (h2) 支持，请使用 Http2Server 类。
+     */
     class HttpsServer 
     {
     public:
         using HttpsConnFunc = std::function<Coroutine<nil>(HttpsConnection)>;
-        using Http2ConnFunc = std::function<Coroutine<nil>(Http2Connection)>;
         
-        HttpsServer(TcpSslServer&& tcpSslServer, const std::string& cert, const std::string& key, bool enable_http2 = true) 
-            : m_server(std::move(tcpSslServer)), m_cert(cert), m_key(key), m_http2_enabled(enable_http2), m_ssl_configured(false) {}
+        HttpsServer(TcpSslServer&& tcpSslServer, const std::string& cert, const std::string& key) 
+            : m_server(std::move(tcpSslServer)), m_cert(cert), m_key(key) {}
         
+        /**
+         * @brief 监听指定地址和端口
+         * @param host 主机地址和端口
+         */
         void listen(const Host& host);
         
-        // 运行服务器（自定义处理器）
+        /**
+         * @brief 运行服务器（自定义连接处理器）
+         * @param runtime 运行时环境
+         * @param handler 连接处理函数
+         */
         void run(Runtime& runtime, const HttpsConnFunc& handler);
         
-        // 运行服务器（使用路由，仅 HTTP/1.1）
+        /**
+         * @brief 运行服务器（使用路由处理 HTTP/1.x 请求）
+         * @param runtime 运行时环境
+         * @param router HTTP 路由器
+         * @param params HTTP 参数设置
+         */
         void run(Runtime& runtime, HttpsRouter& router, HttpSettings params = HttpSettings());
         
-        // 运行服务器（自动检测 HTTP/2，使用不同的处理器）
-        void run(Runtime& runtime, 
-                HttpsRouter& http1Router, 
-                const Http2ConnFunc& http2Handler,
-                HttpSettings httpParams = HttpSettings(),
-                Http2Settings http2Params = Http2Settings());
-        
-        // 运行服务器（自动检测 HTTP/2，使用回调处理帧）
-        void run(Runtime& runtime,
-                HttpsRouter& http1Router,
-                const Http2Callbacks& http2Callbacks,
-                HttpSettings httpParams = HttpSettings(),
-                Http2Settings http2Params = Http2Settings());
-        
+        /**
+         * @brief 等待服务器停止
+         */
         void wait();
+        
+        /**
+         * @brief 停止服务器
+         */
         void stop();
         
-        /**
-         * @brief 启用/禁用 HTTP/2 自动检测
-         * @param enabled 是否启用（默认 true）
-         */
-        void enableHttp2(bool enabled = true) { m_http2_enabled = enabled; }
-        
-        /**
-         * @brief 检查是否启用了 HTTP/2
-         */
-        bool isHttp2Enabled() const { return m_http2_enabled; }
-        
     private:
-        // 辅助方法：确保 ALPN 已配置
-        void ensureALPNConfigured();
-        
         Coroutine<nil> handleConnection(Runtime& runtime, HttpsRouter& router, HttpSettings params, AsyncSslSocket socket);
-        Coroutine<nil> handleConnectionWithHttp2(Runtime& runtime, 
-                                                 HttpsRouter& http1Router,
-                                                 const Http2ConnFunc& http2Handler,
-                                                 HttpSettings httpParams,
-                                                 Http2Settings http2Params,
-                                                 AsyncSslSocket socket);
-        Coroutine<nil> handleConnectionWithHttp2Callbacks(Runtime& runtime,
-                                                          HttpsRouter& http1Router,
-                                                          const Http2Callbacks& http2Callbacks,
-                                                          HttpSettings httpParams,
-                                                          Http2Settings http2Params,
-                                                          AsyncSslSocket socket);
-        Coroutine<nil> processHttp2Frames(Http2Connection& connection,
-                                          const Http2Callbacks& callbacks,
-                                          const Http2Settings& params);
+        
     private:
         TcpSslServer m_server;
         std::string m_cert;
         std::string m_key;
-        bool m_http2_enabled = true;  // 默认启用 HTTP/2
-        bool m_ssl_configured = false;
     };
 
-
+    /**
+     * @brief HTTPS 服务器构建器
+     */
     class HttpsServerBuilder 
     {
     public:
         HttpsServerBuilder(const std::string& cert_file, const std::string& key_file);
-        HttpsServerBuilder& addListen(const Host& host);
-        HttpsServerBuilder& threads(int threads);
         
         /**
-         * @brief 启用 HTTP/2 支持（通过 ALPN）
-         * @param enabled 是否启用（默认 true）
+         * @brief 添加监听地址
+         * @param host 主机地址和端口
          */
-        HttpsServerBuilder& enableHttp2(bool enabled = true);
+        HttpsServerBuilder& addListen(const Host& host);
+        
+        /**
+         * @brief 设置工作线程数
+         * @param threads 线程数
+         */
+        HttpsServerBuilder& threads(int threads);
 
+        /**
+         * @brief 构建 HTTPS 服务器
+         * @return HttpsServer 实例
+         */
         HttpsServer build();
+        
     private:
         std::string m_cert;
         std::string m_key;
-        Host m_host = { "0.0.0.0", 8443};  // HTTPS 默认端口 8443
+        Host m_host = {"0.0.0.0", 8443};  // HTTPS 默认端口 8443
         int m_threads = DEFAULT_COS_SCHEDULER_THREAD_NUM;
-        bool m_enable_http2 = true;  // 默认启用 HTTP/2
     };
 }
 

@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTTP/1.1 Fallback 测试页面</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            border-left: 4px solid #667eea;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border: 2px solid #2196F3;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .warning-box {
+            background: #fff3cd;
+            border: 2px solid #ff9800;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .success-box {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .test-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 25px;
+            font-size: 1em;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-weight: bold;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .result-area {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+
+        .result-area:empty::before {
+            content: '等待测试结果...';
+            color: #888;
+        }
+
+        code {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+
+        pre {
+            background: #2d2d2d;
+            color: #f8f8f2;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 10px 0;
+        }
+
+        .protocol-badge {
+            display: inline-block;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-weight: bold;
+            margin: 5px;
+        }
+
+        .http1 {
+            background: #ff9800;
+            color: white;
+        }
+
+        .http2 {
+            background: #2196F3;
+            color: white;
+        }
+
+        input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+            font-size: 1em;
+            margin: 10px 0;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .curl-commands {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+
+        .curl-commands h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔄 HTTP/1.1 Fallback 测试</h1>
+            <p>测试 HTTP/2 服务器的 HTTP/1.1 降级功能</p>
+        </div>
+
+        <div class="content">
+            <!-- 说明部分 -->
+            <div class="section">
+                <h2>📋 测试说明</h2>
+                <div class="warning-box">
+                    <strong>⚠️ 重要提示：</strong> 现代浏览器会自动通过 ALPN 协商使用 HTTP/2。
+                    要真正测试 HTTP/1.1 fallback，请使用以下方法之一：
+                </div>
+                
+                <div class="info-box">
+                    <strong>方法 1：使用 curl 命令</strong>
+                    <div class="curl-commands">
+                        <h3>强制使用 HTTP/1.1：</h3>
+                        <pre>curl -v --http1.1 https://localhost:8443/ --insecure</pre>
+                        
+                        <h3>测试 API 端点：</h3>
+                        <pre>curl -v --http1.1 https://localhost:8443/api/hello --insecure</pre>
+                        
+                        <h3>POST 请求测试：</h3>
+                        <pre>curl -v --http1.1 -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello HTTP/1.1"}' \
+  https://localhost:8443/api/echo --insecure</pre>
+                    </div>
+                </div>
+
+                <div class="info-box">
+                    <strong>方法 2：禁用浏览器 HTTP/2</strong>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>Chrome: 访问 <code>chrome://flags/#enable-quic</code> 禁用 HTTP/2</li>
+                        <li>Firefox: 访问 <code>about:config</code> 设置 <code>network.http.spdy.enabled</code> 为 false</li>
+                    </ul>
+                </div>
+
+                <div class="info-box">
+                    <strong>方法 3：使用不支持 HTTP/2 的旧浏览器</strong>
+                    <p style="margin-top: 10px;">如 IE11 或 旧版 Safari</p>
+                </div>
+            </div>
+
+            <!-- 协议检测 -->
+            <div class="section">
+                <h2>🔍 当前协议检测</h2>
+                <div id="protocolInfo" class="result-area"></div>
+                <button onclick="detectProtocol()">检测协议</button>
+            </div>
+
+            <!-- 测试按钮 -->
+            <div class="section">
+                <h2>🧪 功能测试</h2>
+                <div class="test-buttons">
+                    <button onclick="testGet('/')">测试 GET /</button>
+                    <button onclick="testGet('/api/hello')">测试 GET /api/hello</button>
+                    <button onclick="testPost()">测试 POST /api/echo</button>
+                    <button onclick="testMultipleRequests()">并发请求测试</button>
+                </div>
+                <div id="testResults" class="result-area"></div>
+            </div>
+
+            <!-- 自定义测试 -->
+            <div class="section">
+                <h2>⚙️ 自定义测试</h2>
+                <input type="text" id="customUrl" placeholder="输入路径 (例如: /api/hello)" value="/api/hello">
+                <div class="test-buttons">
+                    <button onclick="customGet()">自定义 GET</button>
+                    <button onclick="customPost()">自定义 POST</button>
+                </div>
+            </div>
+
+            <!-- 服务器响应头信息 -->
+            <div class="section">
+                <h2>📊 服务器响应头</h2>
+                <div id="headersInfo" class="result-area"></div>
+            </div>
+
+            <!-- 预期结果 -->
+            <div class="section">
+                <h2>✅ 预期结果</h2>
+                <div class="success-box">
+                    <strong>HTTP/1.1 降级模式下，你应该看到：</strong>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>响应头中包含 HTTP/1.1 协议标识</li>
+                        <li>服务器返回包含"HTTP/1.1 降级模式"的提示页面</li>
+                        <li>响应头中没有 HTTP/2 特有的伪头部（如 <code>:status</code>）</li>
+                        <li>所有功能正常工作（GET、POST、JSON 等）</li>
+                    </ul>
+                </div>
+                
+                <div class="info-box">
+                    <strong>HTTP/2 模式下，你应该看到：</strong>
+                    <ul style="margin-left: 20px; margin-top: 10px;">
+                        <li>响应头 <code>x-protocol: h2</code></li>
+                        <li>浏览器开发者工具显示 <span class="protocol-badge http2">h2</span></li>
+                        <li>正常的 HTTP/2 测试页面</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const baseUrl = 'https://localhost:8443';
+        
+        function log(message, isError = false) {
+            const results = document.getElementById('testResults');
+            const timestamp = new Date().toLocaleTimeString();
+            const color = isError ? '#ff6b6b' : '#00ff00';
+            results.innerHTML += `<div style="color: ${color}">[${timestamp}] ${message}</div>`;
+            results.scrollTop = results.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('testResults').innerHTML = '';
+        }
+
+        async function detectProtocol() {
+            const infoDiv = document.getElementById('protocolInfo');
+            infoDiv.innerHTML = '<div style="color: #ffeb3b">正在检测...</div>';
+            
+            try {
+                const response = await fetch(baseUrl + '/api/hello');
+                const data = await response.json();
+                
+                // 获取响应头
+                const protocol = response.headers.get('x-protocol') || 'unknown';
+                const server = response.headers.get('server') || 'unknown';
+                
+                let html = `<div style="color: #00ff00">
+                    <strong>协议检测结果：</strong><br><br>
+                    协议: <span class="protocol-badge ${protocol === 'h2' ? 'http2' : 'http1'}">${protocol}</span><br>
+                    服务器: ${server}<br>
+                    响应数据: ${JSON.stringify(data, null, 2)}<br>
+                </div>`;
+                
+                infoDiv.innerHTML = html;
+            } catch (error) {
+                infoDiv.innerHTML = `<div style="color: #ff6b6b">错误: ${error.message}</div>`;
+            }
+        }
+
+        async function testGet(path) {
+            clearLog();
+            log(`开始测试 GET ${path}`);
+            
+            try {
+                const response = await fetch(baseUrl + path);
+                const text = await response.text();
+                
+                log(`状态码: ${response.status} ${response.statusText}`);
+                log(`协议: ${response.headers.get('x-protocol') || 'N/A'}`);
+                log(`响应大小: ${text.length} 字节`);
+                log('✅ GET 请求成功');
+                
+                showHeaders(response.headers);
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`, true);
+            }
+        }
+
+        async function testPost() {
+            clearLog();
+            log('开始测试 POST /api/echo');
+            
+            try {
+                const testData = {
+                    message: 'Hello from HTTP/1.1 fallback test',
+                    timestamp: new Date().toISOString(),
+                    test: true
+                };
+                
+                const response = await fetch(baseUrl + '/api/echo', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(testData)
+                });
+                
+                const data = await response.json();
+                
+                log(`状态码: ${response.status} ${response.statusText}`);
+                log(`协议: ${response.headers.get('x-protocol') || 'N/A'}`);
+                log(`响应数据: ${JSON.stringify(data, null, 2)}`);
+                log('✅ POST 请求成功');
+                
+                showHeaders(response.headers);
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`, true);
+            }
+        }
+
+        async function testMultipleRequests() {
+            clearLog();
+            log('开始并发请求测试（10个请求）');
+            
+            const promises = [];
+            for (let i = 0; i < 10; i++) {
+                promises.push(
+                    fetch(baseUrl + '/api/hello')
+                        .then(r => r.json())
+                        .then(data => {
+                            log(`请求 #${i + 1} 完成`);
+                            return data;
+                        })
+                );
+            }
+            
+            try {
+                const results = await Promise.all(promises);
+                log(`✅ 全部 ${results.length} 个请求成功完成`);
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`, true);
+            }
+        }
+
+        async function customGet() {
+            const url = document.getElementById('customUrl').value;
+            await testGet(url);
+        }
+
+        async function customPost() {
+            const url = document.getElementById('customUrl').value;
+            clearLog();
+            log(`开始测试 POST ${url}`);
+            
+            try {
+                const response = await fetch(baseUrl + url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ custom: true, path: url })
+                });
+                
+                const data = await response.json();
+                log(`状态码: ${response.status}`);
+                log(`响应: ${JSON.stringify(data, null, 2)}`);
+                log('✅ 请求成功');
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`, true);
+            }
+        }
+
+        function showHeaders(headers) {
+            const headersDiv = document.getElementById('headersInfo');
+            let html = '<div style="color: #00ff00"><strong>响应头：</strong><br><br>';
+            
+            for (let [key, value] of headers.entries()) {
+                html += `<strong>${key}:</strong> ${value}<br>`;
+            }
+            
+            html += '</div>';
+            headersDiv.innerHTML = html;
+        }
+
+        // 页面加载时自动检测协议
+        window.addEventListener('load', () => {
+            detectProtocol();
+        });
+    </script>
+</body>
+</html>
+

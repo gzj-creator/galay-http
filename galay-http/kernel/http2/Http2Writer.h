@@ -102,6 +102,22 @@ namespace galay::http
             std::shared_ptr<AsyncWaiter<void, Http2Error>> waiter,
             std::chrono::milliseconds timeout);
         
+        // 分片发送大数据（当数据大小超过 max_frame_size 时）
+        Coroutine<nil> sendDataChunked(
+            uint32_t stream_id,
+            const std::string& data,
+            bool end_stream,
+            std::shared_ptr<AsyncWaiter<void, Http2Error>> waiter,
+            std::chrono::milliseconds timeout);
+        
+        // 分片发送大头部块（使用 CONTINUATION 帧）
+        Coroutine<nil> sendHeadersWithContinuation(
+            uint32_t stream_id,
+            const std::string& header_block,
+            bool end_stream,
+            std::shared_ptr<AsyncWaiter<void, Http2Error>> waiter,
+            std::chrono::milliseconds timeout);
+        
     private:
         Http2SocketAdapter m_socket;
         Http2Settings m_params;

@@ -8,8 +8,8 @@
 namespace galay::http
 {
     // HTTP/2 默认配置
-    #define DEFAULT_HTTP2_RECV_TIMEOUT          std::chrono::milliseconds(30000)
-    #define DEFAULT_HTTP2_SEND_TIMEOUT          std::chrono::milliseconds(30000)
+    #define DEFAULT_HTTP2_RECV_TIMEOUT          std::chrono::milliseconds(-1)
+    #define DEFAULT_HTTP2_SEND_TIMEOUT          std::chrono::milliseconds(-1)
     #define DEFAULT_HTTP2_MAX_FRAME_SIZE        16384       // 16KB (RFC 7540 规定的默认值)
     #define DEFAULT_HTTP2_MAX_HEADER_LIST_SIZE  (8192)      // 8KB
     #define DEFAULT_HTTP2_INITIAL_WINDOW_SIZE   65535       // 64KB - 1

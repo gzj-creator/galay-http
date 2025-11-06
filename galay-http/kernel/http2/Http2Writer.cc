@@ -145,6 +145,21 @@ namespace galay::http
             timeout = m_params.send_timeout;
         }
         
+        // 如果头部块大小超过 max_frame_size，需要分片
+        if (header_block.size() > m_params.max_frame_size) {
+            HTTP2_LOG_DEBUG("[Http2Writer] Header block size {} exceeds max_frame_size {}, splitting into CONTINUATION frames", 
+                           header_block.size(), m_params.max_frame_size);
+            
+            // 发送第一个 HEADERS 帧（不设置 END_HEADERS）
+            std::string first_chunk = header_block.substr(0, m_params.max_frame_size);
+            Http2HeadersFrame first_frame(stream_id, first_chunk, end_stream, false);
+            
+            auto waiter = std::make_shared<AsyncWaiter<void, Http2Error>>();
+            auto co = sendHeadersWithContinuation(stream_id, header_block, end_stream, waiter, timeout);
+            waiter->appendTask(std::move(co));
+            return waiter->wait();
+        }
+        
         Http2HeadersFrame frame(stream_id, header_block, end_stream, end_headers);
         return sendFrame(frame, timeout);
     }
@@ -202,6 +217,17 @@ namespace galay::http
             return AsyncResult<std::expected<void, Http2Error>>(
                 std::unexpected(conn_result.error())
             );
+        }
+        
+        // 如果数据大小超过 max_frame_size，需要分片
+        if (data.size() > m_params.max_frame_size) {
+            HTTP2_LOG_DEBUG("[Http2Writer] Data size {} exceeds max_frame_size {}, splitting into multiple DATA frames", 
+                           data.size(), m_params.max_frame_size);
+            
+            auto waiter = std::make_shared<AsyncWaiter<void, Http2Error>>();
+            auto co = sendDataChunked(stream_id, data, end_stream, waiter, timeout);
+            waiter->appendTask(std::move(co));
+            return waiter->wait();
         }
         
         Http2DataFrame frame(stream_id, data, end_stream);
@@ -349,6 +375,126 @@ namespace galay::http
             }
         }
         
+        waiter->notify({});
+        co_return nil();
+    }
+    
+    Coroutine<nil> Http2Writer::sendDataChunked(
+        uint32_t stream_id,
+        const std::string& data,
+        bool end_stream,
+        std::shared_ptr<AsyncWaiter<void, Http2Error>> waiter,
+        std::chrono::milliseconds timeout)
+    {
+        HTTP2_LOG_DEBUG("[Http2Writer] Sending chunked DATA for stream {}, total size={}", stream_id, data.size());
+        
+        size_t offset = 0;
+        size_t remaining = data.size();
+        int chunk_count = 0;
+        
+        while (remaining > 0) {
+            size_t chunk_size = std::min(remaining, static_cast<size_t>(m_params.max_frame_size));
+            bool is_last_chunk = (remaining == chunk_size);
+            bool chunk_end_stream = is_last_chunk && end_stream;
+            
+            std::string chunk = data.substr(offset, chunk_size);
+            Http2DataFrame frame(stream_id, chunk, chunk_end_stream);
+            
+            chunk_count++;
+            HTTP2_LOG_DEBUG("[Http2Writer] Sending DATA chunk #{} for stream {}, size={}, end_stream={}", 
+                           chunk_count, stream_id, chunk_size, chunk_end_stream);
+            
+            // 序列化并发送帧
+            std::string frame_data = frame.serialize();
+            auto send_waiter = std::make_shared<AsyncWaiter<void, Http2Error>>();
+            auto send_co = sendFrameInternal(std::move(frame_data), send_waiter, timeout);
+            send_waiter->appendTask(std::move(send_co));
+            auto result = co_await send_waiter->wait();
+            
+            if (!result) {
+                HTTP2_LOG_ERROR("[Http2Writer] Failed to send DATA chunk #{}: {}", chunk_count, result.error().message());
+                waiter->notify(std::unexpected(result.error()));
+                co_return nil();
+            }
+            
+            offset += chunk_size;
+            remaining -= chunk_size;
+        }
+        
+        HTTP2_LOG_INFO("[Http2Writer] Successfully sent {} DATA chunks for stream {}", chunk_count, stream_id);
+        waiter->notify({});
+        co_return nil();
+    }
+    
+    Coroutine<nil> Http2Writer::sendHeadersWithContinuation(
+        uint32_t stream_id,
+        const std::string& header_block,
+        bool end_stream,
+        std::shared_ptr<AsyncWaiter<void, Http2Error>> waiter,
+        std::chrono::milliseconds timeout)
+    {
+        HTTP2_LOG_DEBUG("[Http2Writer] Sending HEADERS with CONTINUATION for stream {}, total size={}", 
+                       stream_id, header_block.size());
+        
+        size_t offset = 0;
+        size_t remaining = header_block.size();
+        bool first_frame = true;
+        int frame_count = 0;
+        
+        while (remaining > 0) {
+            size_t chunk_size = std::min(remaining, static_cast<size_t>(m_params.max_frame_size));
+            bool is_last_chunk = (remaining == chunk_size);
+            
+            std::string chunk = header_block.substr(offset, chunk_size);
+            
+            if (first_frame) {
+                // 第一个帧使用 HEADERS
+                Http2HeadersFrame frame(stream_id, chunk, end_stream, is_last_chunk);
+                
+                frame_count++;
+                HTTP2_LOG_DEBUG("[Http2Writer] Sending HEADERS frame for stream {}, size={}, end_headers={}", 
+                               stream_id, chunk_size, is_last_chunk);
+                
+                std::string frame_data = frame.serialize();
+                auto send_waiter = std::make_shared<AsyncWaiter<void, Http2Error>>();
+                auto send_co = sendFrameInternal(std::move(frame_data), send_waiter, timeout);
+                send_waiter->appendTask(std::move(send_co));
+                auto result = co_await send_waiter->wait();
+                
+                if (!result) {
+                    HTTP2_LOG_ERROR("[Http2Writer] Failed to send HEADERS frame: {}", result.error().message());
+                    waiter->notify(std::unexpected(result.error()));
+                    co_return nil();
+                }
+                
+                first_frame = false;
+            } else {
+                // 后续帧使用 CONTINUATION
+                Http2ContinuationFrame frame(stream_id, chunk, is_last_chunk);
+                
+                frame_count++;
+                HTTP2_LOG_DEBUG("[Http2Writer] Sending CONTINUATION frame #{} for stream {}, size={}, end_headers={}", 
+                               frame_count, stream_id, chunk_size, is_last_chunk);
+                
+                std::string frame_data = frame.serialize();
+                auto send_waiter = std::make_shared<AsyncWaiter<void, Http2Error>>();
+                auto send_co = sendFrameInternal(std::move(frame_data), send_waiter, timeout);
+                send_waiter->appendTask(std::move(send_co));
+                auto result = co_await send_waiter->wait();
+                
+                if (!result) {
+                    HTTP2_LOG_ERROR("[Http2Writer] Failed to send CONTINUATION frame: {}", result.error().message());
+                    waiter->notify(std::unexpected(result.error()));
+                    co_return nil();
+                }
+            }
+            
+            offset += chunk_size;
+            remaining -= chunk_size;
+        }
+        
+        HTTP2_LOG_INFO("[Http2Writer] Successfully sent {} frame(s) (HEADERS + CONTINUATION) for stream {}", 
+                      frame_count, stream_id);
         waiter->notify({});
         co_return nil();
     }

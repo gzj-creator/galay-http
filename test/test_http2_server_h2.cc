@@ -1,6 +1,6 @@
 // HTTP/2 over TLS (h2) 测试服务器
 // 
-// 这个示例展示了如何使用 HttpsServer 通过 ALPN 协商提供 HTTP/2 服务
+// 这个示例展示了如何使用 Http2Server 提供 HTTP/2 over TLS 服务
 // 
 // 编译:
 //   cd build && make test_http2_server_h2
@@ -17,20 +17,20 @@
 // #define ENABLE_DEBUG
 // ==================================
 
+#include "galay/common/Log.h"
 #include "galay/kernel/runtime/Runtime.h"
-#include "galay-http/server/HttpsServer.h"
+#include "galay-http/server/Http2Server.h"
 #include "galay-http/kernel/http/HttpsRouter.h"
 #include "galay-http/kernel/http/HttpsWriter.h"
 #include "galay-http/kernel/http2/Http2Connection.h"
 #include "galay-http/kernel/http2/Http2Writer.h"
 #include "galay-http/protoc/http2/Http2Hpack.h"
 #include "galay-http/utils/HttpLogger.h"
-#include "galay-http/utils/HttpsDebugLog.h"
 #include "galay-http/utils/Http2DebugLog.h"
-#include "galay-http/utils/HttpUtils.h"
 #include <galay/utils/SignalHandler.hpp>
 #include <csignal>
 #include <fstream>
+#include <sstream>
 #include <iostream>
 #include <map>
 
@@ -98,9 +98,43 @@ Coroutine<nil> onHeaders(Http2Connection& conn,
         
         HTTP2_LOG_INFO("[HTTP/2] Request: {} {}", method, path);
         
+        // 处理 OPTIONS 预检请求
+        if (method == "OPTIONS") {
+            HTTP2_LOG_INFO("[HTTP/2] Handling OPTIONS preflight request");
+            
+            HpackEncoder encoder;
+            std::vector<HpackHeaderField> options_headers = {
+                {":status", "204"},
+                {"access-control-allow-origin", "*"},
+                {"access-control-allow-methods", "GET, POST, OPTIONS"},
+                {"access-control-allow-headers", "Content-Type, X-Request-ID, X-Timestamp, X-Custom-Header-1, X-Custom-Header-2, X-Custom-Header-3, X-Custom-Header-4, X-Custom-Header-5, User-Agent, Accept, Accept-Language, Accept-Encoding"},
+                {"access-control-expose-headers", "X-Protocol, X-Stream-Id"},
+                {"access-control-max-age", "86400"},
+                {"content-length", "0"}
+            };
+            std::string encoded_headers = encoder.encodeHeaders(options_headers);
+            
+            auto writer = conn.getWriter({});
+            auto headers_result = co_await writer.sendHeaders(stream_id, encoded_headers, true, true);
+            if (!headers_result.has_value()) {
+                HTTP2_LOG_ERROR("[HTTP/2] Failed to send OPTIONS response: {}", headers_result.error().message());
+            } else {
+                HTTP2_LOG_INFO("[HTTP/2] OPTIONS response sent for stream {}", stream_id);
+            }
+            
+            // 删除流以释放资源
+            conn.streamManager().removeStream(stream_id);
+            HTTP2_LOG_DEBUG("[onHeaders] Stream {} removed from manager", stream_id);
+            
+            g_stream_requests.erase(stream_id);
+            HTTP2_LOG_INFO("========================================");
+            co_return nil();
+        }
+        
         // 准备响应
         std::string response_body;
         std::string content_type;
+        std::string status_code = "200";
         
         if (path == "/" || path == "/index.html") {
             content_type = "text/html; charset=utf-8";
@@ -125,6 +159,7 @@ Coroutine<nil> onHeaders(Http2Connection& conn,
     <h2>Available Endpoints:</h2>
     <ul>
         <li><code>/</code> - This page</li>
+        <li><code>/test</code> - <a href="/test" style="color: #2196F3; font-weight: bold;">HTTP/2 Interactive Test Page</a></li>
         <li><code>/api/hello</code> - JSON API endpoint</li>
         <li><code>/api/echo</code> - Echo POST data</li>
     </ul>
@@ -152,19 +187,39 @@ curl -v --http2 -d "Hello HTTP/2" https://localhost:8443/api/echo --insecure</pr
     "data": ")" + req.data + R"(",
     "stream_id": )" + std::to_string(stream_id) + R"(
 })";
+        } else if (path == "/test" || path == "/test.html" || path == "/test_h2.html") {
+            // 读取测试页面
+            content_type = "text/html; charset=utf-8";
+            std::ifstream file("../../test/html/test_h2.html");
+            if (file.is_open()) {
+                std::stringstream buffer;
+                buffer << file.rdbuf();
+                response_body = buffer.str();
+                file.close();
+                HTTP2_LOG_INFO("[HTTP/2] Serving test_h2.html ({} bytes)", response_body.size());
+            } else {
+                response_body = "Error: test_h2.html not found";
+                HTTP2_LOG_ERROR("[HTTP/2] Failed to open ../../test/html/test_h2.html");
+            }
         } else {
             content_type = "text/plain; charset=utf-8";
             response_body = "404 Not Found";
+            status_code = "404";
         }
         
         // 使用 HPACK 编码响应头
         HpackEncoder encoder;
         std::vector<HpackHeaderField> response_headers = {
-            {":status", path.find("/api/") == std::string::npos && path != "/" && path != "/index.html" ? "404" : "200"},
+            {":status", status_code},
             {"content-type", content_type},
             {"content-length", std::to_string(response_body.size())},
             {"server", "galay-http2/1.0"},
-            {"x-stream-id", std::to_string(stream_id)}
+            {"x-stream-id", std::to_string(stream_id)},
+            {"x-protocol", "h2"},
+            {"access-control-allow-origin", "*"},
+            {"access-control-allow-methods", "GET, POST, OPTIONS"},
+            {"access-control-allow-headers", "Content-Type, X-Request-ID, X-Timestamp, X-Custom-Header-1, X-Custom-Header-2, X-Custom-Header-3, X-Custom-Header-4, X-Custom-Header-5, User-Agent, Accept, Accept-Language, Accept-Encoding"},
+            {"access-control-expose-headers", "X-Protocol, X-Stream-Id"}
         };
         std::string encoded_headers = encoder.encodeHeaders(response_headers);
         
@@ -186,6 +241,10 @@ curl -v --http2 -d "Hello HTTP/2" https://localhost:8443/api/echo --insecure</pr
             co_return nil();
         }
         HTTP2_LOG_INFO("[HTTP/2] Sent DATA for stream {}, response complete", stream_id);
+        
+        // 删除流以释放资源
+        conn.streamManager().removeStream(stream_id);
+        HTTP2_LOG_DEBUG("[onHeaders] Stream {} removed from manager", stream_id);
         
         // 清理请求信息
         g_stream_requests.erase(stream_id);
@@ -245,7 +304,13 @@ Coroutine<nil> onData(Http2Connection& conn,
                     {":status", "200"},
                     {"content-type", "application/json; charset=utf-8"},
                     {"content-length", std::to_string(response_body.size())},
-                    {"server", "galay-http2/1.0"}
+                    {"server", "galay-http2/1.0"},
+                    {"x-stream-id", std::to_string(stream_id)},
+                    {"x-protocol", "h2"},
+                    {"access-control-allow-origin", "*"},
+                    {"access-control-allow-methods", "GET, POST, OPTIONS"},
+                    {"access-control-allow-headers", "Content-Type, X-Request-ID, X-Timestamp, X-Custom-Header-1, X-Custom-Header-2, X-Custom-Header-3, X-Custom-Header-4, X-Custom-Header-5, User-Agent, Accept, Accept-Language, Accept-Encoding"},
+                    {"access-control-expose-headers", "X-Protocol, X-Stream-Id"}
                 };
                 std::string encoded_headers = encoder.encodeHeaders(response_headers);
                 
@@ -259,6 +324,10 @@ Coroutine<nil> onData(Http2Connection& conn,
                         HTTP2_LOG_INFO("[HTTP/2] Response sent for stream {}", stream_id);
                     }
                 }
+                
+                // 删除流以释放资源
+                conn.streamManager().removeStream(stream_id);
+                HTTP2_LOG_DEBUG("[onData] Stream {} removed from manager", stream_id);
                 
                 // 清理请求信息
                 g_stream_requests.erase(stream_id);
@@ -284,30 +353,115 @@ Coroutine<nil> onError(Http2Connection& conn, const Http2Error& error)
     co_return nil();
 }
 
-// HTTP/1.1 降级处理器（当客户端不支持 HTTP/2 时）
+// HTTP/1.1 降级处理器
 Coroutine<nil> handleHttp1Index(HttpRequest& request, HttpsConnection& conn, HttpsParams params)
 {
-    HTTPS_LOG_INFO("[HTTP/1.1] Fallback request: {} {}", 
+    HTTP2_LOG_INFO("[HTTP/1.1 Fallback] {} {}", 
                    httpMethodToString(request.header().method()), 
                    request.header().uri());
     
     auto writer = conn.getResponseWriter({});
     
-    std::string body = R"({
-    "message": "This server supports HTTP/2",
-    "current_protocol": "HTTP/1.1",
-    "upgrade_hint": "Use curl with --http2 flag to access HTTP/2"
+    std::string path = request.header().uri();
+    std::string body;
+    std::string content_type;
+    HttpStatusCode status = HttpStatusCode::OK_200;
+    LogInfo("path: {}", path);
+    if (path == "/" || path == "/index.html") {
+        content_type = "text/html; charset=utf-8";
+        body = R"(<!DOCTYPE html>
+<html>
+<head>
+    <title>HTTP/1.1 Fallback</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f0f0f0; }
+        .container { background: white; padding: 30px; border-radius: 10px; max-width: 800px; margin: 0 auto; }
+        h1 { color: #ff6b6b; }
+        .info { background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚠️ HTTP/1.1 降级模式</h1>
+        <div class="info">
+            <p><strong>当前协议:</strong> HTTP/1.1</p>
+            <p><strong>说明:</strong> 你的浏览器不支持 HTTP/2 或 ALPN 协商失败，服务器已自动降级到 HTTP/1.1</p>
+        </div>
+        <h2>可用端点：</h2>
+        <ul>
+            <li><code>/</code> - 此页面</li>
+            <li><code>/test</code> - <a href="/test">HTTP/2 测试页面</a>（需要 HTTP/2 支持）</li>
+            <li><code>/api/hello</code> - JSON API</li>
+        </ul>
+        <h2>建议：</h2>
+        <p>请使用支持 HTTP/2 的现代浏览器访问：</p>
+        <ul>
+            <li>Chrome 49+</li>
+            <li>Firefox 52+</li>
+            <li>Safari 10+</li>
+            <li>Edge 79+</li>
+        </ul>
+    </div>
+</body>
+</html>)";
+    } else if (path == "/test" || path == "/test.html" || path == "/test_h2.html") {
+        // 读取 HTTP/2 测试页面
+        content_type = "text/html; charset=utf-8";
+        std::ifstream file("../../test/html/test_h2.html");
+        if (file.is_open()) {
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            body = buffer.str();
+            file.close();
+            HTTP2_LOG_INFO("[HTTP/1.1 Fallback] Serving test_h2.html ({} bytes)", body.size());
+        } else {
+            body = "Error: test_h2.html not found";
+            status = HttpStatusCode::NotFound_404;
+            HTTP2_LOG_ERROR("[HTTP/1.1 Fallback] Failed to open ../../test/html/test_h2.html");
+        }
+    } else if (path == "/fallback" || path == "/test_http1_fallback.html") {
+        // 读取 HTTP/1.1 fallback 测试页面
+        content_type = "text/html; charset=utf-8";
+        std::ifstream file("../../test/html/test_http1_fallback.html");
+        if (file.is_open()) {
+            std::stringstream buffer;
+            buffer << file.rdbuf();
+            body = buffer.str();
+            file.close();
+            HTTP2_LOG_INFO("[HTTP/1.1 Fallback] Serving test_http1_fallback.html ({} bytes)", body.size());
+        } else {
+            body = "Error: test_http1_fallback.html not found";
+            status = HttpStatusCode::NotFound_404;
+            HTTP2_LOG_ERROR("[HTTP/1.1 Fallback] Failed to open ../../test/html/test_http1_fallback.html");
+        }
+    } else if (path == "/api/hello") {
+        content_type = "application/json; charset=utf-8";
+        body = R"({
+    "message": "Hello from HTTP/1.1!",
+    "protocol": "http/1.1",
+    "secure": true,
+    "note": "Fallback mode - HTTP/2 not available"
 })";
+    } else {
+        content_type = "text/plain; charset=utf-8";
+        body = "404 Not Found";
+        status = HttpStatusCode::NotFound_404;
+    }
     
     HttpResponse response;
-    response.header().code() = HttpStatusCode::OK_200;
+    response.header().code() = status;
     response.header().version() = HttpVersion::Http_Version_1_1;
-    response.header().headerPairs().addHeaderPair("Content-Type", "application/json; charset=utf-8");
+    response.header().headerPairs().addHeaderPair("Content-Type", content_type);
     response.header().headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+    response.header().headerPairs().addHeaderPair("Server", "galay-http2/1.0");
+    response.header().headerPairs().addHeaderPair("Access-Control-Allow-Origin", "*");
     response.setBodyStr(std::move(body));
     
     co_await writer.reply(response);
-    co_await conn.close();
+    
+    if (request.header().isConnectionClose()) {
+        co_await conn.close();
+    }
     
     co_return nil();
 }
@@ -318,7 +472,7 @@ int main()
     std::cout << "     HTTP/2 测试服务器 (h2)" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "监听地址: https://localhost:8443" << std::endl;
-    std::cout << "协议: HTTP/2 over TLS (ALPN)" << std::endl;
+    std::cout << "协议: HTTP/2 over TLS (h2) + HTTP/1.1 降级" << std::endl;
     std::cout << "注意：需要 SSL 证书文件 server.crt 和 server.key" << std::endl;
     std::cout << "按 Ctrl+C 停止服务器" << std::endl;
     std::cout << "========================================" << std::endl;
@@ -338,7 +492,7 @@ int main()
     }
     
     // 设置日志级别 - 强制使用 debug 级别以便查看详细日志
-    HttpLogger::getInstance()->getLogger()->getSpdlogger()->set_level(spdlog::level::level_enum::debug);
+    //HttpLogger::getInstance()->getLogger()->getSpdlogger()->set_level(spdlog::level::level_enum::debug);
     HTTP2_LOG_DEBUG("========================================");
     HTTP2_LOG_DEBUG("日志级别: DEBUG (显示所有详细日志)");
     HTTP2_LOG_DEBUG("========================================");
@@ -347,13 +501,6 @@ int main()
     RuntimeBuilder runtimebuilder;
     auto runtime = runtimebuilder.build();
     runtime.start();
-    
-    // 创建 HTTP/1.1 降级路由
-    HttpsRouter http1_router;
-    HttpsRouteMap routes = {
-        {"/", handleHttp1Index}
-    };
-    http1_router.addRoute<GET>(routes);
     
     // 创建 HTTP/2 回调
     Http2Callbacks http2_callbacks;
@@ -368,10 +515,25 @@ int main()
     }
     HTTP2_LOG_INFO("HTTP/2 callbacks configured successfully");
     
-    // 创建 HTTPS 服务器（启用 HTTP/2）
-    HttpsServer server = HttpsServerBuilder("server.crt", "server.key")
+    // 创建 HTTP/1.1 降级路由
+    HttpsRouter http1_router;
+    HttpsRouteMap routes = {
+        {"/", handleHttp1Index},
+        {"/test", handleHttp1Index},
+        {"/test.html", handleHttp1Index},
+        {"/test_h2.html", handleHttp1Index},
+        {"/fallback", handleHttp1Index},
+        {"/test_http1_fallback.html", handleHttp1Index},
+        {"/api/hello", handleHttp1Index},
+        {"/api/echo", handleHttp1Index}
+    };
+    http1_router.addRoute<GET>(routes);
+    http1_router.addRoute<POST>(routes);
+    HTTP2_LOG_INFO("HTTP/1.1 fallback router configured");
+    
+    // 创建 HTTP/2 服务器（支持 h2 + http/1.1 降级）
+    Http2Server server = Http2ServerBuilder("server.crt", "server.key")
                             .addListen(Host("0.0.0.0", 8443))
-                            .enableHttp2(true)  // 启用 HTTP/2
                             .build();
     
     // 设置信号处理
@@ -392,13 +554,20 @@ int main()
     std::cout << "  # 测试 POST" << std::endl;
     std::cout << "  curl -v --http2 -d 'Hello HTTP/2' https://localhost:8443/api/echo --insecure" << std::endl;
     std::cout << std::endl;
-    std::cout << "注意：浏览器访问时会显示证书警告（因为是自签名证书），这是正常的。" << std::endl;
+    std::cout << "  # 浏览器测试页面" << std::endl;
+    std::cout << "  https://localhost:8443/test" << std::endl;
+    std::cout << std::endl;
+    std::cout << "注意：" << std::endl;
+    std::cout << "  - 支持 HTTP/2 的客户端会使用 h2 协议" << std::endl;
+    std::cout << "  - 不支持 HTTP/2 的客户端会自动降级到 HTTP/1.1" << std::endl;
+    std::cout << "  - 浏览器访问时会显示证书警告（因为是自签名证书），这是正常的" << std::endl;
+    std::cout << "  - ALPN 配置: h2, http/1.1 (h2 优先)" << std::endl;
     std::cout << "========================================" << std::endl;
     
-    HTTP2_LOG_INFO("Starting server with HTTP/2 support...");
+    HTTP2_LOG_INFO("Starting HTTP/2 server with HTTP/1.1 fallback...");
     
-    // 运行服务器（自动检测 HTTP/2）
-    server.run(runtime, http1_router, http2_callbacks);
+    // 运行服务器（支持降级）
+    server.run(runtime, http2_callbacks, http1_router);
     server.wait();
     
     HTTP2_LOG_INFO("服务器已停止");
