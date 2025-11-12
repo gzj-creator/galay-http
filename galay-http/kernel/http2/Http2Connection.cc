@@ -17,13 +17,13 @@ namespace galay::http
     
     Http2Connection::Http2Connection(HttpConnection& httpConnection, const Http2Settings& settings)
         : m_connection(std::ref(httpConnection))
-        , m_stream_manager(settings)
+        , m_stream_manager(*this, settings)
     {
     }
     
     Http2Connection::Http2Connection(HttpsConnection& httpsConnection, const Http2Settings& settings)
         : m_connection(std::ref(httpsConnection))
-        , m_stream_manager(settings)
+        , m_stream_manager(*this, settings)
     {
     }
     

@@ -142,6 +142,11 @@ namespace galay::http
         bool endHeaders() const { return m_header.flags & FLAG_END_HEADERS; }
         bool hasPriority() const { return m_header.flags & FLAG_PRIORITY; }
         
+        // 优先级信息访问器（仅在hasPriority()为true时有效）
+        uint32_t streamDependency() const { return m_stream_dependency; }
+        uint8_t weight() const { return m_weight; }
+        bool exclusive() const { return m_exclusive; }
+        
         std::string serialize() const override;
         std::expected<void, Http2Error> deserializePayload(const uint8_t* data, size_t length) override;
         

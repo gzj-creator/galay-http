@@ -1,11 +1,12 @@
 #include "Http2Stream.h"
 #include "galay-http/utils/Http2DebugLog.h"
+#include "Http2Connection.h"
 
 namespace galay::http
 {
     // ==================== Http2Stream ====================
     
-    Http2Stream::Http2Stream(uint32_t stream_id, uint32_t initial_window_size)
+    Http2Stream::Http2Stream(uint32_t stream_id, uint32_t initial_window_size, Http2Connection& connection)
         : m_stream_id(stream_id)
         , m_state(Http2StreamState::IDLE)
         , m_send_window_size(initial_window_size)
@@ -14,8 +15,14 @@ namespace galay::http
         , m_weight(16)  // 默认权重
         , m_exclusive(false)
         , m_error_code(Http2ErrorCode::NO_ERROR)
+        , m_connection(&connection)
     {
         HTTP2_LOG_DEBUG("[Http2Stream] Created stream {}, initial window: {}", stream_id, initial_window_size);
+    }
+
+    Http2Connection& Http2Stream::connection()
+    {
+        return *m_connection;
     }
     
     bool Http2Stream::canSendData() const
@@ -124,6 +131,8 @@ namespace galay::http
         m_exclusive = exclusive;
         HTTP2_LOG_DEBUG("[Http2Stream] Stream {} priority: dep={}, weight={}, exclusive={}", 
                        m_stream_id, dependency, weight, exclusive);
+        // 注意：优先级队列的更新应该在 Http2StreamManager 中处理
+        // 这里只更新流本身的优先级信息
     }
     
     void Http2Stream::setError(Http2ErrorCode error_code)
@@ -135,13 +144,15 @@ namespace galay::http
     
     // ==================== Http2StreamManager ====================
     
-    Http2StreamManager::Http2StreamManager(const Http2Settings& settings)
+    Http2StreamManager::Http2StreamManager(Http2Connection& connection, const Http2Settings& settings)
         : m_is_server(false)
         , m_next_stream_id(1)  // 客户端从 1 开始
         , m_max_concurrent_streams(settings.max_concurrent_streams)
         , m_initial_window_size(settings.initial_window_size)
         , m_connection_send_window(settings.connection_window_size)
         , m_connection_recv_window(settings.connection_window_size)
+        , m_priority_queue_dirty(false)
+        , m_connection(&connection)
     {
         HTTP2_LOG_DEBUG("[Http2StreamManager] Created, max_streams={}, initial_window={}", 
                        m_max_concurrent_streams, m_initial_window_size);
@@ -174,8 +185,11 @@ namespace galay::http
             // 客户端发起的流必须是奇数
         }
         
-        auto stream = std::make_shared<Http2Stream>(stream_id, m_initial_window_size);
+        auto stream = std::make_shared<Http2Stream>(stream_id, m_initial_window_size, *m_connection);
         m_streams[stream_id] = stream;
+        
+        // 添加到优先级队列
+        m_priority_queue.push(stream);
         
         HTTP2_LOG_INFO("[Http2StreamManager] Created stream {}, active: {}/{}", 
                       stream_id, m_streams.size(), m_max_concurrent_streams);
@@ -199,6 +213,8 @@ namespace galay::http
             HTTP2_LOG_INFO("[Http2StreamManager] Removed stream {}, active: {}", 
                           stream_id, m_streams.size() - 1);
             m_streams.erase(it);
+            // 标记优先级队列需要重建（因为priority_queue不支持删除特定元素）
+            m_priority_queue_dirty = true;
         }
     }
     
@@ -288,6 +304,109 @@ namespace galay::http
         
         HTTP2_LOG_INFO("[Http2StreamManager] Settings updated: max_streams={}, initial_window={}", 
                       m_max_concurrent_streams, m_initial_window_size);
+    }
+    
+    // ==================== 优先级调度 ====================
+    
+    bool Http2StreamManager::StreamPriorityComparator::operator()(
+        const Http2Stream::ptr& a, const Http2Stream::ptr& b) const
+    {
+        // priority_queue 是最大堆，但我们希望优先级高的（值小的）在顶部
+        // 所以这里返回 true 表示 a 的优先级低于 b（a 应该在 b 后面）
+        
+        // 1. 首先比较依赖关系：依赖的流优先级更高（dependency=0 表示根流，优先级最高）
+        if (a->dependency() != b->dependency()) {
+            // dependency 越小，优先级越高（0 是根流）
+            return a->dependency() > b->dependency();
+        }
+        
+        // 2. 如果依赖相同，比较权重：权重越大，优先级越高
+        // 但 priority_queue 是最大堆，所以需要反转
+        if (a->weight() != b->weight()) {
+            return a->weight() < b->weight();
+        }
+        
+        // 3. 如果权重也相同，exclusive 的流优先级更高
+        if (a->exclusive() != b->exclusive()) {
+            return !a->exclusive();  // exclusive 的优先级更高
+        }
+        
+        // 4. 最后按 stream_id 排序（小的优先级更高）
+        return a->streamId() > b->streamId();
+    }
+    
+    uint64_t Http2StreamManager::calculatePriorityValue(const Http2Stream::ptr& stream) const
+    {
+        // 计算优先级值，用于排序
+        // 值越小，优先级越高
+        
+        uint64_t value = 0;
+        
+        // dependency 越小，优先级越高（0 是根流）
+        value |= (static_cast<uint64_t>(stream->dependency()) << 32);
+        
+        // 权重越大，优先级越高（反转：256 - weight）
+        value |= (static_cast<uint64_t>(256 - stream->weight()) << 24);
+        
+        // exclusive 的优先级更高
+        if (!stream->exclusive()) {
+            value |= (1ULL << 16);
+        }
+        
+        // stream_id 越小，优先级越高
+        value |= stream->streamId();
+        
+        return value;
+    }
+    
+    void Http2StreamManager::rebuildPriorityQueue()
+    {
+        // 清空现有队列
+        m_priority_queue = std::priority_queue<Http2Stream::ptr, 
+                                               std::vector<Http2Stream::ptr>, 
+                                               StreamPriorityComparator>();
+        
+        // 重新添加所有流
+        for (const auto& [stream_id, stream] : m_streams) {
+            m_priority_queue.push(stream);
+        }
+        
+        m_priority_queue_dirty = false;
+        HTTP2_LOG_DEBUG("[Http2StreamManager] Priority queue rebuilt with {} streams", m_streams.size());
+    }
+    
+    Http2Stream::ptr Http2StreamManager::getNextStreamToSchedule()
+    {
+        // 如果队列需要重建，先重建
+        if (m_priority_queue_dirty) {
+            rebuildPriorityQueue();
+        }
+        
+        // 从优先级队列中获取最高优先级的流
+        // 但需要确保该流仍然存在且可以调度
+        while (!m_priority_queue.empty()) {
+            auto stream = m_priority_queue.top();
+            m_priority_queue.pop();
+            
+            // 检查流是否仍然存在且可以发送数据
+            if (m_streams.find(stream->streamId()) != m_streams.end() && 
+                stream->canSendData() && 
+                !stream->isClosed()) {
+                return stream;
+            }
+        }
+        
+        return nullptr;
+    }
+    
+    void Http2StreamManager::updateStreamPriority(uint32_t stream_id)
+    {
+        auto it = m_streams.find(stream_id);
+        if (it != m_streams.end()) {
+            // 标记需要重建优先级队列
+            m_priority_queue_dirty = true;
+            HTTP2_LOG_DEBUG("[Http2StreamManager] Stream {} priority updated, queue marked dirty", stream_id);
+        }
     }
 }
 

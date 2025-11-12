@@ -5,6 +5,7 @@
 #include "galay-http/kernel/http2/Http2Reader.h"
 #include "galay-http/kernel/http2/Http2Router.h"
 #include "galay-http/kernel/http2/Http2Writer.h"
+#include "galay-http/kernel/http2/Http2Header.h"
 #include "galay-http/kernel/http/HttpsWriter.h"
 #include "galay-http/kernel/http/HttpsReader.h"
 #include "galay-http/protoc/http2/Http2Error.h"
@@ -213,22 +214,18 @@ namespace galay::http
         
         // 创建自动路由回调
         Http2Callbacks callbacks;
-        callbacks.on_headers = [&http2Router](Http2Connection& conn,
-                                             uint32_t stream_id,
-                                             const std::map<std::string, std::string>& headers,
-                                             bool end_stream) -> Coroutine<nil> {
-            std::string method, path;
-            for (const auto& [key, value] : headers) {
-                if (key == ":method") method = value;
-                else if (key == ":path") path = value;
-            }
+        callbacks.on_headers = [&http2Router](Http2Stream::ptr stream,
+                                             Http2Header headers,
+                                             bool /*end_stream*/) -> Coroutine<nil> {
+            auto& conn = stream->connection();
             
-            // 使用路由器处理
+            std::string method = headers.method();
+            std::string path = headers.path();
+            
             bool handled = false;
-            http2Router.route(conn, stream_id, method, path, handled).result();
+            http2Router.route(conn, stream->streamId(), method, path, handled).result();
             
             if (!handled) {
-                // 未匹配任何路由，返回 404
                 HpackEncoder encoder;
                 std::string error_body = "404 Not Found";
                 std::vector<HpackHeaderField> error_headers = {
@@ -239,15 +236,15 @@ namespace galay::http
                 std::string encoded = encoder.encodeHeaders(error_headers);
                 
                 auto writer = conn.getWriter({});
-                co_await writer.sendHeaders(stream_id, encoded, false, true);
-                co_await writer.sendData(stream_id, error_body, true);
-                conn.streamManager().removeStream(stream_id);
+                co_await writer.sendHeaders(stream->streamId(), encoded, false, true);
+                co_await writer.sendData(stream->streamId(), error_body, true);
+                conn.streamManager().removeStream(stream->streamId());
             }
             
             co_return nil();
         };
         
-        callbacks.on_error = [](Http2Connection& conn, const Http2Error& error) -> Coroutine<nil> {
+        callbacks.on_error = [](const Http2Error& error) -> Coroutine<nil> {
             HTTP2_LOG_ERROR("[Http2Server] Error: {}", error.message());
             co_return nil();
         };
@@ -289,22 +286,18 @@ namespace galay::http
             
             // 创建自动路由回调
             Http2Callbacks callbacks;
-            callbacks.on_headers = [&http2Router](Http2Connection& conn,
-                                                 uint32_t stream_id,
-                                                 const std::map<std::string, std::string>& headers,
-                                                 bool end_stream) -> Coroutine<nil> {
-                std::string method, path;
-                for (const auto& [key, value] : headers) {
-                    if (key == ":method") method = value;
-                    else if (key == ":path") path = value;
-                }
+            callbacks.on_headers = [&http2Router](Http2Stream::ptr stream,
+                                                 Http2Header headers,
+                                                 bool /*end_stream*/) -> Coroutine<nil> {
+                auto& conn = stream->connection();
                 
-                // 使用路由器处理
+                std::string method = headers.method();
+                std::string path = headers.path();
+                
                 bool handled = false;
-                http2Router.route(conn, stream_id, method, path, handled).result();
+                http2Router.route(conn, stream->streamId(), method, path, handled).result();
                 
                 if (!handled) {
-                    // 未匹配任何路由，返回 404
                     HpackEncoder encoder;
                     std::string error_body = "404 Not Found";
                     std::vector<HpackHeaderField> error_headers = {
@@ -315,15 +308,15 @@ namespace galay::http
                     std::string encoded = encoder.encodeHeaders(error_headers);
                     
                     auto writer = conn.getWriter({});
-                    co_await writer.sendHeaders(stream_id, encoded, false, true);
-                    co_await writer.sendData(stream_id, error_body, true);
-                    conn.streamManager().removeStream(stream_id);
+                    co_await writer.sendHeaders(stream->streamId(), encoded, false, true);
+                    co_await writer.sendData(stream->streamId(), error_body, true);
+                    conn.streamManager().removeStream(stream->streamId());
                 }
                 
                 co_return nil();
             };
             
-            callbacks.on_error = [](Http2Connection& conn, const Http2Error& error) -> Coroutine<nil> {
+            callbacks.on_error = [](const Http2Error& error) -> Coroutine<nil> {
                 HTTP2_LOG_ERROR("[Http2Server] Error: {}", error.message());
                 co_return nil();
             };
@@ -513,7 +506,7 @@ namespace galay::http
         if (!send_settings_res) {
             HTTP2_LOG_ERROR("[Http2Server] Failed to send SETTINGS: {}", send_settings_res.error().message());
             if (callbacks.on_error) {
-                callbacks.on_error(connection, send_settings_res.error());
+                callbacks.on_error(send_settings_res.error());
             }
             co_return nil();
         }
@@ -525,7 +518,7 @@ namespace galay::http
         if (!preface_res) {
             HTTP2_LOG_ERROR("[Http2Server] Failed to read client preface: {}", preface_res.error().message());
             if (callbacks.on_error) {
-                callbacks.on_error(connection, preface_res.error());
+                callbacks.on_error(preface_res.error());
             }
             co_return nil();
         }
@@ -549,7 +542,7 @@ namespace galay::http
             if (!frame_res) {
                 HTTP2_LOG_ERROR("[Http2Server] Failed to read frame: {}", frame_res.error().message());
                 if (callbacks.on_error) {
-                    callbacks.on_error(connection, frame_res.error());
+                    callbacks.on_error(frame_res.error());
                 }
                 break;
             }
@@ -573,39 +566,44 @@ namespace galay::http
                     if (headers_frame && callbacks.on_headers) {
                         auto headers_vec_res = headers_frame->decodeHeaders(hpack_decoder);
                         if (headers_vec_res) {
-                            // 转换为 map
-                            std::map<std::string, std::string> headers_map;
-                            for (const auto& field : headers_vec_res.value()) {
-                                headers_map[field.name] = field.value;
-                            }
-                            
                             uint32_t stream_id = headers_frame->streamId();
                             bool end_stream = headers_frame->endStream();
                             
-                            // 创建 stream（如果不存在）
                             auto& stream_manager = connection.streamManager();
-                            if (!stream_manager.getStream(stream_id)) {
+                            auto stream = stream_manager.getStream(stream_id);
+                            if (!stream) {
                                 auto create_result = stream_manager.createStream(stream_id);
                                 if (!create_result) {
                                     HTTP2_LOG_ERROR("[Http2Server] Failed to create stream {}: {}",
                                                    stream_id, create_result.error().message());
                                     if (callbacks.on_error) {
-                                        callbacks.on_error(connection, create_result.error());
+                                        callbacks.on_error(create_result.error());
                                     }
                                     break;
                                 }
+                                stream = create_result.value();
                             }
                             
-                            // 调用回调
+                            if (headers_frame->hasPriority()) {
+                                stream->setPriority(headers_frame->streamDependency(),
+                                                   headers_frame->weight(),
+                                                   headers_frame->exclusive());
+                                stream_manager.updateStreamPriority(stream_id);
+                                HTTP2_LOG_DEBUG("[Http2Server] Stream {} priority set from HEADERS: dep={}, weight={}, exclusive={}",
+                                               stream_id, headers_frame->streamDependency(),
+                                               headers_frame->weight(), headers_frame->exclusive());
+                            }
+                            
+                            Http2Header header(headers_vec_res.value());
                             AsyncWaiter<void, Http2Error> callback_waiter;
-                            auto callback_coro = callbacks.on_headers(connection, stream_id, headers_map, end_stream);
+                            auto callback_coro = callbacks.on_headers(stream, header, end_stream);
                             callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                             callback_waiter.appendTask(std::move(callback_coro));
                             co_await callback_waiter.wait();
                         } else {
                             HTTP2_LOG_ERROR("[Http2Server] Failed to decode headers: {}", headers_vec_res.error().message());
                             if (callbacks.on_error) {
-                                callbacks.on_error(connection, headers_vec_res.error());
+                                callbacks.on_error(headers_vec_res.error());
                             }
                             should_continue = false;
                         }
@@ -620,9 +618,16 @@ namespace galay::http
                         HTTP2_LOG_INFO("[Http2Server] DATA frame on stream {}, size={}, end_stream={}",
                                       data_frame->streamId(), data_frame->data().size(), end_stream);
                         
+                        auto stream = connection.streamManager().getStream(data_frame->streamId());
+                        if (!stream) {
+                            HTTP2_LOG_ERROR("[Http2Server] DATA frame for unknown stream {}", data_frame->streamId());
+                            break;
+                        }
+                        
                         AsyncWaiter<void, Http2Error> callback_waiter;
-                        auto callback_coro = callbacks.on_data(connection, data_frame->streamId(),
-                                                              data_frame->data(), end_stream);
+                        auto callback_coro = callbacks.on_data(stream,
+                                                               data_frame->data(),
+                                                               end_stream);
                         callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                         callback_waiter.appendTask(std::move(callback_coro));
                         co_await callback_waiter.wait();
@@ -638,7 +643,7 @@ namespace galay::http
                         
                         if (callbacks.on_settings) {
                             AsyncWaiter<void, Http2Error> callback_waiter;
-                            auto callback_coro = callbacks.on_settings(connection, settings_frame->settings(), is_ack);
+                            auto callback_coro = callbacks.on_settings(settings_frame->settings(), is_ack);
                             callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                             callback_waiter.appendTask(std::move(callback_coro));
                             co_await callback_waiter.wait();
@@ -651,7 +656,7 @@ namespace galay::http
                             if (!ack_res) {
                                 HTTP2_LOG_ERROR("[Http2Server] Failed to send SETTINGS ACK: {}", ack_res.error().message());
                                 if (callbacks.on_error) {
-                                    callbacks.on_error(connection, ack_res.error());
+                                    callbacks.on_error(ack_res.error());
                                 }
                                 should_continue = false;
                             }
@@ -669,7 +674,7 @@ namespace galay::http
                         
                         if (callbacks.on_ping) {
                             AsyncWaiter<void, Http2Error> callback_waiter;
-                            auto callback_coro = callbacks.on_ping(connection, ping_data, is_ack);
+                            auto callback_coro = callbacks.on_ping(ping_data, is_ack);
                             callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                             callback_waiter.appendTask(std::move(callback_coro));
                             co_await callback_waiter.wait();
@@ -682,7 +687,7 @@ namespace galay::http
                             if (!pong_res) {
                                 HTTP2_LOG_ERROR("[Http2Server] Failed to send PING ACK: {}", pong_res.error().message());
                                 if (callbacks.on_error) {
-                                    callbacks.on_error(connection, pong_res.error());
+                                    callbacks.on_error(pong_res.error());
                                 }
                                 should_continue = false;
                             }
@@ -700,8 +705,9 @@ namespace galay::http
                         
                         if (callbacks.on_goaway) {
                             AsyncWaiter<void, Http2Error> callback_waiter;
-                            auto callback_coro = callbacks.on_goaway(connection, goaway_frame->lastStreamId(),
-                                                                    goaway_frame->errorCode(), goaway_frame->debugData());
+                            auto callback_coro = callbacks.on_goaway(goaway_frame->lastStreamId(),
+                                                                    goaway_frame->errorCode(),
+                                                                    goaway_frame->debugData());
                             callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                             callback_waiter.appendTask(std::move(callback_coro));
                             co_await callback_waiter.wait();
@@ -717,8 +723,12 @@ namespace galay::http
                         HTTP2_LOG_DEBUG("[Http2Server] WINDOW_UPDATE frame, stream_id={}, increment={}",
                                        window_frame->streamId(), window_frame->windowSizeIncrement());
                         
+                        auto stream = window_frame->streamId() == 0
+                                      ? nullptr
+                                      : connection.streamManager().getStream(window_frame->streamId());
+                        
                         AsyncWaiter<void, Http2Error> callback_waiter;
-                        auto callback_coro = callbacks.on_window_update(connection, window_frame->streamId(),
+                        auto callback_coro = callbacks.on_window_update(stream,
                                                                        window_frame->windowSizeIncrement());
                         callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                         callback_waiter.appendTask(std::move(callback_coro));
@@ -733,8 +743,10 @@ namespace galay::http
                         HTTP2_LOG_INFO("[Http2Server] RST_STREAM frame, stream_id={}, error_code={}",
                                       rst_frame->streamId(), http2ErrorCodeToString(rst_frame->errorCode()));
                         
+                        auto stream = connection.streamManager().getStream(rst_frame->streamId());
+                        
                         AsyncWaiter<void, Http2Error> callback_waiter;
-                        auto callback_coro = callbacks.on_rst_stream(connection, rst_frame->streamId(),
+                        auto callback_coro = callbacks.on_rst_stream(stream,
                                                                      rst_frame->errorCode());
                         callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                         callback_waiter.appendTask(std::move(callback_coro));
@@ -748,14 +760,23 @@ namespace galay::http
                     if (priority_frame && callbacks.on_priority) {
                         HTTP2_LOG_DEBUG("[Http2Server] PRIORITY frame, stream_id={}", priority_frame->streamId());
                         
+                        auto stream = connection.streamManager().getStream(priority_frame->streamId());
+                        
                         AsyncWaiter<void, Http2Error> callback_waiter;
-                        auto callback_coro = callbacks.on_priority(connection, priority_frame->streamId(),
+                        auto callback_coro = callbacks.on_priority(stream,
                                                                    priority_frame->streamDependency(),
                                                                    priority_frame->weight(),
                                                                    priority_frame->exclusive());
                         callback_coro.then([&callback_waiter](){ callback_waiter.notify({}); });
                         callback_waiter.appendTask(std::move(callback_coro));
                         co_await callback_waiter.wait();
+                        
+                        if (stream) {
+                            stream->setPriority(priority_frame->streamDependency(),
+                                               priority_frame->weight(),
+                                               priority_frame->exclusive());
+                            connection.streamManager().updateStreamPriority(priority_frame->streamId());
+                        }
                     }
                     break;
                 }

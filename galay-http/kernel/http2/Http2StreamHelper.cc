@@ -12,7 +12,16 @@ namespace galay::http
     namespace fs = std::filesystem;
     
     Http2StreamHelper::Http2StreamHelper(Http2Connection& conn, uint32_t stream_id)
-        : m_conn(conn), m_stream_id(stream_id)
+        : m_conn(conn)
+        , m_stream_id(stream_id)
+    {
+        m_stream = m_conn.streamManager().getStream(stream_id);
+    }
+    
+    Http2StreamHelper::Http2StreamHelper(Http2Stream::ptr stream)
+        : m_conn(stream->connection())
+        , m_stream(stream)
+        , m_stream_id(stream->streamId())
     {
     }
     

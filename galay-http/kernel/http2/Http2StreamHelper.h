@@ -2,6 +2,7 @@
 #define GALAY_HTTP2_STREAM_HELPER_H
 
 #include "Http2Connection.h"
+#include "Http2Stream.h"
 #include "Http2Params.hpp"
 #include "galay-http/protoc/http/HttpBase.h"
 #include <string>
@@ -46,6 +47,7 @@ namespace galay::http
          * @param stream_id 流 ID
          */
         Http2StreamHelper(Http2Connection& conn, uint32_t stream_id);
+        Http2StreamHelper(Http2Stream::ptr stream);
         
         /**
          * @brief 发送文件（自动处理分片、流控、MIME类型）
@@ -158,9 +160,10 @@ namespace galay::http
         /**
          * @brief 获取流 ID
          */
-        uint32_t streamId() const { return m_stream_id; }
+        uint32_t streamId() const { return m_stream ? m_stream->streamId() : m_stream_id; }
         
     private:
+        Http2Stream::ptr m_stream;
         Http2Connection& m_conn;
         uint32_t m_stream_id;
         Http2Settings m_settings;
