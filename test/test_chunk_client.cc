@@ -4,18 +4,21 @@
 // #define ENABLE_DEBUG
 // ==================================
 
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include "kernel/http/HttpWriter.h"
 #include "kernel/http/HttpReader.h"
+#include <galay/kernel/runtime/Runtime.h>
 #include "utils/HttpUtils.h"
 #include <galay/kernel/async/AsyncFactory.h>
+#include <iostream>
 
 using namespace galay;
 using namespace galay::http;
 
-Coroutine<nil> test(Runtime& runtime)
+Coroutine<nil> test(CoSchedulerHandle handle)
 {
     std::cout << "test start" << std::endl;
-    AsyncFactory factory = runtime.getAsyncFactory();
+    AsyncFactory factory = handle.getAsyncFactory();
     auto socket = factory.getTcpSocket();
     auto generator = factory.getTimerGenerator();
     if(auto res = socket.socket(); !res) {
@@ -23,14 +26,23 @@ Coroutine<nil> test(Runtime& runtime)
         co_return nil();
     }
     auto option = socket.options();
-    option.handleNonBlock();
-    option.handleReuseAddr();
-    option.handleReusePort();
+    if(auto res = option.handleNonBlock(); !res) {
+        std::cout << "handle non block failed" << std::endl;
+        co_return nil();
+    }   
+    if(auto res = option.handleReuseAddr(); !res) {
+        std::cout << "handle reuse addr failed" << std::endl;
+        co_return nil();
+    }
+    if(auto res = option.handleReusePort(); !res) {
+        std::cout << "handle reuse port failed" << std::endl;
+        co_return nil();
+    }
     if(auto res = co_await socket.connect({"127.0.0.1", 8080}); !res) {
         std::cout << "connect failed: " << res.error().message() << std::endl;
         co_return nil();
     }
-    HttpWriter writer(socket, generator, {});
+    HttpWriter writer(socket, handle, {});
     HttpRequest request = HttpUtils::defaultGet("/");
     auto wres = co_await writer.sendChunkHeader(request.header());
     if(!wres) {
@@ -47,7 +59,7 @@ Coroutine<nil> test(Runtime& runtime)
         std::cout << "chunk data " << i << " sent" << std::endl;
         co_await generator.sleep(std::chrono::milliseconds(1000));
     }
-    HttpReader reader(socket, generator, {});
+    HttpReader reader(socket, handle, {});
     if(auto res = co_await reader.getResponse(); res) {
         if(res.value().header().isChunked()) {
             if(auto res = co_await reader.getChunkData([](std::string chunk) {
@@ -71,7 +83,7 @@ int main() {
     RuntimeBuilder builder;
     auto runtime = builder.build();
     runtime.start();
-    runtime.schedule(test(runtime));
+    runtime.schedule(test(runtime.getCoSchedulerHandle(0).value()));
     getchar();
     runtime.stop();
     return 0;

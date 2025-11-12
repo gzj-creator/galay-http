@@ -7,13 +7,14 @@
 #include "galay-http/protoc/websocket/WsFrame.h"
 #include "galay-http/protoc/websocket/WsError.h"
 #include "WsParams.hpp"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
     class WsReader
     {
     public:
-        WsReader(AsyncTcpSocket& socket, TimerGenerator& generator, WsSettings params);
+        WsReader(AsyncTcpSocket& socket, CoSchedulerHandle handle, WsSettings params);
 
         // 读取一个完整的 WebSocket 帧
         AsyncResult<std::expected<WsFrame, WsError>> 
@@ -44,15 +45,16 @@ namespace galay::http
         bool validateUtf8(const std::string& str);
 
     private:
-        AsyncTcpSocket& m_socket;
-        WsSettings m_params;
-        TimerGenerator& m_generator;
-        Buffer m_buffer;
+        Buffer              m_buffer;
+        WsSettings          m_params;
+        AsyncTcpSocket&     m_socket;
+        CoSchedulerHandle   m_handle;
         
         // 用于处理分片消息
-        std::string m_fragment_buffer;
-        WsOpcode m_fragment_opcode;
-        bool m_in_fragment;
+        bool                m_in_fragment;
+        WsOpcode            m_fragment_opcode;
+        std::string         m_fragment_buffer;
+        
     };
 }
 

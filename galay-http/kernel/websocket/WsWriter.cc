@@ -1,10 +1,12 @@
 #include "WsWriter.h"
 #include "galay-http/utils/WsDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include "galay/kernel/async/AsyncFactory.h"
 
 namespace galay::http
 {
-    WsWriter::WsWriter(AsyncTcpSocket& socket, TimerGenerator& generator, const WsSettings& params)
-        : m_socket(socket), m_generator(generator), m_params(params)
+    WsWriter::WsWriter(AsyncTcpSocket& socket, CoSchedulerHandle handle, const WsSettings& params)
+        : m_params(params), m_socket(socket), m_handle(handle)
     {
     }
 
@@ -120,13 +122,13 @@ namespace galay::http
         
         // 发送数据
         auto bytes = Bytes::fromString(data);
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while (true) {
             std::expected<Bytes, CommonError> res;
             if (timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
-                auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto temp = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.send(std::move(bytes));
                 }, timeout);
                 if (!temp) {
@@ -161,13 +163,13 @@ namespace galay::http
         std::chrono::milliseconds timeout)
     {
         auto bytes = Bytes::fromString(data);
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while (true) {
             std::expected<Bytes, CommonError> res;
             if (timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
-                auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto temp = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.send(std::move(bytes));
                 }, timeout);
                 if (!temp) {

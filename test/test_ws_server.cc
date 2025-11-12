@@ -16,6 +16,8 @@
 #include "galay-http/kernel/websocket/WsParams.hpp"
 #include <csignal>
 #include <galay/utils/SignalHandler.hpp>
+#include <ios>
+#include <iostream>
 
 using namespace galay;
 using namespace galay::http;
@@ -38,7 +40,7 @@ Coroutine<nil> handleWebSocketEcho(WsConnection wsConn, AsyncWaiter<void, Infall
         while (!wsConn.isClosed()) {
             frame_count++;
             std::cout << "[WS Echo] -------- Loop iteration " << frame_count << " --------" << std::endl;
-            std::cout << "[WS Echo] Connection closed: " << wsConn.isClosed() << std::endl;
+            std::cout << "[WS Echo] Connection closed: " << std::boolalpha << wsConn.isClosed() << std::endl;
             std::cout << "[WS Echo] Calling readFrame()..." << std::endl;
             
             // 接收帧
@@ -222,7 +224,7 @@ Coroutine<nil> wsEchoUpgrade(HttpRequest& request, HttpConnection& conn, HttpPar
     std::cout << "[HTTP] WsConnection created" << std::endl;
     
     WsSettings settings;
-    settings.recv_timeout = std::chrono::milliseconds(30000);
+    settings.recv_timeout = std::chrono::milliseconds(-1);
     settings.send_timeout = std::chrono::milliseconds(30000);
     settings.auto_ping = true;
     settings.auto_pong = true;

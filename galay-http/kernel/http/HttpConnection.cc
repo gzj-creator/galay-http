@@ -1,27 +1,28 @@
 #include "HttpConnection.h"
 #include "galay/common/Error.h"
 #include "galay-http/utils/HttpDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http 
 {
-    HttpConnection::HttpConnection(AsyncTcpSocket &&socket, TimerGenerator&& generator)
-        : m_socket(std::move(socket)), m_generator(std::move(generator))
+    HttpConnection::HttpConnection(AsyncTcpSocket &&socket, CoSchedulerHandle handle)
+        : m_socket(std::move(socket)), m_handle(handle)
     {
     }
 
     HttpConnection::HttpConnection(HttpConnection &&other)
-        : m_socket(std::move(other.m_socket)), m_generator(std::move(other.m_generator))
+        : m_socket(std::move(other.m_socket)), m_handle(other.m_handle)
     {
     }
 
     HttpReader HttpConnection::getRequestReader(const HttpSettings& params)
     {
-        return HttpReader(m_socket, m_generator, params);
+        return HttpReader(m_socket, m_handle, params);
     }
 
     HttpWriter HttpConnection::getResponseWriter(const HttpSettings& params)
     {
-        return HttpWriter(m_socket, m_generator, params);
+        return HttpWriter(m_socket, m_handle, params);
     }
 
     AsyncResult<std::expected<void, CommonError>> HttpConnection::close()

@@ -2,12 +2,14 @@
 #include "galay/common/Error.h"
 #include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/HttpsDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include "galay/kernel/async/AsyncFactory.h"
 #include <cstring>
 
 namespace galay::http 
 {
-    HttpsReader::HttpsReader(AsyncSslSocket &socket, TimerGenerator& generator, HttpSettings params)
-        : m_socket(socket), m_params(params), m_generator(generator)
+    HttpsReader::HttpsReader(AsyncSslSocket &socket, CoSchedulerHandle handle, HttpSettings params)
+        : m_params(params), m_socket(socket),m_handle(handle)
     {
     }
 
@@ -41,12 +43,13 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.recv_timeout;
         }
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while(recv_size <= m_params.max_header_size) {
             std::expected<Bytes, CommonError> bytes;
             if(timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.sslRecv(m_buffer.data() + recv_size, buffer_size - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.sslRecv(m_buffer.data() + recv_size, buffer_size - recv_size);
                 }, timeout);
                 if(!res) {
@@ -120,12 +123,13 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.recv_timeout;
         }
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while(recv_size <= m_params.max_header_size) {
             std::expected<Bytes, CommonError> bytes;
             if(timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.sslRecv(m_buffer.data() + recv_size, buffer_size - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.sslRecv(m_buffer.data() + recv_size, buffer_size - recv_size);
                 }, timeout);
                 if(!res) {
@@ -178,6 +182,7 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.recv_timeout;
         }
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while(length > recv_size)
         {
             std::expected<Bytes, CommonError> bytes;
@@ -185,7 +190,7 @@ namespace galay::http
                 bytes = co_await m_socket.sslRecv(m_buffer.data() + recv_size, length - recv_size);
             }
             else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.sslRecv(m_buffer.data() + recv_size, length - recv_size);
                 }, timeout);
                 if(!res) {
@@ -353,6 +358,7 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.recv_timeout;
         }
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while(true)
         {
             size_t pos = 0;
@@ -369,7 +375,7 @@ namespace galay::http
                     if(timeout < std::chrono::milliseconds(0)) {
                         bytes = co_await m_socket.sslRecv(m_buffer.data() , m_buffer.capacity());
                     } else {
-                        auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                        auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                             return m_socket.sslRecv(m_buffer.data() , m_buffer.capacity());
                         }, timeout);
                         if(!res) {

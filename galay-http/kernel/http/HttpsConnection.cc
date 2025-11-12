@@ -3,18 +3,19 @@
 #include "HttpsWriter.h"
 #include "galay-http/utils/HttpsDebugLog.h"
 #include "galay-http/protoc/alpn/AlpnProtocol.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include <openssl/ssl.h>
 
 namespace galay::http
 {
-    HttpsConnection::HttpsConnection(AsyncSslSocket&& socket, TimerGenerator&& generator)
-        : m_socket(std::move(socket)), m_generator(std::move(generator))
+    HttpsConnection::HttpsConnection(AsyncSslSocket&& socket, CoSchedulerHandle handle)
+        : m_socket(std::move(socket)), m_handle(handle)
     {
         HTTPS_LOG_DEBUG("[HttpsConnection] Created");
     }
 
     HttpsConnection::HttpsConnection(HttpsConnection&& other)
-        : m_socket(std::move(other.m_socket)), m_generator(std::move(other.m_generator)), 
+        : m_socket(std::move(other.m_socket)), m_handle(other.m_handle), 
           m_params(std::move(other.m_params)), m_is_closed(other.m_is_closed)
     {
     }
@@ -22,13 +23,13 @@ namespace galay::http
     HttpsReader HttpsConnection::getRequestReader(const HttpSettings& params)
     {
         HTTPS_LOG_DEBUG("[HttpsConnection] Creating request reader");
-        return HttpsReader(m_socket, m_generator, params);
+        return HttpsReader(m_socket, m_handle, params);
     }
 
     HttpsWriter HttpsConnection::getResponseWriter(const HttpSettings& params)
     {
         HTTPS_LOG_DEBUG("[HttpsConnection] Creating response writer");
-        return HttpsWriter(m_socket, m_generator, params);
+        return HttpsWriter(m_socket, m_handle, params);
     }
 
     AsyncResult<std::expected<void, CommonError>> HttpsConnection::close()

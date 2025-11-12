@@ -1,12 +1,13 @@
 #include "HttpClient.h"
 #include "galay-http/utils/HttpDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include <galay/kernel/async/AsyncFactory.h>
 
 
 namespace galay::http
 {
-    HttpClient::HttpClient(Runtime& runtime, HttpSettings m_params)
-        : m_socket(runtime.getAsyncFactory().getTcpSocket()), m_generator(runtime.getAsyncFactory().getTimerGenerator()), m_params(m_params)
+    HttpClient::HttpClient(CoSchedulerHandle handle, HttpSettings m_params)
+        : m_socket(handle.getAsyncFactory().getTcpSocket()), m_params(m_params), m_handle(handle)
     {
     }
 
@@ -53,11 +54,11 @@ namespace galay::http
 
     HttpReader HttpClient::getReader()
     {
-        return HttpReader(m_socket, m_generator, m_params);
+        return HttpReader(m_socket, m_handle, m_params);
     }
 
     HttpWriter HttpClient::getWriter()
     {
-        return HttpWriter(m_socket, m_generator, m_params);
+        return HttpWriter(m_socket, m_handle, m_params);
     }
 }

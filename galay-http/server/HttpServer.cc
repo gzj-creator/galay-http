@@ -2,8 +2,8 @@
 #include "galay-http/kernel/http/HttpParams.hpp"
 #include "galay-http/utils/HttpUtils.h"
 #include "galay-http/utils/HttpDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include "galay/kernel/runtime/Runtime.h"
-#include "galay/kernel/async/AsyncFactory.h"
 
 namespace galay::http
 {
@@ -15,17 +15,16 @@ namespace galay::http
 
     void HttpServer::run(Runtime& runtime, const HttpConnFunc& handler)
     {
-        m_server.run(runtime, [handler, &runtime](AsyncTcpSocket socket) -> Coroutine<nil> { 
-            AsyncFactory factory = runtime.getAsyncFactory();
-            HttpConnection conn(std::move(socket), factory.getTimerGenerator());
+        m_server.run(runtime, [handler](AsyncTcpSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> { 
+            HttpConnection conn(std::move(socket), handle);
             return handler(std::move(conn));
         });
     }
 
     void HttpServer::run(Runtime& runtime, HttpRouter& router, HttpSettings params)
     {
-        m_server.run(runtime, [this, &runtime, prouter = &router, params](AsyncTcpSocket socket) -> Coroutine<nil> {
-            return handleConnection(runtime, *prouter, params, std::move(socket));
+        m_server.run(runtime, [this, prouter = &router, params](AsyncTcpSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            return handleConnection(handle, *prouter, params, std::move(socket));
         });
     }
 
@@ -39,10 +38,9 @@ namespace galay::http
         m_server.wait();
     }
 
-    Coroutine<nil> HttpServer::handleConnection(Runtime& runtime, HttpRouter& router, HttpSettings params, AsyncTcpSocket socket)
+    Coroutine<nil> HttpServer::handleConnection(CoSchedulerHandle handle, HttpRouter& router, HttpSettings params, AsyncTcpSocket socket)
     {
-        AsyncFactory factory = runtime.getAsyncFactory();
-        HttpConnection conn(std::move(socket), factory.getTimerGenerator());
+        HttpConnection conn(std::move(socket), handle);
         
         HTTP_LOG_DEBUG("[HttpServer] New connection");
         

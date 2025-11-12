@@ -16,12 +16,12 @@ namespace galay::http
 
     WsReader WsConnection::getReader(const WsSettings& params)
     {
-        return WsReader(m_connection.m_socket, m_connection.m_generator, params);
+        return WsReader(m_connection.m_socket, m_connection.m_handle, params);
     }
 
     WsWriter WsConnection::getWriter(const WsSettings& params)
     {
-        return WsWriter(m_connection.m_socket, m_connection.m_generator, params);
+        return WsWriter(m_connection.m_socket, m_connection.m_handle, params);
     }
 
     AsyncResult<std::expected<void, CommonError>> WsConnection::close()

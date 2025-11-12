@@ -1,17 +1,19 @@
 
 #include "galay-http/client/HttpClient.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include "galay/kernel/runtime/Runtime.h"
 #include "galay-http/utils/HttpUtils.h"
 #include "galay-http/utils/HttpLogger.h"
+#include <iostream>
 
 
 using namespace galay;
 using namespace galay::http;
 
-Coroutine<nil> test(Runtime& runtime)
+Coroutine<nil> test(CoSchedulerHandle handle)
 {
     std::cout << "test start" << std::endl;
-    HttpClient client(runtime, {});
+    HttpClient client(handle, {});
     if(auto res = client.init(); !res) {
         std::cout << "init failed: " << res.error().message() << std::endl;
         co_return nil();
@@ -40,7 +42,7 @@ int main()
     RuntimeBuilder builder;
     auto runtime = builder.build();
     runtime.start();
-    runtime.schedule(test(runtime));
+    runtime.schedule(test(runtime.getCoSchedulerHandle(0).value()));
     getchar();
     runtime.stop();
     return 0;

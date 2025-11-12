@@ -6,6 +6,7 @@
 #include "galay-http/utils/HttpUtils.h"
 #include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/HttpsDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include "galay/kernel/runtime/Runtime.h"
 #include "galay/kernel/async/AsyncFactory.h"
 #include "galay/common/Common.h"
@@ -22,10 +23,9 @@ namespace galay::http
     void HttpsServer::run(Runtime& runtime, const HttpsConnFunc& handler)
     {
         HTTPS_LOG_DEBUG("[HttpsServer] run() with custom handler");
-        m_server.run(runtime, [handler, &runtime](AsyncSslSocket socket) -> Coroutine<nil> { 
+        m_server.run(runtime, [handler](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> { 
             HTTPS_LOG_DEBUG("[HttpsServer] New SSL connection accepted");
-            AsyncFactory factory = runtime.getAsyncFactory();
-            HttpsConnection conn(std::move(socket), factory.getTimerGenerator());
+            HttpsConnection conn(std::move(socket), handle);
             return handler(std::move(conn));
         });
     }
@@ -34,9 +34,9 @@ namespace galay::http
     {
         HTTPS_LOG_DEBUG("[HttpsServer] run() with router (HTTPS + HTTP/1.x)");
         
-        m_server.run(runtime, [this, &runtime, &router, params](AsyncSslSocket socket) -> Coroutine<nil> {
+        m_server.run(runtime, [this, &router, params](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
             HTTPS_LOG_DEBUG("[HttpsServer] New SSL connection accepted");
-            return handleConnection(runtime, router, params, std::move(socket));
+            return handleConnection(handle, router, params, std::move(socket));
         });
     }
 
@@ -50,10 +50,9 @@ namespace galay::http
         m_server.wait();
     }
 
-    Coroutine<nil> HttpsServer::handleConnection(Runtime& runtime, HttpsRouter& router, HttpSettings params, AsyncSslSocket socket)
+    Coroutine<nil> HttpsServer::handleConnection(CoSchedulerHandle handle, HttpsRouter& router, HttpSettings params, AsyncSslSocket socket)
     {
-        AsyncFactory factory = runtime.getAsyncFactory();
-        HttpsConnection conn(std::move(socket), factory.getTimerGenerator());
+        HttpsConnection conn(std::move(socket), handle);
         
         HTTPS_LOG_DEBUG("[HttpsServer] New HTTPS + HTTP/1.x connection");
         

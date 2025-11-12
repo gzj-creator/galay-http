@@ -5,12 +5,16 @@
 #include "galay-http/kernel/http2/Http2Connection.h"
 #include "galay-http/kernel/http2/Http2Callbacks.h"
 #include "galay-http/kernel/http2/Http2Params.hpp"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
+    #define DEFAULT_HTTP2_SERVER_THREAD_NUM 16
+    
     // 前向声明
     class HttpsConnection;
     class HttpsRouter;
+    class Http2Router;
     struct HttpSettings;
     
     /**
@@ -54,8 +58,8 @@ namespace galay::http
     class Http2Server
     {
     public:
-        using Http2ConnFunc = std::function<Coroutine<nil>(Http2Connection)>;
-        using Http1FallbackFunc = std::function<Coroutine<nil>(HttpsConnection&)>;
+        using Http2ConnFunc = std::function<Coroutine<nil>(Http2Connection, CoSchedulerHandle)>;
+        using Http1FallbackFunc = std::function<Coroutine<nil>(HttpsConnection, CoSchedulerHandle)>;
         
         Http2Server(TcpSslServer&& tcpSslServer, const std::string& cert, const std::string& key)
             : m_server(std::move(tcpSslServer)), m_cert(cert), m_key(key) {}
@@ -75,6 +79,44 @@ namespace galay::http
         void run(Runtime& runtime,
                 const Http2Callbacks& callbacks,
                 Http2Settings params = Http2Settings());
+        
+        /**
+         * @brief 运行服务器（使用 HTTP/2 路由器，推荐方式）
+         * @param runtime 运行时环境
+         * @param http2Router HTTP/2 路由器（支持 mount 等功能）
+         * @param http2Params HTTP/2 参数设置
+         * 
+         * @example
+         * Http2Router router;
+         * router.mount("/static", "./public");
+         * server.run(runtime, router);
+         */
+        void run(Runtime& runtime,
+                class Http2Router& http2Router,
+                Http2Settings http2Params = Http2Settings());
+        
+        /**
+         * @brief 运行服务器（使用 HTTP/2 和 HTTP/1.1 路由器，支持降级，推荐方式）
+         * @param runtime 运行时环境
+         * @param http2Router HTTP/2 路由器
+         * @param http1Router HTTP/1.1 路由器（降级时使用）
+         * @param http2Params HTTP/2 参数设置
+         * @param http1Params HTTP/1.1 参数设置
+         * 
+         * @example
+         * Http2Router http2Router;
+         * http2Router.mount("/static", "./public");
+         * 
+         * HttpsRouter http1Router;
+         * http1Router.mount("/static", "./public");
+         * 
+         * server.run(runtime, http2Router, http1Router);
+         */
+        void run(Runtime& runtime,
+                class Http2Router& http2Router,
+                class HttpsRouter& http1Router,
+                Http2Settings http2Params = Http2Settings(),
+                struct HttpSettings http1Params = HttpSettings());
         
         /**
          * @brief 运行服务器（支持降级到 HTTP/1.1 - 使用路由）
@@ -129,15 +171,33 @@ namespace galay::http
         /**
          * @brief 处理单个连接（仅 HTTP/2）
          */
-        Coroutine<nil> handleConnection(Runtime& runtime,
+        Coroutine<nil> handleConnection(CoSchedulerHandle handle,
                                        const Http2Callbacks& callbacks,
                                        const Http2Settings& params,
                                        AsyncSslSocket socket);
         
         /**
+         * @brief 处理单个连接（使用 HTTP/2 路由器）
+         */
+        Coroutine<nil> handleConnectionWithRouter(CoSchedulerHandle handle,
+                                                 class Http2Router& http2Router,
+                                                 const Http2Settings& http2Params,
+                                                 AsyncSslSocket socket);
+        
+        /**
+         * @brief 处理单个连接（使用 HTTP/2 和 HTTP/1.1 路由器，支持降级）
+         */
+        Coroutine<nil> handleConnectionWithBothRouters(CoSchedulerHandle handle,
+                                                      class Http2Router& http2Router,
+                                                      class HttpsRouter& http1Router,
+                                                      const Http2Settings& http2Params,
+                                                      const struct HttpSettings& http1Params,
+                                                      AsyncSslSocket socket);
+        
+        /**
          * @brief 处理单个连接（支持降级 - 使用路由）
          */
-        Coroutine<nil> handleConnectionWithRouter(Runtime& runtime,
+        Coroutine<nil> handleConnectionWithRouter(CoSchedulerHandle handle,
                                                  const Http2Callbacks& http2Callbacks,
                                                  class HttpsRouter& http1Router,
                                                  const Http2Settings& http2Params,
@@ -147,7 +207,7 @@ namespace galay::http
         /**
          * @brief 处理单个连接（支持降级 - 使用自定义处理器）
          */
-        Coroutine<nil> handleConnectionWithFallback(Runtime& runtime,
+        Coroutine<nil> handleConnectionWithFallback(CoSchedulerHandle handle,
                                                    const Http2Callbacks& http2Callbacks,
                                                    const Http1FallbackFunc& http1Fallback,
                                                    const Http2Settings& http2Params,
@@ -156,7 +216,7 @@ namespace galay::http
         /**
          * @brief 处理 HTTP/1.1 连接（降级）
          */
-        Coroutine<nil> handleHttp1Connection(Runtime& runtime,
+        Coroutine<nil> handleHttp1Connection(CoSchedulerHandle handle,
                                             class HttpsRouter& router,
                                             const struct HttpSettings& params,
                                             class HttpsConnection& conn);
@@ -205,7 +265,7 @@ namespace galay::http
         std::string m_cert;
         std::string m_key;
         Host m_host = {"0.0.0.0", 8443};  // HTTP/2 over TLS 默认端口 8443
-        int m_threads = DEFAULT_COS_SCHEDULER_THREAD_NUM;
+        int m_threads = DEFAULT_HTTP2_SERVER_THREAD_NUM;
     };
 }
 

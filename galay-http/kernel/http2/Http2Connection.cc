@@ -3,27 +3,27 @@
 
 namespace galay::http
 {
-    Http2Connection Http2Connection::from(HttpConnection& httpConnection)
+    Http2Connection Http2Connection::from(HttpConnection& httpConnection, const Http2Settings& settings)
     {
         HTTP2_LOG_DEBUG("[Http2Connection] Upgrade from HTTP/1.1");
-        return Http2Connection(httpConnection);
+        return Http2Connection(httpConnection, settings);
     }
     
-    Http2Connection Http2Connection::from(HttpsConnection& httpsConnection)
+    Http2Connection Http2Connection::from(HttpsConnection& httpsConnection, const Http2Settings& settings)
     {
         HTTP2_LOG_DEBUG("[Http2Connection] Upgrade from HTTPS to HTTP/2");
-        return Http2Connection(httpsConnection);
+        return Http2Connection(httpsConnection, settings);
     }
     
-    Http2Connection::Http2Connection(HttpConnection& httpConnection)
+    Http2Connection::Http2Connection(HttpConnection& httpConnection, const Http2Settings& settings)
         : m_connection(std::ref(httpConnection))
-        , m_stream_manager(Http2Settings{})
+        , m_stream_manager(settings)
     {
     }
     
-    Http2Connection::Http2Connection(HttpsConnection& httpsConnection)
+    Http2Connection::Http2Connection(HttpsConnection& httpsConnection, const Http2Settings& settings)
         : m_connection(std::ref(httpsConnection))
-        , m_stream_manager(Http2Settings{})
+        , m_stream_manager(settings)
     {
     }
     
@@ -31,7 +31,7 @@ namespace galay::http
     {
         return std::visit([&](auto&& conn) -> Http2Reader {
             Http2SocketAdapter adapter(conn.get().m_socket);
-            return Http2Reader(adapter, conn.get().m_generator, m_stream_manager, params);
+            return Http2Reader(adapter, conn.get().m_handle, m_stream_manager, params);
         }, m_connection);
     }
     
@@ -39,7 +39,7 @@ namespace galay::http
     {
         return std::visit([&](auto&& conn) -> Http2Writer {
             Http2SocketAdapter adapter(conn.get().m_socket);
-            return Http2Writer(adapter, conn.get().m_generator, m_stream_manager, params);
+            return Http2Writer(adapter, conn.get().m_handle , m_stream_manager, params);
         }, m_connection);
     }
     

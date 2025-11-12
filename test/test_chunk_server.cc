@@ -4,20 +4,23 @@
 // #define ENABLE_DEBUG
 // ==================================
 
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include "kernel/http/HttpReader.h"
 #include "kernel/http/HttpWriter.h"
 #include "utils/HttpUtils.h"
 #include <galay/kernel/async/AsyncFactory.h>
+#include <galay/kernel/runtime/Runtime.h>
+#include <iostream>
 
 using namespace galay;
 using namespace galay::http;
 
-Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, TimerGenerator&& generator)
+Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, CoSchedulerHandle handle)
 {
     std::cout << "test_chunk" << std::endl;
     AsyncTcpSocket socket = std::move(temp);
-    TimerGenerator gen = std::move(generator);
-    HttpReader reader(socket, gen, {});
+    auto generator = handle.getAsyncFactory().getTimerGenerator();
+    HttpReader reader(socket, handle, {});
     if(auto res = co_await reader.getRequest(); res) {
         if(res.value().header().isChunked()) {
             if(auto res = co_await reader.getChunkData([](std::string chunk) {
@@ -34,7 +37,7 @@ Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, TimerGenerator&& generator)
     }
     
 
-    HttpWriter writer(socket, gen, {});
+    HttpWriter writer(socket, handle, {});
     auto response = HttpUtils::defaultOk("txt", "");
     if(auto res = co_await writer.replyChunkHeader(response.header()); !res) {
         std::cout << "reply chunk header error: " << res.error().message() << std::endl;
@@ -51,15 +54,35 @@ Coroutine<nil> test_chunk(AsyncTcpSocket&& temp, TimerGenerator&& generator)
     co_return nil();
 }
 
-Coroutine<nil> test(Runtime& runtime)
+Coroutine<nil> test(CoSchedulerHandle handle)
 {
-    AsyncFactory factory = runtime.getAsyncFactory();
+    AsyncFactory factory = handle.getAsyncFactory();
     auto socket = factory.getTcpSocket();
-    socket.socket();
-    socket.options().handleReusePort();
-    socket.options().handleReuseAddr();
-    socket.bind({"127.0.0.1", 8080});
-    socket.listen(1024);
+    if(auto res = socket.socket(); !res) {
+        std::cout << "socket.socket() failed: " << res.error().message() << std::endl;
+        co_return nil();
+    }
+    auto option = socket.options();
+    if(auto res = option.handleReusePort(); !res) {
+        std::cout << "handle reuse port failed" << std::endl;
+        co_return nil();
+    }
+    if(auto res = option.handleReuseAddr(); !res) {
+        std::cout << "handle reuse addr failed" << std::endl;
+        co_return nil();
+    }
+    if(auto res = option.handleReuseAddr(); !res) {
+        std::cout << "handle reuse addr failed" << std::endl;
+        co_return nil();
+    }
+    if(auto res = socket.bind({"127.0.0.1", 8080}); !res) {
+        std::cout << "bind failed: " << res.error().message() << std::endl;
+        co_return nil();
+    }
+    if(auto res = socket.listen(1024); !res) {
+        std::cout << "listen failed: " << res.error().message() << std::endl;
+        co_return nil();
+    }
     while (true) { 
         AsyncTcpSocketBuilder builder;
         auto res = co_await socket.accept(builder);
@@ -69,7 +92,7 @@ Coroutine<nil> test(Runtime& runtime)
             co_return nil();
         }
         auto new_socket = builder.build();
-        runtime.schedule(test_chunk(std::move(new_socket), factory.getTimerGenerator()));
+        handle.spawn(test_chunk(std::move(new_socket), handle));
     }
 }
 
@@ -79,7 +102,7 @@ int main() {
     RuntimeBuilder builder;
     auto runtime = builder.build();
     runtime.start();
-    runtime.schedule(test(runtime));
+    runtime.schedule(test(runtime.getCoSchedulerHandle()));
     getchar();
     runtime.stop();
     return 0;

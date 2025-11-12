@@ -1,10 +1,12 @@
 #include "WsReader.h"
 #include "galay-http/utils/WsDebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include "galay/kernel/async/AsyncFactory.h"
 
 namespace galay::http
 {
-    WsReader::WsReader(AsyncTcpSocket& socket, TimerGenerator& generator, WsSettings params)
-        : m_socket(socket), m_generator(generator), m_params(params),
+    WsReader::WsReader(AsyncTcpSocket& socket, CoSchedulerHandle handle, WsSettings params)
+        : m_params(params),m_socket(socket), m_handle(handle), 
           m_in_fragment(false), m_fragment_opcode(WsOpcode::Unknown)
     {
     }
@@ -60,7 +62,7 @@ namespace galay::http
         }
         
         size_t recv_size = 0;
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         // 至少读取 2 字节的基本头部
         while (recv_size < 2) {
             
@@ -68,7 +70,7 @@ namespace galay::http
             if (timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, m_buffer.capacity() - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, m_buffer.capacity() - recv_size);
                 }, timeout);
                 if (!res) {
@@ -136,7 +138,7 @@ namespace galay::http
             if (timeout < std::chrono::milliseconds(0)) {
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, m_buffer.capacity() - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, m_buffer.capacity() - recv_size);
                 }, timeout);
                 if (!res) {
@@ -200,7 +202,7 @@ namespace galay::http
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, 
                                               std::min(m_buffer.capacity() - recv_size, total_frame_size - recv_size));
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, 
                                        std::min(m_buffer.capacity() - recv_size, total_frame_size - recv_size));
                 }, timeout);

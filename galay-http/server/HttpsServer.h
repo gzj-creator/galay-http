@@ -8,6 +8,8 @@
 
 namespace galay::http 
 {
+
+    #define DEFAULT_HTTP2_SERVER_THREAD_NUM 16
     /**
      * @brief HTTPS 服务器（HTTP/1.x over TLS）
      * 
@@ -54,7 +56,7 @@ namespace galay::http
         void stop();
         
     private:
-        Coroutine<nil> handleConnection(Runtime& runtime, HttpsRouter& router, HttpSettings params, AsyncSslSocket socket);
+        Coroutine<nil> handleConnection(CoSchedulerHandle handle, HttpsRouter& router, HttpSettings params, AsyncSslSocket socket);
         
     private:
         TcpSslServer m_server;
@@ -92,7 +94,7 @@ namespace galay::http
         std::string m_cert;
         std::string m_key;
         Host m_host = {"0.0.0.0", 8443};  // HTTPS 默认端口 8443
-        int m_threads = DEFAULT_COS_SCHEDULER_THREAD_NUM;
+        int m_threads = DEFAULT_HTTP2_SERVER_THREAD_NUM;
     };
 }
 

@@ -14,6 +14,7 @@
 #include <csignal>
 #include <galay/utils/SignalHandler.hpp>
 #include <utility>
+#include <iostream>
 
 using namespace galay;
 using namespace galay::http;

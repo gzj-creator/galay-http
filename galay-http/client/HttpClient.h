@@ -5,14 +5,14 @@
 #include "galay-http/kernel/http/HttpParams.hpp"
 #include "galay-http/kernel/http/HttpReader.h"
 #include "galay-http/kernel/http/HttpWriter.h"
-#include "galay/kernel/runtime/Runtime.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
     class HttpClient 
     {
     public:
-        HttpClient(Runtime& runtime, HttpSettings m_params = {});
+        HttpClient(CoSchedulerHandle handle, HttpSettings m_params = {});
 
         std::expected<void, CommonError> init();
         std::expected<void, CommonError> init(const Host& host);
@@ -22,9 +22,9 @@ namespace galay::http
         HttpReader getReader();
         HttpWriter getWriter();
     private:
-        AsyncTcpSocket m_socket;
-        TimerGenerator m_generator;
-        HttpSettings m_params;
+        AsyncTcpSocket      m_socket;
+        HttpSettings        m_params;
+        CoSchedulerHandle   m_handle;
     };
 }
 

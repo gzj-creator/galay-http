@@ -7,13 +7,14 @@
 #include "galay-http/protoc/websocket/WsFrame.h"
 #include "galay-http/protoc/websocket/WsError.h"
 #include "WsParams.hpp"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
     class WsWriter
     {
     public:
-        WsWriter(AsyncTcpSocket& socket, TimerGenerator& generator, const WsSettings& params);
+        WsWriter(AsyncTcpSocket& socket, CoSchedulerHandle handle, const WsSettings& params);
 
         // 发送一个 WebSocket 帧
         AsyncResult<std::expected<void, WsError>> 
@@ -69,9 +70,9 @@ namespace galay::http
             std::chrono::milliseconds timeout);
 
     private:
-        AsyncTcpSocket& m_socket;
-        WsSettings m_params;
-        TimerGenerator& m_generator;
+        WsSettings          m_params;
+        AsyncTcpSocket&     m_socket;
+        CoSchedulerHandle   m_handle;
     };
 }
 

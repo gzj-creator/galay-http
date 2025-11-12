@@ -7,7 +7,6 @@
 #include "Http2Params.hpp"
 #include <cstdint>
 #include <string>
-#include <queue>
 #include <memory>
 #include <expected>
 #include <unordered_map>

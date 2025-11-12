@@ -1,19 +1,20 @@
 #include "Http2Server.h"
 #include "galay-http/kernel/http/HttpsConnection.h"
 #include "galay-http/kernel/http/HttpsRouter.h"
-#include "galay-http/kernel/http/HttpsReader.h"
-#include "galay-http/kernel/http/HttpsWriter.h"
 #include "galay-http/kernel/http/HttpParams.hpp"
 #include "galay-http/kernel/http2/Http2Reader.h"
+#include "galay-http/kernel/http2/Http2Router.h"
 #include "galay-http/kernel/http2/Http2Writer.h"
+#include "galay-http/kernel/http/HttpsWriter.h"
+#include "galay-http/kernel/http/HttpsReader.h"
 #include "galay-http/protoc/http2/Http2Error.h"
 #include "galay-http/protoc/http2/Http2Hpack.h"
 #include "galay-http/protoc/alpn/AlpnProtocol.h"
 #include "galay-http/utils/HttpUtils.h"
-#include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/Http2DebugLog.h"
 #include "galay/kernel/coroutine/AsyncWaiter.hpp"
-#include "galay/kernel/async/AsyncFactory.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include <utility>
 
 namespace galay::http
 {
@@ -62,8 +63,38 @@ namespace galay::http
         // 配置 ALPN 为 h2 only
         configureAlpn(false);
         
-        m_server.run(runtime, [this, &runtime, &callbacks, params](AsyncSslSocket socket) -> Coroutine<nil> {
-            return handleConnection(runtime, callbacks, params, std::move(socket));
+        m_server.run(runtime, [this, &callbacks, params](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            return handleConnection(handle, callbacks, params, std::move(socket));
+        });
+    }
+    
+    void Http2Server::run(Runtime& runtime,
+                         Http2Router& http2Router,
+                         Http2Settings http2Params)
+    {
+        HTTP2_LOG_INFO("[Http2Server] Starting HTTP/2 server with Http2Router (h2 only)");
+        
+        // 配置 ALPN 为 h2 only
+        configureAlpn(false);
+        
+        m_server.run(runtime, [this, &http2Router, http2Params](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            return handleConnectionWithRouter(handle, http2Router, http2Params, std::move(socket));
+        });
+    }
+    
+    void Http2Server::run(Runtime& runtime,
+                         Http2Router& http2Router,
+                         HttpsRouter& http1Router,
+                         Http2Settings http2Params,
+                         HttpSettings http1Params)
+    {
+        HTTP2_LOG_INFO("[Http2Server] Starting HTTP/2 server with Http2Router + HttpsRouter (with fallback)");
+        
+        // 配置 ALPN 为 h2 + http/1.1
+        configureAlpn(true);
+        
+        m_server.run(runtime, [this, &http2Router, &http1Router, http2Params, http1Params](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            return handleConnectionWithBothRouters(handle, http2Router, http1Router, http2Params, http1Params, std::move(socket));
         });
     }
     
@@ -76,8 +107,8 @@ namespace galay::http
         // 配置 ALPN 为 h2 + http/1.1
         configureAlpn(true);
         
-        m_server.run(runtime, [this, &runtime, &http2Callbacks, &http1Router, http2Params, http1Params](AsyncSslSocket socket) -> Coroutine<nil> {
-            return handleConnectionWithRouter(runtime, http2Callbacks, http1Router, http2Params, http1Params, std::move(socket));
+        m_server.run(runtime, [this, &http2Callbacks, &http1Router, http2Params, http1Params](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            return handleConnectionWithRouter(handle, http2Callbacks, http1Router, http2Params, http1Params, std::move(socket));
         });
     }
     
@@ -91,8 +122,8 @@ namespace galay::http
         // 配置 ALPN 为 h2 + http/1.1
         configureAlpn(true);
         
-        m_server.run(runtime, [this, &runtime, &http2Callbacks, &http1Fallback, http2Params](AsyncSslSocket socket) -> Coroutine<nil> {
-            return handleConnectionWithFallback(runtime, http2Callbacks, http1Fallback, http2Params, std::move(socket));
+        m_server.run(runtime, [this, &http2Callbacks, &http1Fallback, http2Params](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            return handleConnectionWithFallback(handle, http2Callbacks, http1Fallback, http2Params, std::move(socket));
         });
     }
     
@@ -103,11 +134,10 @@ namespace galay::http
         // 确保 ALPN 已配置
         configureAlpn();
         
-        m_server.run(runtime, [&runtime, handler](AsyncSslSocket socket) -> Coroutine<nil> {
-            AsyncFactory factory = runtime.getAsyncFactory();
-            HttpsConnection httpsConn(std::move(socket), factory.getTimerGenerator());
+        m_server.run(runtime, [handler](AsyncSslSocket socket, CoSchedulerHandle handle) -> Coroutine<nil> {
+            HttpsConnection httpsConn(std::move(socket), handle);
             Http2Connection http2Conn = Http2Connection::from(httpsConn);
-            return handler(std::move(http2Conn));
+            return handler(std::move(http2Conn), handle);
         });
     }
     
@@ -122,13 +152,12 @@ namespace galay::http
         m_server.wait();
     }
     
-    Coroutine<nil> Http2Server::handleConnection(Runtime& runtime,
+    Coroutine<nil> Http2Server::handleConnection(CoSchedulerHandle handle,
                                                  const Http2Callbacks& callbacks,
                                                  const Http2Settings& params,
                                                  AsyncSslSocket socket)
     {
-        AsyncFactory factory = runtime.getAsyncFactory();
-        HttpsConnection httpsConn(std::move(socket), factory.getTimerGenerator());
+        HttpsConnection httpsConn(std::move(socket), handle);
         
         HTTP2_LOG_DEBUG("[Http2Server] New connection accepted");
         
@@ -144,7 +173,7 @@ namespace galay::http
         HTTP2_LOG_INFO("[Http2Server] ALPN negotiated: h2");
         
         // 创建 HTTP/2 连接
-        Http2Connection http2Conn = Http2Connection::from(httpsConn);
+        Http2Connection http2Conn = Http2Connection::from(httpsConn, params);
         
         // 启动 HTTP/2 帧处理循环
         AsyncWaiter<void, Http2Error> waiter;
@@ -159,17 +188,93 @@ namespace galay::http
         co_return nil();
     }
     
-    Coroutine<nil> Http2Server::handleConnectionWithRouter(Runtime& runtime,
-                                                          const Http2Callbacks& http2Callbacks,
-                                                          HttpsRouter& http1Router,
+    Coroutine<nil> Http2Server::handleConnectionWithRouter(CoSchedulerHandle handle,
+                                                          Http2Router& http2Router,
                                                           const Http2Settings& http2Params,
-                                                          const HttpSettings& http1Params,
                                                           AsyncSslSocket socket)
     {
-        AsyncFactory factory = runtime.getAsyncFactory();
-        HttpsConnection httpsConn(std::move(socket), factory.getTimerGenerator());
+        HttpsConnection httpsConn(std::move(socket), handle);
         
-        HTTP2_LOG_DEBUG("[Http2Server] New connection accepted");
+        HTTP2_LOG_DEBUG("[Http2Server] New connection accepted (with Http2Router)");
+        
+        // 检查 ALPN 协商结果
+        std::string alpn_proto = httpsConn.getAlpnProtocol();
+        if (alpn_proto.empty() || alpn_proto != "h2") {
+            HTTP2_LOG_ERROR("[Http2Server] ALPN negotiation failed or not h2: {}", 
+                           alpn_proto.empty() ? "none" : alpn_proto);
+            co_await httpsConn.close();
+            co_return nil();
+        }
+        
+        HTTP2_LOG_INFO("[Http2Server] ALPN negotiated: h2");
+        
+        // 创建 HTTP/2 连接
+        Http2Connection http2Conn = Http2Connection::from(httpsConn, http2Params);
+        
+        // 创建自动路由回调
+        Http2Callbacks callbacks;
+        callbacks.on_headers = [&http2Router](Http2Connection& conn,
+                                             uint32_t stream_id,
+                                             const std::map<std::string, std::string>& headers,
+                                             bool end_stream) -> Coroutine<nil> {
+            std::string method, path;
+            for (const auto& [key, value] : headers) {
+                if (key == ":method") method = value;
+                else if (key == ":path") path = value;
+            }
+            
+            // 使用路由器处理
+            bool handled = false;
+            http2Router.route(conn, stream_id, method, path, handled).result();
+            
+            if (!handled) {
+                // 未匹配任何路由，返回 404
+                HpackEncoder encoder;
+                std::string error_body = "404 Not Found";
+                std::vector<HpackHeaderField> error_headers = {
+                    {":status", "404"},
+                    {"content-type", "text/plain"},
+                    {"content-length", std::to_string(error_body.length())}
+                };
+                std::string encoded = encoder.encodeHeaders(error_headers);
+                
+                auto writer = conn.getWriter({});
+                co_await writer.sendHeaders(stream_id, encoded, false, true);
+                co_await writer.sendData(stream_id, error_body, true);
+                conn.streamManager().removeStream(stream_id);
+            }
+            
+            co_return nil();
+        };
+        
+        callbacks.on_error = [](Http2Connection& conn, const Http2Error& error) -> Coroutine<nil> {
+            HTTP2_LOG_ERROR("[Http2Server] Error: {}", error.message());
+            co_return nil();
+        };
+        
+        // 启动 HTTP/2 帧处理循环
+        AsyncWaiter<void, Http2Error> waiter;
+        auto co = processHttp2Frames(http2Conn, callbacks, http2Params);
+        co.then([&waiter](){
+            waiter.notify({});
+        });
+        waiter.appendTask(std::move(co));
+        co_await waiter.wait();
+        
+        HTTP2_LOG_INFO("[Http2Server] Connection closed");
+        co_return nil();
+    }
+    
+    Coroutine<nil> Http2Server::handleConnectionWithBothRouters(CoSchedulerHandle handle,
+                                                               Http2Router& http2Router,
+                                                               HttpsRouter& http1Router,
+                                                               const Http2Settings& http2Params,
+                                                               const HttpSettings& http1Params,
+                                                               AsyncSslSocket socket)
+    {
+        HttpsConnection httpsConn(std::move(socket), handle);
+        
+        HTTP2_LOG_DEBUG("[Http2Server] New connection accepted (Http2Router + HttpsRouter)");
         
         // 检查 ALPN 协商结果
         std::string alpn_proto = httpsConn.getAlpnProtocol();
@@ -180,17 +285,60 @@ namespace galay::http
             HTTP2_LOG_INFO("[Http2Server] Using HTTP/2");
             
             // 创建 HTTP/2 连接
-            Http2Connection http2Conn = Http2Connection::from(httpsConn);
+            Http2Connection http2Conn = Http2Connection::from(httpsConn, http2Params);
+            
+            // 创建自动路由回调
+            Http2Callbacks callbacks;
+            callbacks.on_headers = [&http2Router](Http2Connection& conn,
+                                                 uint32_t stream_id,
+                                                 const std::map<std::string, std::string>& headers,
+                                                 bool end_stream) -> Coroutine<nil> {
+                std::string method, path;
+                for (const auto& [key, value] : headers) {
+                    if (key == ":method") method = value;
+                    else if (key == ":path") path = value;
+                }
+                
+                // 使用路由器处理
+                bool handled = false;
+                http2Router.route(conn, stream_id, method, path, handled).result();
+                
+                if (!handled) {
+                    // 未匹配任何路由，返回 404
+                    HpackEncoder encoder;
+                    std::string error_body = "404 Not Found";
+                    std::vector<HpackHeaderField> error_headers = {
+                        {":status", "404"},
+                        {"content-type", "text/plain"},
+                        {"content-length", std::to_string(error_body.length())}
+                    };
+                    std::string encoded = encoder.encodeHeaders(error_headers);
+                    
+                    auto writer = conn.getWriter({});
+                    co_await writer.sendHeaders(stream_id, encoded, false, true);
+                    co_await writer.sendData(stream_id, error_body, true);
+                    conn.streamManager().removeStream(stream_id);
+                }
+                
+                co_return nil();
+            };
+            
+            callbacks.on_error = [](Http2Connection& conn, const Http2Error& error) -> Coroutine<nil> {
+                HTTP2_LOG_ERROR("[Http2Server] Error: {}", error.message());
+                co_return nil();
+            };
             
             // 启动 HTTP/2 帧处理循环
             AsyncWaiter<void, Http2Error> waiter;
-            auto co = processHttp2Frames(http2Conn, http2Callbacks, http2Params);
+            auto co = processHttp2Frames(http2Conn, callbacks, http2Params);
             co.then([&waiter](){ waiter.notify({}); });
             waiter.appendTask(std::move(co));
             co_await waiter.wait();
         } else {
+            // HTTP/1.1 降级路径
+            HTTP2_LOG_INFO("[Http2Server] Fallback to HTTP/1.1");
             AsyncWaiter<void, Http2Error> waiter;
-            auto co = handleHttp1Connection(runtime, http1Router, http1Params, httpsConn);
+            auto co = handleHttp1Connection(handle, http1Router, http1Params, httpsConn);
             co.then([&waiter](){ waiter.notify({}); });
             waiter.appendTask(std::move(co));
             co_await waiter.wait();
@@ -200,14 +348,14 @@ namespace galay::http
         co_return nil();
     }
     
-    Coroutine<nil> Http2Server::handleConnectionWithFallback(Runtime& runtime,
-                                                            const Http2Callbacks& http2Callbacks,
-                                                            const Http1FallbackFunc& http1Fallback,
-                                                            const Http2Settings& http2Params,
-                                                            AsyncSslSocket socket)
+    Coroutine<nil> Http2Server::handleConnectionWithRouter(CoSchedulerHandle handle,
+                                                          const Http2Callbacks& http2Callbacks,
+                                                          HttpsRouter& http1Router,
+                                                          const Http2Settings& http2Params,
+                                                          const HttpSettings& http1Params,
+                                                          AsyncSslSocket socket)
     {
-        AsyncFactory factory = runtime.getAsyncFactory();
-        HttpsConnection httpsConn(std::move(socket), factory.getTimerGenerator());
+        HttpsConnection httpsConn(std::move(socket), handle);
         
         HTTP2_LOG_DEBUG("[Http2Server] New connection accepted");
         
@@ -220,7 +368,46 @@ namespace galay::http
             HTTP2_LOG_INFO("[Http2Server] Using HTTP/2");
             
             // 创建 HTTP/2 连接
-            Http2Connection http2Conn = Http2Connection::from(httpsConn);
+            Http2Connection http2Conn = Http2Connection::from(httpsConn, http2Params);
+            
+            // 启动 HTTP/2 帧处理循环
+            AsyncWaiter<void, Http2Error> waiter;
+            auto co = processHttp2Frames(http2Conn, http2Callbacks, http2Params);
+            co.then([&waiter](){ waiter.notify({}); });
+            waiter.appendTask(std::move(co));
+            co_await waiter.wait();
+        } else {
+            AsyncWaiter<void, Http2Error> waiter;
+            auto co = handleHttp1Connection(handle, http1Router, http1Params, httpsConn);
+            co.then([&waiter](){ waiter.notify({}); });
+            waiter.appendTask(std::move(co));
+            co_await waiter.wait();
+        }
+        
+        HTTP2_LOG_INFO("[Http2Server] Connection closed");
+        co_return nil();
+    }
+    
+    Coroutine<nil> Http2Server::handleConnectionWithFallback(CoSchedulerHandle handle,
+                                                            const Http2Callbacks& http2Callbacks,
+                                                            const Http1FallbackFunc& http1Fallback,
+                                                            const Http2Settings& http2Params,
+                                                            AsyncSslSocket socket)
+    {
+        HttpsConnection httpsConn(std::move(socket), handle);
+        
+        HTTP2_LOG_DEBUG("[Http2Server] New connection accepted");
+        
+        // 检查 ALPN 协商结果
+        std::string alpn_proto = httpsConn.getAlpnProtocol();
+        HTTP2_LOG_INFO("[Http2Server] ALPN negotiated: {}", alpn_proto.empty() ? "none" : alpn_proto);
+        
+        if (alpn_proto == "h2") {
+            // HTTP/2 路径
+            HTTP2_LOG_INFO("[Http2Server] Using HTTP/2");
+            
+            // 创建 HTTP/2 连接
+            Http2Connection http2Conn = Http2Connection::from(httpsConn, http2Params);
             
             // 启动 HTTP/2 帧处理循环
             AsyncWaiter<void, Http2Error> waiter;
@@ -232,7 +419,7 @@ namespace galay::http
             // HTTP/1.1 降级路径 - 使用自定义处理器
             HTTP2_LOG_INFO("[Http2Server] Fallback to HTTP/1.1 (custom handler)");
             AsyncWaiter<void, Http2Error> waiter;
-            auto co = http1Fallback(httpsConn);
+            auto co = http1Fallback(std::move(httpsConn), handle);
             co.then([&waiter](){ waiter.notify({}); });
             waiter.appendTask(std::move(co));
             co_await waiter.wait();
@@ -242,7 +429,7 @@ namespace galay::http
         co_return nil();
     }
     
-    Coroutine<nil> Http2Server::handleHttp1Connection(Runtime& runtime,
+    Coroutine<nil> Http2Server::handleHttp1Connection(CoSchedulerHandle handle,
                                                       HttpsRouter& router,
                                                       const HttpSettings& params,
                                                       HttpsConnection& conn)

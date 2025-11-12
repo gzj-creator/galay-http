@@ -1,11 +1,13 @@
 #include "HttpWriter.h"
 #include "galay-http/utils/HttpDebugLog.h"
 #include "galay-http/utils/HttpUtils.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include "galay/kernel/async/AsyncFactory.h"
 
 namespace galay::http
 {
-    HttpWriter::HttpWriter(AsyncTcpSocket &socket, TimerGenerator& generator, const HttpSettings& params)
-        : m_socket(socket), m_params(params), m_generator(generator)
+    HttpWriter::HttpWriter(AsyncTcpSocket &socket, CoSchedulerHandle handle, const HttpSettings& params)
+        : m_socket(socket), m_params(params), m_handle(handle)
     {
     }
 
@@ -70,13 +72,14 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.send_timeout;
         }
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while (true)
         {
             std::expected<Bytes, CommonError> res;
             if(timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
-                auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto temp = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.send(std::move(bytes));
                 }, timeout);
                 if(!temp) {
@@ -115,6 +118,7 @@ namespace galay::http
         if(timeout == std::chrono::milliseconds(-1)) {
             timeout = m_params.send_timeout;
         }
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         //length
         while(true)
         {
@@ -122,7 +126,7 @@ namespace galay::http
             if(timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
-                auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto temp = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.send(std::move(bytes));
                 }, timeout);
                 if(!temp) {

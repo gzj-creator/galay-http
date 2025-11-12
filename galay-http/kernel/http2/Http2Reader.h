@@ -9,6 +9,7 @@
 #include "Http2Params.hpp"
 #include "Http2Stream.h"
 #include "Http2SocketAdapter.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include <galay/common/Buffer.h>
 
 namespace galay::http
@@ -22,7 +23,7 @@ namespace galay::http
     class Http2Reader
     {
     public:
-        Http2Reader(Http2SocketAdapter socket, TimerGenerator& generator,
+        Http2Reader(Http2SocketAdapter socket, CoSchedulerHandle handle,
                    Http2StreamManager& stream_manager, Http2Settings params);
         
         /// 读取一个完整的 HTTP/2 帧
@@ -43,11 +44,12 @@ namespace galay::http
             std::chrono::milliseconds timeout);
         
     private:
-        Http2SocketAdapter m_socket;
-        Http2Settings m_params;
-        TimerGenerator& m_generator;
+        Buffer              m_buffer;
+        Http2Settings       m_params;
+        Http2SocketAdapter  m_socket;
+        CoSchedulerHandle   m_handle;
         Http2StreamManager& m_stream_manager;
-        Buffer m_buffer;
+        
     };
 }
 

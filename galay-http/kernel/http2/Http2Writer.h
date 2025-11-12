@@ -9,6 +9,7 @@
 #include "Http2Params.hpp"
 #include "Http2Stream.h"
 #include "Http2SocketAdapter.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
@@ -21,7 +22,7 @@ namespace galay::http
     class Http2Writer
     {
     public:
-        Http2Writer(Http2SocketAdapter socket, TimerGenerator& generator, 
+        Http2Writer(Http2SocketAdapter socket, CoSchedulerHandle handle, 
                    Http2StreamManager& stream_manager, const Http2Settings& params);
         
         // ==================== 连接级别的帧 ====================
@@ -121,7 +122,7 @@ namespace galay::http
     private:
         Http2SocketAdapter m_socket;
         Http2Settings m_params;
-        TimerGenerator& m_generator;
+        CoSchedulerHandle m_handle;
         Http2StreamManager& m_stream_manager;
     };
 }

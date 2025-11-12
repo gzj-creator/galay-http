@@ -1,14 +1,16 @@
 #include "Http2Writer.h"
 #include "galay-http/utils/Http2DebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include "galay/kernel/async/AsyncFactory.h"
 #include <galay/common/Base.h>
 
 namespace galay::http
 {
-    Http2Writer::Http2Writer(Http2SocketAdapter socket, TimerGenerator& generator,
+    Http2Writer::Http2Writer(Http2SocketAdapter socket, CoSchedulerHandle handle,
                             Http2StreamManager& stream_manager, const Http2Settings& params)
         : m_socket(socket)
         , m_params(params)
-        , m_generator(generator)
+        , m_handle(handle)
         , m_stream_manager(stream_manager)
     {
         HTTP2_LOG_DEBUG("[Http2Writer] Created");
@@ -302,13 +304,13 @@ namespace galay::http
     {
         // 转换为 Bytes
         auto bytes = Bytes::fromString(data);
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while (true) {
             std::expected<Bytes, CommonError> res;
             if (timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
-                auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto temp = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.send(std::move(bytes));
                 }, timeout);
                 if (!temp) {
@@ -344,13 +346,13 @@ namespace galay::http
     {
         // 转换为 Bytes
         auto bytes = Bytes::fromString(data);
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         while (true) {
             std::expected<Bytes, CommonError> res;
             if (timeout < std::chrono::milliseconds(0)) {
                 res = co_await m_socket.send(std::move(bytes));
             } else {
-                auto temp = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&](){
+                auto temp = co_await generator.timeout<std::expected<Bytes, CommonError>>([&](){
                     return m_socket.send(std::move(bytes));
                 }, timeout);
                 if (!temp) {

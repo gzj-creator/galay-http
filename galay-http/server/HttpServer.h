@@ -7,6 +7,9 @@
 
 namespace galay::http 
 {
+
+    #define DEFAULT_HTTP2_SERVER_THREAD_NUM 16
+
     class HttpServer 
     {
     public:
@@ -19,7 +22,7 @@ namespace galay::http
         void wait();
         void stop();
     private:
-        Coroutine<nil> handleConnection(Runtime& runtime, HttpRouter& router, HttpSettings params, AsyncTcpSocket socket);
+        Coroutine<nil> handleConnection(CoSchedulerHandle handle, HttpRouter& router, HttpSettings params, AsyncTcpSocket socket);
     private:
         TcpServer m_server;
     };
@@ -36,7 +39,7 @@ namespace galay::http
     private:
         Host m_host = { "0.0.0.0", 8080};
         std::chrono::milliseconds m_coCheckerInterval = std::chrono::milliseconds(-1);
-        int m_threads = DEFAULT_COS_SCHEDULER_THREAD_NUM;
+        int m_threads = DEFAULT_HTTP2_SERVER_THREAD_NUM;
     };
 }
 

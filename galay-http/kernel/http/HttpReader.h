@@ -7,6 +7,7 @@
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "HttpParams.hpp"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
@@ -14,7 +15,7 @@ namespace galay::http
     class HttpReader 
     {
     public:
-        HttpReader(AsyncTcpSocket& socket, TimerGenerator& generator, HttpSettings params);
+        HttpReader(AsyncTcpSocket& socket, CoSchedulerHandle handle, HttpSettings params);
 
         /*
             @param timeout 每次recv读取超时时间
@@ -49,10 +50,10 @@ namespace galay::http
                                         std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
                                         
     private:
-        AsyncTcpSocket& m_socket;
-        HttpSettings      m_params;
-        TimerGenerator& m_generator;
-        Buffer          m_buffer;
+        Buffer              m_buffer;
+        HttpSettings        m_params;
+        AsyncTcpSocket&     m_socket;
+        CoSchedulerHandle   m_handle;
     };
 }
 

@@ -20,10 +20,10 @@ namespace galay::http
     class Http2Connection
     {
     public:
-        static Http2Connection from(HttpConnection& httpConnection);
-        static Http2Connection from(HttpsConnection& httpsConnection);
-        Http2Connection(HttpConnection& httpConnection);
-        Http2Connection(HttpsConnection& httpsConnection);
+        static Http2Connection from(HttpConnection& httpConnection, const Http2Settings& settings = Http2Settings{});
+        static Http2Connection from(HttpsConnection& httpsConnection, const Http2Settings& settings = Http2Settings{});
+        Http2Connection(HttpConnection& httpConnection, const Http2Settings& settings = Http2Settings{});
+        Http2Connection(HttpsConnection& httpsConnection, const Http2Settings& settings = Http2Settings{});
         
         // 获取读写器
         Http2Reader getReader(const Http2Settings& params);

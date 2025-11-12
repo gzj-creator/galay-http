@@ -7,13 +7,14 @@
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "HttpParams.hpp" 
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 
 namespace galay::http
 {
     class HttpsWriter
     { 
     public:
-        HttpsWriter(AsyncSslSocket& socket, TimerGenerator& generator, const HttpSettings& params);
+        HttpsWriter(AsyncSslSocket& socket, CoSchedulerHandle handle, const HttpSettings& params);
 
         AsyncResult<std::expected<void, HttpError>> 
             send(   HttpRequest& request, 
@@ -77,9 +78,9 @@ namespace galay::http
 #endif
 
     private:
-        AsyncSslSocket& m_socket;
+        AsyncSslSocket&   m_socket;
         HttpSettings      m_params;
-        TimerGenerator& m_generator;
+        CoSchedulerHandle m_handle;
     };
 }
 

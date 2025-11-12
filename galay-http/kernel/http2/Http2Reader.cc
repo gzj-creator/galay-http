@@ -1,15 +1,17 @@
 #include "Http2Reader.h"
 #include "galay-http/utils/Http2DebugLog.h"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
+#include "galay/kernel/async/AsyncFactory.h"
 
 namespace galay::http
 {
-    Http2Reader::Http2Reader(Http2SocketAdapter socket, TimerGenerator& generator,
+    Http2Reader::Http2Reader(Http2SocketAdapter socket, CoSchedulerHandle handle,
                             Http2StreamManager& stream_manager, Http2Settings params)
-        : m_socket(socket)
-        , m_generator(generator)
-        , m_stream_manager(stream_manager)
+        : m_buffer(params.max_frame_size + HTTP2_FRAME_HEADER_SIZE)
         , m_params(params)
-        , m_buffer(params.max_frame_size + HTTP2_FRAME_HEADER_SIZE)
+        , m_socket(socket)
+        , m_handle(handle)
+        , m_stream_manager(stream_manager)
     {
         HTTP2_LOG_DEBUG("[Http2Reader] Created with max_frame_size={}", params.max_frame_size);
     }
@@ -49,7 +51,7 @@ namespace galay::http
         std::chrono::milliseconds timeout)
     {
         size_t recv_size = 0;
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         // 读取帧头（9字节）
         while (recv_size < HTTP2_FRAME_HEADER_SIZE) {
             std::expected<Bytes, CommonError> bytes;
@@ -57,7 +59,7 @@ namespace galay::http
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, 
                                               m_buffer.capacity() - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, 
                                         m_buffer.capacity() - recv_size);
                 }, timeout);
@@ -110,7 +112,7 @@ namespace galay::http
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, 
                                               m_buffer.capacity() - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, 
                                         m_buffer.capacity() - recv_size);
                 }, timeout);
@@ -163,7 +165,7 @@ namespace galay::http
         std::chrono::milliseconds timeout)
     {
         size_t recv_size = 0;
-        
+        auto generator = m_handle.getAsyncFactory().getTimerGenerator();
         // 读取 24 字节连接前言
         while (recv_size < HTTP2_CONNECTION_PREFACE_LENGTH) {
             std::expected<Bytes, CommonError> bytes;
@@ -171,7 +173,7 @@ namespace galay::http
                 bytes = co_await m_socket.recv(m_buffer.data() + recv_size, 
                                               m_buffer.capacity() - recv_size);
             } else {
-                auto res = co_await m_generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
+                auto res = co_await generator.timeout<std::expected<Bytes, CommonError>>([&, this](){
                     return m_socket.recv(m_buffer.data() + recv_size, 
                                         m_buffer.capacity() - recv_size);
                 }, timeout);

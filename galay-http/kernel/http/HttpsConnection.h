@@ -4,6 +4,7 @@
 #include <galay/kernel/async/Socket.h>
 #include <galay/kernel/async/TimerGenerator.h>
 #include "HttpParams.hpp"
+#include "galay/kernel/coroutine/CoSchedulerHandle.hpp"
 #include <unordered_map>
 #include <string>
 
@@ -23,7 +24,7 @@ namespace galay::http
         friend class WsConnection;
         friend class Http2Connection;
     public:
-        HttpsConnection(AsyncSslSocket&& socket, TimerGenerator&& generator);
+        HttpsConnection(AsyncSslSocket&& socket, CoSchedulerHandle handle);
         HttpsConnection(HttpsConnection&& other);
 
         HttpsReader getRequestReader(const HttpSettings& params);
@@ -56,7 +57,7 @@ namespace galay::http
     private:
         bool m_is_closed = false;
         AsyncSslSocket m_socket;
-        TimerGenerator m_generator;
+        CoSchedulerHandle m_handle;
         std::unordered_map<std::string, std::string> m_params;
     };
 }
