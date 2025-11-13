@@ -22,7 +22,7 @@ else()
 endif()
 # ==================================
 
-add_library(${PROJECT_NAME} ${SRC_LIST})
+add_library(${PROJECT_NAME} SHARED ${SRC_LIST})
 
 # 链接 Galay 库
 target_link_libraries(${PROJECT_NAME}

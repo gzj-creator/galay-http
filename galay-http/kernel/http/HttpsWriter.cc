@@ -151,33 +151,6 @@ namespace galay::http
         co_return nil();
     }
 
-#ifdef __linux__
-    AsyncResult<std::expected<long, HttpError>> HttpsWriter::sendfile(int file_fd, off_t offset, size_t length)
-    {
-        HTTP_LOG_DEBUG("[HttpsWriter] Sendfile {} bytes from offset {}", length, offset);
-        auto waiter = std::make_shared<AsyncWaiter<long, HttpError>>();
-        waiter->appendTask(sendfileInternal(file_fd, offset, length, waiter));
-        return waiter->wait();
-    }
-
-    Coroutine<nil> HttpsWriter::sendfileInternal(int file_fd, off_t offset, size_t length, 
-                                                 std::shared_ptr<AsyncWaiter<long, HttpError>> waiter)
-    {
-        GHandle file_handle{.fd = file_fd};
-        auto result = co_await m_socket.sendfile(file_handle, offset, length);
-        
-        if (!result) {
-            HTTP_LOG_ERROR("[HttpsWriter] Sendfile failed: {}", result.error().message());
-            waiter->notify(std::unexpected(HttpError(kHttpError_TcpSendError)));
-            co_return nil();
-        }
-        
-        HTTP_LOG_DEBUG("[HttpsWriter] Sendfile successfully sent {} bytes", result.value());
-        waiter->notify(result.value());
-        co_return nil();
-    }
-#endif
-
     AsyncResult<std::expected<void, HttpError>> HttpsWriter::upgradeToWebSocket(HttpRequest& request, std::chrono::milliseconds timeout)
     {
         HTTP_LOG_DEBUG("[HttpsWriter] Upgrade to WebSocket");
