@@ -157,6 +157,7 @@ class HttpRequest;
          *          性能较低：需要在用户空间和内核空间之间拷贝数据
          * 
          * 注意：启用后会自动设置 Content-Length，无论 use_chunked_transfer 的值
+         * Https不支持
          */
         bool use_sendfile            = false;
         

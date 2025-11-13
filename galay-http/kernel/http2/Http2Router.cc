@@ -7,12 +7,10 @@
 #include <algorithm>
 
 namespace galay::http
-{
-    namespace fs = std::filesystem;
-    
+{    
     // 获取 MIME 类型
     static std::string getMimeType(const std::string& filename) {
-        std::string ext = fs::path(filename).extension().string();
+        std::string ext = std::filesystem::path(filename).extension().string();
         
         if (!ext.empty() && ext[0] == '.') {
             ext = ext.substr(1);
@@ -29,7 +27,7 @@ namespace galay::http
                            FileTransferProgressCallback callback,
                            Http2Settings settings)
     {
-        if (!fs::exists(dir_path)) {
+        if (!std::filesystem::exists(dir_path)) {
             throw std::runtime_error("Directory not found: " + dir_path);
         }
         
@@ -39,7 +37,7 @@ namespace galay::http
         }
         
         m_mounts[normalized_prefix] = {
-            fs::absolute(dir_path).string(),
+            std::filesystem::absolute(dir_path).string(),
             callback,
             settings
         };
@@ -110,15 +108,15 @@ namespace galay::http
         }
         
         // 构建文件路径
-        fs::path file_path = fs::path(mount_point.directory) / relative_path.substr(1);
+        std::filesystem::path file_path = std::filesystem::path(mount_point.directory) / relative_path.substr(1);
         
         // 安全检查：防止目录遍历攻击
         std::string canonical_base;
         std::string canonical_file;
         
         try {
-            canonical_base = fs::canonical(mount_point.directory).string();
-            canonical_file = fs::canonical(file_path).string();
+            canonical_base = std::filesystem::canonical(mount_point.directory).string();
+            canonical_file = std::filesystem::canonical(file_path).string();
         } catch (const std::exception& e) {
             HTTP2_LOG_WARN("[Http2Router] File not found: {}", file_path.string());
             sendError(conn, stream_id, 404, "Not Found").result();
@@ -132,7 +130,7 @@ namespace galay::http
         }
         
         // 检查文件是否存在且为常规文件
-        if (!fs::exists(file_path) || !fs::is_regular_file(file_path)) {
+        if (!std::filesystem::exists(file_path) || !std::filesystem::is_regular_file(file_path)) {
             HTTP2_LOG_WARN("[Http2Router] Not a regular file: {}", file_path.string());
             sendError(conn, stream_id, 404, "Not Found").result();
             co_return nil();
@@ -149,8 +147,8 @@ namespace galay::http
                                         const FileTransferProgressCallback& callback,
                                         const Http2Settings& settings)
     {
-        size_t file_size = fs::file_size(file_path);
-        std::string filename = fs::path(file_path).filename().string();
+        size_t file_size = std::filesystem::file_size(file_path);
+        std::string filename = std::filesystem::path(file_path).filename().string();
         std::string mime_type = getMimeType(filename);
         
         HTTP2_LOG_INFO("[Http2Router] Serving: {} ({} bytes, {})", filename, file_size, mime_type);

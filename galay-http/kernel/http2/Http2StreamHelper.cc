@@ -27,7 +27,7 @@ namespace galay::http
     
     std::string Http2StreamHelper::getMimeType(const std::string& file_path)
     {
-        std::string ext = fs::path(file_path).extension().string();
+        std::string ext = std::filesystem::path(file_path).extension().string();
         
         if (!ext.empty() && ext[0] == '.') {
             ext = ext.substr(1);
@@ -43,7 +43,7 @@ namespace galay::http
                                                 ProgressCallback progress_callback)
     {
         // 检查文件是否存在
-        if (!fs::exists(file_path) || !fs::is_regular_file(file_path)) {
+        if (!std::filesystem::exists(file_path) || !std::filesystem::is_regular_file(file_path)) {
             HTTP2_LOG_WARN("[Http2StreamHelper] File not found: {}", file_path);
             AsyncWaiter<void, Http2Error> waiter;
             auto co = sendError(NotFound_404, "File Not Found");
@@ -53,8 +53,8 @@ namespace galay::http
             co_return false;
         }
         
-        size_t file_size = fs::file_size(file_path);
-        std::string filename = fs::path(file_path).filename().string();
+        size_t file_size = std::filesystem::file_size(file_path);
+        std::string filename = std::filesystem::path(file_path).filename().string();
         std::string mime_type = getMimeType(file_path);
         
         HTTP2_LOG_INFO("[Http2StreamHelper] Sending file: {} ({} bytes, {})",
@@ -275,7 +275,7 @@ namespace galay::http
         }
         
         // 构建文件路径
-        fs::path file_path = fs::path(local_dir) / relative_path.substr(1);
+        std::filesystem::path file_path = std::filesystem::path(local_dir) / relative_path.substr(1);
         
         // 安全检查：防止目录遍历攻击
         std::string canonical_base;
@@ -283,8 +283,8 @@ namespace galay::http
         bool file_not_found = false;
         
         try {
-            canonical_base = fs::canonical(local_dir).string();
-            canonical_file = fs::canonical(file_path).string();
+            canonical_base = std::filesystem::canonical(local_dir).string();
+            canonical_file = std::filesystem::canonical(file_path).string();
         } catch (const std::exception& e) {
             file_not_found = true;
         }
