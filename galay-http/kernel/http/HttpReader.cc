@@ -33,7 +33,7 @@ namespace galay::http
         return waiter->wait();
     }
 
-    Coroutine<nil> HttpReader::readRequestHeader(std::shared_ptr<AsyncWaiter<HttpRequestHeader, HttpError>> waiter, std::chrono::milliseconds timeout)
+    Coroutine<nil> HttpReader::readRequestHeader(AsyncWaiter<HttpRequestHeader, HttpError>& waiter, std::chrono::milliseconds timeout)
     {
         HttpRequestHeader header;
         size_t recv_size = 0, buffer_size = m_params.recv_incr_length;
@@ -52,7 +52,7 @@ namespace galay::http
                     return m_socket.recv(m_buffer.data() + recv_size, buffer_size - recv_size);
                 }, timeout);
                 if(!res) {
-                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    waiter.notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                     co_return nil();
                 }
                 bytes = std::move(res.value());
@@ -60,10 +60,10 @@ namespace galay::http
             // recv error
             if(!bytes) {
                 if(CommonError::contains(bytes.error().code(), error::DisConnectError)) {
-                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_ConnectionClose));
+                    waiter.notify(std::unexpected(HttpErrorCode::kHttpError_ConnectionClose));
                     co_return nil();
                 }
-                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                waiter.notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
                 co_return nil();
             }
             recv_size += bytes.value().size();
@@ -80,7 +80,7 @@ namespace galay::http
                 pri_header.uri() = "*";
                 pri_header.version() = HttpVersion::Http_Version_2_0;
                 // 将整个前言保留在 buffer 中，供 HTTP/2 reader 使用
-                waiter->notify(std::move(pri_header));
+                waiter.notify(std::move(pri_header));
                 co_return nil();
             }
             
@@ -89,7 +89,7 @@ namespace galay::http
                 //header end
                 auto error = header.fromString(header_str);
                 if(error != HttpErrorCode::kHttpError_NoError) {
-                    waiter->notify(std::unexpected(error));
+                    waiter.notify(std::unexpected(error));
                     co_return nil();
                 } 
                 recv_size -= header_str.size();
@@ -105,14 +105,14 @@ namespace galay::http
         }
         //header too long
         if( recv_size > m_params.max_header_size) {
-            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
+            waiter.notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
             co_return nil();
         }
-        waiter->notify(std::move(header));
+        waiter.notify(std::move(header));
         co_return nil();
     }
 
-    Coroutine<nil> HttpReader::readResponseHeader(std::shared_ptr<AsyncWaiter<HttpResponseHeader, HttpError>> waiter, std::chrono::milliseconds timeout)
+    Coroutine<nil> HttpReader::readResponseHeader(AsyncWaiter<HttpResponseHeader, HttpError>& waiter, std::chrono::milliseconds timeout)
     {
         HttpResponse response;
         HttpResponseHeader header;
@@ -132,14 +132,14 @@ namespace galay::http
                     return m_socket.recv(m_buffer.data() + recv_size, buffer_size - recv_size);
                 }, timeout);
                 if(!res) {
-                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    waiter.notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                     co_return nil();
                 }
                 bytes = std::move(res.value());
             }
             // recv error
             if(!bytes) {
-                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                waiter.notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
                 co_return nil();
             }
             recv_size += bytes.value().size();
@@ -149,7 +149,7 @@ namespace galay::http
                 //header end
                 auto error = header.fromString(header_str);
                 if(error != HttpErrorCode::kHttpError_NoError) {
-                    waiter->notify(std::unexpected(error));
+                    waiter.notify(std::unexpected(error));
                     co_return nil();
                 } 
                 recv_size -= header_str.size();
@@ -165,14 +165,14 @@ namespace galay::http
         }
         //header too long
         if( recv_size > m_params.max_header_size) {
-            waiter->notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
+            waiter.notify(std::unexpected(HttpErrorCode::kHttpError_HeaderTooLong));
             co_return nil();
         }
-        waiter->notify(std::move(header));
+        waiter.notify(std::move(header));
         co_return nil();
     }
 
-    Coroutine<nil> HttpReader::readBody(std::shared_ptr<AsyncWaiter<std::string, HttpError>> waiter, size_t length, std::chrono::milliseconds timeout)
+    Coroutine<nil> HttpReader::readBody(AsyncWaiter<std::string, HttpError>& waiter, size_t length, std::chrono::milliseconds timeout)
     {
         if(m_buffer.capacity() < length) {
             m_buffer.resize(length);
@@ -193,19 +193,19 @@ namespace galay::http
                     return m_socket.recv(m_buffer.data() + recv_size, length - recv_size);
                 }, timeout);
                 if(!res) {
-                    waiter->notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
+                    waiter.notify(std::unexpected(HttpErrorCode::kHttpError_RecvTimeOut));
                     co_return nil();
                 }
                 bytes = std::move(res.value());
             }
             // recv error
             if(!bytes) {
-                waiter->notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
+                waiter.notify(std::unexpected(HttpErrorCode::kHttpError_TcpRecvError));
                 co_return nil();
             }
             recv_size += bytes.value().size();
         }
-        waiter->notify(m_buffer.toString());
+        waiter.notify(m_buffer.toString());
         m_buffer.clear();
         co_return nil();
     }
@@ -213,11 +213,9 @@ namespace galay::http
     Coroutine<nil> HttpReader::readRequest(std::shared_ptr<AsyncWaiter<HttpRequest, HttpError>> waiter, std::chrono::milliseconds timeout)
     {
         HttpRequest request;
-        HTTP_LOG_DEBUG("[HttpReader] Reading request");
-
-        std::shared_ptr<AsyncWaiter<HttpRequestHeader, HttpError>> header_waiter = std::make_shared<AsyncWaiter<HttpRequestHeader, HttpError>>();
-        header_waiter->appendTask(readRequestHeader(header_waiter, timeout));
-        auto header_res = co_await header_waiter->wait();
+        AsyncWaiter<HttpRequestHeader, HttpError> header_waiter;
+        header_waiter.appendTask(readRequestHeader(header_waiter, timeout));
+        auto header_res = co_await header_waiter.wait();
         if(!header_res) {
             waiter->notify(std::unexpected(header_res.error()));
             co_return nil();
@@ -265,9 +263,9 @@ namespace galay::http
             co_return nil();
         }
         
-        std::shared_ptr<AsyncWaiter<std::string, HttpError>> body_waiter = std::make_shared<AsyncWaiter<std::string, HttpError>>();
-        body_waiter->appendTask(readBody(body_waiter, body_length, timeout));
-        auto body_res = co_await body_waiter->wait();
+        AsyncWaiter<std::string, HttpError> body_waiter;
+        body_waiter.appendTask(readBody(body_waiter, body_length, timeout));
+        auto body_res = co_await body_waiter.wait();
         if(!body_res) {
             waiter->notify(std::unexpected(body_res.error()));
             co_return nil();
@@ -282,9 +280,9 @@ namespace galay::http
     {
         HttpResponse response;
         HTTP_LOG_DEBUG("[HttpReader] Reading response");
-        std::shared_ptr<AsyncWaiter<HttpResponseHeader, HttpError>> header_waiter = std::make_shared<AsyncWaiter<HttpResponseHeader, HttpError>>();
-        header_waiter->appendTask(readResponseHeader(header_waiter, timeout));
-        auto header_res = co_await header_waiter->wait();
+        AsyncWaiter<HttpResponseHeader, HttpError> header_waiter;
+        header_waiter.appendTask(readResponseHeader(header_waiter, timeout));
+        auto header_res = co_await header_waiter.wait();
         if(!header_res) {
             waiter->notify(std::unexpected(header_res.error()));
             co_return nil();
@@ -317,9 +315,9 @@ namespace galay::http
             waiter->notify(std::move(response));
             co_return nil();
         }
-        std::shared_ptr<AsyncWaiter<std::string, HttpError>> body_waiter = std::make_shared<AsyncWaiter<std::string, HttpError>>();
-        body_waiter->appendTask(readBody(body_waiter, body_length, timeout));
-        auto body_res = co_await body_waiter->wait();
+        AsyncWaiter<std::string, HttpError> body_waiter;
+        body_waiter.appendTask(readBody(body_waiter, body_length, timeout));
+        auto body_res = co_await body_waiter.wait();
         if(!body_res) {
             waiter->notify(std::unexpected(body_res.error()));
             co_return nil();

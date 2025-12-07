@@ -64,12 +64,27 @@ namespace galay::http
 
     std::string HeaderPair::toString() const
     {
-        std::ostringstream stream;
-        for (auto& [k, v] : m_headerPairs)
-        {
-            stream << k << ": " << v << "\r\n";
+        if (m_headerPairs.empty()) {
+            return "";
         }
-        return stream.str();
+        
+        // 预估算字符串大小，减少重分配
+        size_t estimated_size = 0;
+        for (const auto& [k, v] : m_headerPairs) {
+            estimated_size += k.size() + v.size() + 4; // "key: value\r\n"
+        }
+        
+        std::string result;
+        result.reserve(estimated_size);
+        
+        // 直接拼接，避免 ostringstream 开销
+        for (const auto& [k, v] : m_headerPairs) {
+            result += k;
+            result += ": ";
+            result += v;
+            result += "\r\n";
+        }
+        return result;
     }
 
     void HeaderPair::clear()
@@ -170,25 +185,46 @@ namespace galay::http
 
     std::string HttpRequestHeader::toString() const
     {
-        std::ostringstream stream;
-        stream << httpMethodToString(this->m_method) << " ";
-        std::ostringstream url;
-        url << m_uri;
+        // 构建 URI（带参数）
+        std::string uri_str = m_uri;
         if (!m_argList.empty())
         {
-            url << '?';
+            uri_str += '?';
             int i = 0;
-            for (auto& [k, v] : m_argList)
+            for (const auto& [k, v] : m_argList)
             {
-                url << k << '=' << v ;
-                if(i++ < m_argList.size() - 1) {
-                    url << '&';
+                uri_str += k;
+                uri_str += '=';
+                uri_str += v;
+                if(i++ < static_cast<int>(m_argList.size()) - 1) {
+                    uri_str += '&';
                 }
             }
         }
-        stream << convertToUri(url.str());
-        stream << " " << httpVersionToString(this->m_version) << "\r\n" << m_headerPairs.toString() << "\r\n";
-       return stream.str();
+        uri_str = convertToUri(std::move(uri_str));
+        
+        // 获取方法、版本和头部字符串
+        std::string method_str = httpMethodToString(this->m_method);
+        std::string version_str = httpVersionToString(this->m_version);
+        std::string headers_str = m_headerPairs.toString();
+        
+        // 预分配结果字符串
+        size_t estimated_size = method_str.size() + 1 + uri_str.size() + 1 + 
+                                version_str.size() + 2 + headers_str.size() + 2;
+        std::string result;
+        result.reserve(estimated_size);
+        
+        // 直接拼接，避免 ostringstream 开销
+        result += method_str;
+        result += ' ';
+        result += uri_str;
+        result += ' ';
+        result += version_str;
+        result += "\r\n";
+        result += headers_str;
+        result += "\r\n";
+        
+        return result;
     }
 
     bool HttpRequestHeader::isKeepAlive() const
@@ -514,10 +550,29 @@ namespace galay::http
 
     std::string HttpResponseHeader::toString() const
     {
-        std::ostringstream stream;
-        stream <<  httpVersionToString(m_version) << ' ' << std::to_string(static_cast<int>(this->m_code)) << ' ' << httpStatusCodeToString(m_code) << "\r\n" \
-            << m_headerPairs.toString() << "\r\n";
-        return stream.str();
+        // 获取各部分字符串
+        std::string version_str = httpVersionToString(m_version);
+        std::string code_str = std::to_string(static_cast<int>(this->m_code));
+        std::string status_str = httpStatusCodeToString(m_code);
+        std::string headers_str = m_headerPairs.toString();
+        
+        // 预分配结果字符串
+        size_t estimated_size = version_str.size() + 1 + code_str.size() + 1 + 
+                                status_str.size() + 2 + headers_str.size() + 2;
+        std::string result;
+        result.reserve(estimated_size);
+        
+        // 直接拼接，避免 ostringstream 开销
+        result += version_str;
+        result += ' ';
+        result += code_str;
+        result += ' ';
+        result += status_str;
+        result += "\r\n";
+        result += headers_str;
+        result += "\r\n";
+        
+        return result;
     }
 
     HttpErrorCode HttpResponseHeader::fromString(std::string_view str)

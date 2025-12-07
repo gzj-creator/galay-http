@@ -31,11 +31,11 @@ namespace galay::http
                             std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
 
     private:
-        Coroutine<nil> readRequestHeader( std::shared_ptr<AsyncWaiter<HttpRequestHeader, HttpError>> waiter,
+        Coroutine<nil> readRequestHeader( AsyncWaiter<HttpRequestHeader, HttpError>& waiter,
                                     std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
-        Coroutine<nil> readResponseHeader( std::shared_ptr<AsyncWaiter<HttpResponseHeader, HttpError>> waiter,
+        Coroutine<nil> readResponseHeader( AsyncWaiter<HttpResponseHeader, HttpError>& waiter,
                                     std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
-        Coroutine<nil> readBody(std::shared_ptr<AsyncWaiter<std::string, HttpError>> waiter, 
+        Coroutine<nil> readBody(AsyncWaiter<std::string, HttpError>& waiter, 
                                 size_t length,
                                 std::chrono::milliseconds timeout = std::chrono::milliseconds(-1));
 

@@ -1,0 +1,17 @@
+@PACKAGE_INIT@
+
+# 包含导出的目标文件
+include("${CMAKE_CURRENT_LIST_DIR}/GalayHttpTargets.cmake")
+
+# 创建别名目标，方便使用（如果目标存在）
+if(TARGET GalayHttp::galay-http AND NOT TARGET GalayHttp::GalayHttp)
+    add_library(GalayHttp::GalayHttp ALIAS GalayHttp::galay-http)
+endif()
+
+# 检查必需的组件
+check_required_components(GalayHttp)
+
+# 设置变量供其他项目使用
+set(GalayHttp_FOUND TRUE)
+set(GalayHttp_VERSION @PROJECT_VERSION@)
+

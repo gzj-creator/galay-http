@@ -43,6 +43,9 @@ namespace galay::http
         HttpConnection conn(std::move(socket), handle);
         
         HTTP_LOG_DEBUG("[HttpServer] New connection");
+
+        auto reader = conn.getRequestReader(params);
+        auto writer = conn.getResponseWriter(params);
         
         while(true) 
         {
@@ -51,9 +54,6 @@ namespace galay::http
                 HTTP_LOG_DEBUG("[HttpServer] Connection already closed");
                 co_return nil();
             }
-            
-            auto reader = conn.getRequestReader(params);
-            auto writer = conn.getResponseWriter(params);
             
             auto request_res = co_await reader.getRequest();
             

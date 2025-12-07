@@ -37,6 +37,8 @@ target_include_directories(${PROJECT_NAME} PUBLIC ${OPENSSL_INCLUDE_DIR})
 set_target_properties(${PROJECT_NAME} PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
+        VERSION ${PROJECT_VERSION}
+        SOVERSION ${PROJECT_VERSION_MAJOR}
 )
 
 # 安装编译完成的库文件
