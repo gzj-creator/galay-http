@@ -1,8 +1,10 @@
 #ifndef GALAY_HTTP_REQUEST_H
-#define GALAY_HTTP_REQUEST_H 
+#define GALAY_HTTP_REQUEST_H
 
 #include "HttpHeader.h"
 #include "HttpBody.h"
+#include <vector>
+#include <sys/uio.h>
 
 namespace galay::http 
 { 
@@ -41,10 +43,24 @@ namespace galay::http
         void setBodyStr(std::string&& body);
 
         std::string toString();
-        
+
+        // 从离散buffer增量解析，返回消耗的字节数，-1表示解析错误，0表示数据不完整
+        std::pair<HttpErrorCode, ssize_t> fromIOVec(const std::vector<iovec>& iovecs);
+
+        // 检查是否解析完成（header + body）
+        bool isComplete() const;
+
+        // 重置解析状态
+        void reset();
+
     private:
         std::string m_body;
         HttpRequestHeader m_header;
+        // body解析状态
+        size_t m_contentLength = 0;
+        size_t m_bodyParsed = 0;
+        size_t m_headerLength = 0;  // header的字节长度
+        bool m_headerParsed = false;
     };
 
 }

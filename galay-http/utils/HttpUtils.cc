@@ -1,9 +1,14 @@
 #include "HttpUtils.h"
+
+// WebSocket 相关功能需要 OpenSSL，暂时禁用
+// TODO: WebSocket 将在单独的仓库实现
+#ifdef ENABLE_WEBSOCKET
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include "galay-http/protoc/websocket/WsBase.h"
+#endif
 
 namespace galay::http 
 {
@@ -11,9 +16,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Get;
+        header.method() = HttpMethod::HttpMethod_Get;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         request.setHeader(std::move(header));
@@ -24,9 +29,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Post;
+        header.method() = HttpMethod::HttpMethod_Post;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         if (!body.empty()) {
@@ -44,9 +49,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Put;
+        header.method() = HttpMethod::HttpMethod_Put;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         if (!body.empty()) {
@@ -64,9 +69,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Delete;
+        header.method() = HttpMethod::HttpMethod_Delete;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         request.setHeader(std::move(header));
@@ -77,9 +82,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Patch;
+        header.method() = HttpMethod::HttpMethod_Patch;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         if (!body.empty()) {
@@ -97,9 +102,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Head;
+        header.method() = HttpMethod::HttpMethod_Head;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         request.setHeader(std::move(header));
@@ -110,9 +115,9 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::Http_Method_Options;
+        header.method() = HttpMethod::HttpMethod_Options;
         header.uri() = uri;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
         header.headerPairs().addHeaderPair("Accept", "*/*");
         request.setHeader(std::move(header));
@@ -124,7 +129,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::BadRequest_400;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -138,7 +143,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::InternalServerError_500;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -151,7 +156,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NotFound_404;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -164,7 +169,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::MethodNotAllowed_405;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -177,7 +182,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::RequestTimeout_408;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -190,7 +195,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::TooManyRequests_429;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -203,7 +208,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NotImplemented_501;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -216,7 +221,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::ServiceUnavailable_503;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -229,7 +234,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Continue_100;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -242,7 +247,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::SwitchingProtocol_101;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -255,7 +260,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Processing_102;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -268,7 +273,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::EarlyHints_103;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -281,7 +286,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Created_201;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -294,7 +299,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Accepted_202;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -307,7 +312,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NonAuthoritativeInformation_203;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -320,7 +325,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NoContent_204;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -333,7 +338,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::ResetContent_205;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -346,7 +351,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::PartialContent_206;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -359,7 +364,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::MultiStatus_207;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -372,7 +377,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::AlreadyReported_208;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -385,7 +390,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::IMUsed_226;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -398,7 +403,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::MultipleChoices_300;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -411,7 +416,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::MovedPermanently_301;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -424,7 +429,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Found_302;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -437,7 +442,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::SeeOther_303;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -450,7 +455,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NotModified_304;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -463,7 +468,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::UseProxy_305;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -476,7 +481,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Unused_306;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -489,7 +494,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::TemporaryRedirect_307;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -502,7 +507,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::PermanentRedirect_308;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -515,7 +520,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Unauthorized_401;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -528,7 +533,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::PaymentRequired_402;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -541,7 +546,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Forbidden_403;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -554,7 +559,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Conflict_409;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -567,7 +572,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Gone_410;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -580,7 +585,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::LengthRequired_411;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -593,7 +598,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::PreconditionFailed_412;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -606,7 +611,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::PayloadTooLarge_413;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -619,7 +624,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::UriTooLong_414;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -632,7 +637,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::UnsupportedMediaType_415;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -645,7 +650,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::RangeNotSatisfiable_416;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -658,7 +663,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::ExpectationFailed_417;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -671,7 +676,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::ImATeapot_418;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -684,7 +689,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::MisdirectedRequest_421;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -697,7 +702,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::UnprocessableContent_422;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -710,7 +715,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::Locked_423;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -723,7 +728,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::FailedDependency_424;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -736,7 +741,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::TooEarly_425;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -749,7 +754,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::UpgradeRequired_426;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -762,7 +767,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::PreconditionRequired_428;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -775,7 +780,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::RequestHeaderFieldsTooLarge_431;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -788,7 +793,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::UnavailableForLegalReasons_451;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -801,7 +806,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::BadGateway_502;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -814,7 +819,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::GatewayTimeout_504;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -827,7 +832,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::HttpVersionNotSupported_505;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -840,7 +845,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::VariantAlsoNegotiates_506;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -853,7 +858,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::InsufficientStorage_507;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -866,7 +871,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::LoopDetected_508;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -879,7 +884,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NotExtended_510;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -892,7 +897,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::NetworkAuthenticationRequired_511;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", "text/html");
         response.setHeader(std::move(header));
@@ -906,7 +911,7 @@ namespace galay::http
         HttpResponse response;
         HttpResponseHeader header;
         header.code() = HttpStatusCode::OK_200;
-        header.version() = HttpVersion::Http_Version_1_1;
+        header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
         header.headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(type));
         response.setHeader(std::move(header));
@@ -1050,32 +1055,33 @@ namespace galay::http
         }
     }
 
+#ifdef ENABLE_WEBSOCKET
     // WebSocket 相关实现
     std::string HttpUtils::generateWebSocketAcceptKey(const std::string& clientKey)
     {
-        
+
         // 拼接客户端 key 和固定 GUID
         std::string combined = clientKey + WS_MAGIC_STRING;
-        
+
         // 计算 SHA-1
         unsigned char hash[SHA_DIGEST_LENGTH];
         SHA1(reinterpret_cast<const unsigned char*>(combined.c_str()), combined.length(), hash);
-        
+
         // Base64 编码
         BIO* bio = BIO_new(BIO_s_mem());
         BIO* b64 = BIO_new(BIO_f_base64());
         BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);  // 不添加换行符
         bio = BIO_push(b64, bio);
-        
+
         BIO_write(bio, hash, SHA_DIGEST_LENGTH);
         BIO_flush(bio);
-        
+
         BUF_MEM* buffer = nullptr;
         BIO_get_mem_ptr(bio, &buffer);
-        
+
         std::string result(buffer->data, buffer->length);
         BIO_free_all(bio);
-        
+
         return result;
     }
 
@@ -1083,20 +1089,34 @@ namespace galay::http
     {
         HttpResponse response;
         HttpResponseHeader header;
-        
+
         // 设置 101 Switching Protocols 状态码
         header.code() = HttpStatusCode::SwitchingProtocol_101;
-        header.version() = HttpVersion::Http_Version_1_1;
-        
+        header.version() = HttpVersion::HttpVersion_1_1;
+
         // 设置必需的 WebSocket 握手响应头
         header.headerPairs().addHeaderPair("Upgrade", "websocket");
         header.headerPairs().addHeaderPair("Connection", "Upgrade");
         header.headerPairs().addHeaderPair("Sec-WebSocket-Accept", generateWebSocketAcceptKey(clientKey));
         header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        
+
         response.setHeader(std::move(header));
         // WebSocket 握手响应不包含 body
-        
+
         return response;
     }
+#else
+    // WebSocket 功能禁用时的占位实现
+    std::string HttpUtils::generateWebSocketAcceptKey(const std::string& clientKey)
+    {
+        (void)clientKey;
+        return "";
+    }
+
+    HttpResponse HttpUtils::createWebSocketUpgradeResponse(const std::string& clientKey)
+    {
+        (void)clientKey;
+        return defaultNotImplemented();
+    }
+#endif
 }

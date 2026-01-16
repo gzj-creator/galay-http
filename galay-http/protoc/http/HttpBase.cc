@@ -1,4 +1,5 @@
 #include "HttpBase.h"
+#include <vector>
 
 namespace galay::http 
 {
@@ -28,7 +29,7 @@ namespace galay::http
                 return static_cast<HttpVersion>(i);
             }
         }
-        return HttpVersion::Http_Version_Unknown;
+        return HttpVersion::HttpVersion_Unknown;
     }
 
     std::string httpMethodToString(HttpMethod method)
@@ -43,7 +44,7 @@ namespace galay::http
                 return static_cast<HttpMethod>(i);
             }
         }
-        return HttpMethod::Http_Method_Unknown;
+        return HttpMethod::HttpMethod_Unknown;
     }
 
     std::string httpStatusCodeToString(HttpStatusCode code)

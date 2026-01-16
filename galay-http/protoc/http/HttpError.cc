@@ -3,43 +3,43 @@
 namespace galay::http
 {
     const char* g_http_error_messages[] = {
-        "No error",                           // kHttpError_NoError
-        "Connection closed",                  // kHttpError_ConnectionClose
-        "Tcp recv error",                     // kHttpError_TcpRecvError"
-        "Tcp send error",                     // kHttpError_TcpSendError"
-        "Request timeout",                    // kHttpError_RequestTimeOut
-        "Not contains Content-Length",        // kHttpError_ContentLengthNotContained"
-        "Content-Length convert error",       // kHttpError_ContentLengthConvertError
-        "HTTP header incomplete",             // kHttpError_HeaderInComplete
-        "HTTP body incomplete",               // kHttpError_BodyInComplete
-        "HTTP header too long",               // kHttpError_HeaderTooLong
-        "URI too long",                       // kHttpError_UriTooLong
-        "Chunked transfer encoding error",    // kHttpError_ChunkHasError
-        "Invalid HTTP status code",           // kHttpError_HttpCodeInvalid
-        "HTTP header key-value pair already exists",  // kHttpError_HeaderPairExist
-        "HTTP header key-value pair does not exist",  // kHttpError_HeaderPairNotExist
-        "Bad request format",                 // kHttpError_BadRequest
-        "Invalid URL format",                 // kHttpError_UrlInvalid
-        "Invalid port number",                // kHttpError_PortInvalid
-        "HTTP method not allowed",            // kHttpError_MethodNotAllow
-        "HTTP version not supported",         // kHttpError_VersionNotSupport
-        "Request entity too large",           // kHttpError_RequestEntityTooLarge
-        "URI encoding error",                 // kHttpError_UriEncodeError
-        "Invalid Content-Type",               // kHttpError_ContentTypeInvalid
-        "Invalid chunk format",               // kHttpError_InvalidChunkFormat
+        "No error",                           // kNoError
+        "Connection closed",                  // kConnectionClose
+        "Tcp recv error",                     // kTcpRecvError"
+        "Tcp send error",                     // kTcpSendError"
+        "Request timeout",                    // kRequestTimeOut
+        "Not contains Content-Length",        // kContentLengthNotContained"
+        "Content-Length convert error",       // kContentLengthConvertError
+        "HTTP header incomplete",             // kHeaderInComplete
+        "HTTP body incomplete",               // kBodyInComplete
+        "HTTP header too long",               // kHeaderTooLong
+        "URI too long",                       // kUriTooLong
+        "Chunked transfer encoding error",    // kChunkHasError
+        "Invalid HTTP status code",           // kHttpCodeInvalid
+        "HTTP header key-value pair already exists",  // kHeaderPairExist
+        "HTTP header key-value pair does not exist",  // kHeaderPairNotExist
+        "Bad request format",                 // kBadRequest
+        "Invalid URL format",                 // kUrlInvalid
+        "Invalid port number",                // kPortInvalid
+        "HTTP method not allowed",            // kMethodNotAllow
+        "HTTP version not supported",         // kVersionNotSupport
+        "Request entity too large",           // kRequestEntityTooLarge
+        "URI encoding error",                 // kUriEncodeError
+        "Invalid Content-Type",               // kContentTypeInvalid
+        "Invalid chunk format",               // kInvalidChunkFormat
         "Invalid chunk length",
-        "Body length not match Content-Length",// kHttpError_BodyLengthNotMatch
-        "Recv time out",                       // kHttpError_RecvTimeOut
-        "Send timeout",                         //kHttpError_SendTimeOut
-        "Not found",                            // kHttpError_NotFound  
-        "Not implemented",                      // kHttpError_NotImplemented
-        "Upgrade failed",                       // kHttpError_UpgradeFailed
-        "Unknown error",                      // kHttpError_UnknownError
+        "Body length not match Content-Length",// kBodyLengthNotMatch
+        "Recv time out",                       // kRecvTimeOut
+        "Send timeout",                         //kSendTimeOut
+        "Not found",                            // kNotFound  
+        "Not implemented",                      // kNotImplemented
+        "Upgrade failed",                       // kUpgradeFailed
+        "Unknown error",                      // kUnknownError
     };
 
 
-    HttpError::HttpError(HttpErrorCode code)
-        :m_code(code)
+    HttpError::HttpError(HttpErrorCode code, const std::string& extra_msg)
+        :m_code(code), m_extra_msg(extra_msg)
     {
     }
 
@@ -60,74 +60,74 @@ namespace galay::http
     {
         switch (m_code)
         {
-            case kHttpError_NoError:
+            case kNoError:
                 return HttpStatusCode::OK_200;
                 
-            case kHttpError_ConnectionClose:
+            case kConnectionClose:
                 return HttpStatusCode::InternalServerError_500;
                 
-            case kHttpError_TcpRecvError:
-            case kHttpError_TcpSendError:
+            case kTcpRecvError:
+            case kTcpSendError:
                 return HttpStatusCode::InternalServerError_500;
                 
-            case kHttpError_RequestTimeOut:
-            case kHttpError_RecvTimeOut:
-            case kHttpError_SendTimeOut:
+            case kRequestTimeOut:
+            case kRecvTimeOut:
+            case kSendTimeOut:
                 return HttpStatusCode::RequestTimeout_408;
                 
-            case kHttpError_ContentLengthNotContained:
+            case kContentLengthNotContained:
                 return HttpStatusCode::LengthRequired_411;
                 
-            case kHttpError_ContentLengthConvertError:
-            case kHttpError_BodyLengthNotMatch:
+            case kContentLengthConvertError:
+            case kBodyLengthNotMatch:
                 return HttpStatusCode::BadRequest_400;
                 
-            case kHttpError_HeaderInComplete:
-            case kHttpError_BadRequest:
-            case kHttpError_UrlInvalid:
-            case kHttpError_UriEncodeError:
-            case kHttpError_InvalidChunkFormat:
-            case kHttpError_InvalidChunkLength:
-            case kHttpError_ChunkHasError:
+            case kHeaderInComplete:
+            case kBadRequest:
+            case kUrlInvalid:
+            case kUriEncodeError:
+            case kInvalidChunkFormat:
+            case kInvalidChunkLength:
+            case kChunkHasError:
                 return HttpStatusCode::BadRequest_400;
                 
-            case kHttpError_BodyInComplete:
+            case kBodyInComplete:
                 return HttpStatusCode::BadRequest_400;
                 
-            case kHttpError_HeaderTooLong:
+            case kHeaderTooLong:
                 return HttpStatusCode::RequestHeaderFieldsTooLarge_431;
                 
-            case kHttpError_UriTooLong:
+            case kUriTooLong:
                 return HttpStatusCode::UriTooLong_414;
                 
-            case kHttpError_HttpCodeInvalid:
+            case kHttpCodeInvalid:
                 return HttpStatusCode::BadRequest_400;
                 
-            case kHttpError_HeaderPairExist:
-            case kHttpError_HeaderPairNotExist:
+            case kHeaderPairExist:
+            case kHeaderPairNotExist:
                 return HttpStatusCode::BadRequest_400;
                 
-            case kHttpError_PortInvalid:
+            case kPortInvalid:
                 return HttpStatusCode::BadRequest_400;
                 
-            case kHttpError_MethodNotAllow:
+            case kMethodNotAllow:
                 return HttpStatusCode::MethodNotAllowed_405;
                 
-            case kHttpError_VersionNotSupport:
+            case kVersionNotSupport:
                 return HttpStatusCode::HttpVersionNotSupported_505;
                 
-            case kHttpError_RequestEntityTooLarge:
+            case kRequestEntityTooLarge:
                 return HttpStatusCode::PayloadTooLarge_413;
                 
-            case kHttpError_ContentTypeInvalid:
+            case kContentTypeInvalid:
                 return HttpStatusCode::UnsupportedMediaType_415;
-            case kHttpError_NotFound:
+            case kNotFound:
                 return HttpStatusCode::NotFound_404;
-            case kHttpError_UnknownError:
+            case kUnknownError:
                 return HttpStatusCode::InternalServerError_500;
-            case kHttpError_NotImplemented:
+            case kNotImplemented:
                 return HttpStatusCode::NotImplemented_501;
-            case kHttpError_UpgradeFailed:
+            case kUpgradeFailed:
                 return HttpStatusCode::UpgradeRequired_426;
             default:
                 return HttpStatusCode::InternalServerError_500;

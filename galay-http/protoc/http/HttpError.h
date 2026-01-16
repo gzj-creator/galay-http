@@ -1,57 +1,66 @@
 #ifndef GALAY_HTTP_ERROR_H
-#define GALAY_HTTP_ERROR_H 
+#define GALAY_HTTP_ERROR_H
 
-#include <galay/common/Error.h>
 #include "HttpBase.h"
+#include <string>
 
 namespace galay::http
 {
 
     enum HttpErrorCode
     {
-        kHttpError_NoError = 0,              // 无错误
-        kHttpError_ConnectionClose,          // 连接已关闭
-        kHttpError_TcpRecvError,             // TCP接收错误
-        kHttpError_TcpSendError,
-        kHttpError_RequestTimeOut,           // 请求超时
-        kHttpError_ContentLengthNotContained,// 缺少Content-Length
-        kHttpError_ContentLengthConvertError,// Content-Length转换错误
-        kHttpError_HeaderInComplete,         // HTTP头部不完整
-        kHttpError_BodyInComplete,           // HTTP体不完整
-        kHttpError_HeaderTooLong,            // HTTP头部过长
-        kHttpError_UriTooLong,               // URI过长
-        kHttpError_ChunkHasError,            // 分块传输编码错误
-        kHttpError_HttpCodeInvalid,          // HTTP状态码无效
-        kHttpError_HeaderPairExist,          // HTTP头部键值对已存在
-        kHttpError_HeaderPairNotExist,       // HTTP头部键值对不存在
-        kHttpError_BadRequest,               // 错误的请求格式
-        kHttpError_UrlInvalid,               // URL格式无效
-        kHttpError_PortInvalid,              // 端口号无效
-        kHttpError_MethodNotAllow,           // HTTP方法不支持
-        kHttpError_VersionNotSupport,        // HTTP版本不支持
-        kHttpError_RequestEntityTooLarge,    // 请求体过大
-        kHttpError_UriEncodeError,           // URI编码错误
-        kHttpError_ContentTypeInvalid,       // Content-Type无效
-        kHttpError_InvalidChunkFormat,       // Chunk格式错误
-        kHttpError_InvalidChunkLength,       // Chunk长度错误
-        kHttpError_BodyLengthNotMatch,       // 请求体长度与Content-Length不匹配
-        kHttpError_RecvTimeOut,              // 接收超时
-        kHttpError_SendTimeOut,              // 发送超时
-        kHttpError_NotFound,                 // 未找到
-        kHttpError_NotImplemented,           // 未实现
-        kHttpError_UpgradeFailed,            // 升级失败
-        kHttpError_UnknownError,              // 未知错误
+        kNoError = 0,              // 无错误
+        kIncomplete,               // 数据不完整，需要更多数据
+        kConnectionClose,          // 连接已关闭
+        kTcpRecvError,             // TCP接收错误
+        kTcpSendError,             // TCP发送失败
+        kRequestTimeOut,           // 请求超时
+        kContentLengthNotContained,// 缺少Content-Length
+        kContentLengthConvertError,// Content-Length转换错误
+        kHeaderInComplete,         // HTTP头部不完整
+        kBodyInComplete,           // HTTP体不完整
+        kHeaderTooLong,            // HTTP头部过长
+        kUriTooLong,               // URI过长
+        kChunkHasError,            // 分块传输编码错误
+        kHttpCodeInvalid,          // HTTP状态码无效
+        kHeaderPairExist,          // HTTP头部键值对已存在
+        kHeaderPairNotExist,       // HTTP头部键值对不存在
+        kBadRequest,               // 错误的请求格式
+        kUrlInvalid,               // URL格式无效
+        kPortInvalid,              // 端口号无效
+        kMethodNotAllow,           // HTTP方法不支持
+        kVersionNotSupport,        // HTTP版本不支持
+        kRequestEntityTooLarge,    // 请求体过大
+        kUriEncodeError,           // URI编码错误
+        kContentTypeInvalid,       // Content-Type无效
+        kInvalidChunkFormat,       // Chunk格式错误
+        kInvalidChunkLength,       // Chunk长度错误
+        kBodyLengthNotMatch,       // 请求体长度与Content-Length不匹配
+        kRecvTimeOut,              // 接收超时
+        kSendTimeOut,              // 发送超时
+        kNotFound,                 // 未找到
+        kNotImplemented,           // 未实现
+        kUpgradeFailed,            // 升级失败
+        kUnknownError,              // 未知错误
+        kHeaderTooLarge,            // HTTP头部过大
+        kRecvError,                 // 接收错误
+        kSendError,                 // 发送错误
+        kCloseError,                // 关闭错误
+        kInternalError,             // 内部错误
+        kTcpConnectError,           // TCP连接错误
+        kChunkSizeConvertError,     // Chunk大小转换错误
     };
 
     class HttpError
     {
     public:
-        HttpError(HttpErrorCode code);
+        HttpError(HttpErrorCode code, const std::string& extra_msg = "");
         HttpErrorCode code() const;
         std::string message() const;
         HttpStatusCode toHttpStatusCode() const;
     private:
         HttpErrorCode m_code;
+        std::string m_extra_msg;
     };
     
 

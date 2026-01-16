@@ -1,4 +1,4 @@
-project(test)
+project(benchmark)
 
 find_package(spdlog REQUIRED)
 find_package(galay-kernel REQUIRED)
@@ -6,31 +6,29 @@ find_package(galay-kernel REQUIRED)
 include_directories(${CMAKE_SOURCE_DIR}/galay-http)
 include_directories(/usr/local/include)
 
-# HTTP 解析器测试
-set(HTTP_TESTS
-    test_http_parser
+# Benchmark 测试
+set(BENCHMARKS
+    bench_http_parser
 )
 
-set(ALL_TESTS ${HTTP_TESTS})
-
-foreach(TEST_NAME ${ALL_TESTS})
-    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${TEST_NAME}.cc")
-        add_executable(${TEST_NAME} ${TEST_NAME}.cc)
-        target_link_libraries(${TEST_NAME}
+foreach(BENCH_NAME ${BENCHMARKS})
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${BENCH_NAME}.cc")
+        add_executable(${BENCH_NAME} ${BENCH_NAME}.cc)
+        target_link_libraries(${BENCH_NAME}
             galay-http
             galay-kernel::galay-kernel
             pthread
         )
-        target_include_directories(${TEST_NAME} PRIVATE
+        target_include_directories(${BENCH_NAME} PRIVATE
             ${CMAKE_SOURCE_DIR}/galay-http
             /usr/local/include
         )
-        set_target_properties(${TEST_NAME} PROPERTIES
+        set_target_properties(${BENCH_NAME} PROPERTIES
             CXX_STANDARD 23
             CXX_STANDARD_REQUIRED ON
             CXX_EXTENSIONS OFF
             INSTALL_RPATH $ORIGIN/../lib
         )
-        list(APPEND INSTALL_BIN ${TEST_NAME})
+        list(APPEND INSTALL_BIN ${BENCH_NAME})
     endif()
 endforeach()

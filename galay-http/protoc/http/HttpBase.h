@@ -3,8 +3,10 @@
 
 #include <string>
 #include <unordered_map>
-#include <galay/common/Base.h>
-#include <galay/common/Log.h>
+#include <atomic>
+#include "galay-kernel/common/Log.h"
+
+#define GALAY_VERSION "1.0.0"
 
 namespace galay::http 
 {
@@ -37,27 +39,27 @@ namespace galay::http
 
     enum class HttpMethod: int
     {
-        Http_Method_Get = 0,
-        Http_Method_Post = 1,
-        Http_Method_Head = 2,
-        Http_Method_Put = 3,
-        Http_Method_Delete = 4,
-        Http_Method_Trace = 5,
-        Http_Method_Options = 6,
-        Http_Method_Connect = 7,
-        Http_Method_Patch = 8,
-        Http_Method_PRI = 9,        // HTTP/2 connection preface
-        Http_Method_Unknown = 10,
-        Http_Method_Size = Http_Method_Unknown
+        HttpMethod_Get = 0,
+        HttpMethod_Post = 1,
+        HttpMethod_Head = 2,
+        HttpMethod_Put = 3,
+        HttpMethod_Delete = 4,
+        HttpMethod_Trace = 5,
+        HttpMethod_Options = 6,
+        HttpMethod_Connect = 7,
+        HttpMethod_Patch = 8,
+        HttpMethod_PRI = 9,        // HTTP/2 connection preface
+        HttpMethod_Unknown = 10,
+        HttpMethod_Size = HttpMethod_Unknown
     };
 
     enum class HttpVersion: int
     {
-        Http_Version_1_0,   
-        Http_Version_1_1,
-        Http_Version_2_0,
-        Http_Version_3_0,
-        Http_Version_Unknown,
+        HttpVersion_1_0,   
+        HttpVersion_1_1,
+        HttpVersion_2_0,
+        HttpVersion_3_0,
+        HttpVersion_Unknown,
     };
 
     enum class HttpStatusCode: int
@@ -150,21 +152,22 @@ namespace galay::http
         static std::unordered_map<std::string, std::string> mimeTypeMap;
     };
 
-    #define GET HttpMethod::Http_Method_Get
-    #define POST HttpMethod::Http_Method_Post
-    #define HEAD HttpMethod::Http_Method_Head
-    #define PUT HttpMethod::Http_Method_Put
-    #define DELETE HttpMethod::Http_Method_Delete
-    #define TRACE HttpMethod::Http_Method_Trace
-    #define OPTIONS HttpMethod::Http_Method_Options
-    #define CONNECT HttpMethod::Http_Method_Connect
-    #define PATCH HttpMethod::Http_Method_Patch
-    #define PRI HttpMethod::Http_Method_PRI
-    #define UNKNOWN HttpMethod::Http_Method_Unknown
+    // HTTP 方法常量（避免使用宏以防止与其他库冲突）
+    constexpr HttpMethod HTTP_GET = HttpMethod::HttpMethod_Get;
+    constexpr HttpMethod HTTP_POST = HttpMethod::HttpMethod_Post;
+    constexpr HttpMethod HTTP_HEAD = HttpMethod::HttpMethod_Head;
+    constexpr HttpMethod HTTP_PUT = HttpMethod::HttpMethod_Put;
+    constexpr HttpMethod HTTP_DELETE = HttpMethod::HttpMethod_Delete;
+    constexpr HttpMethod HTTP_TRACE = HttpMethod::HttpMethod_Trace;
+    constexpr HttpMethod HTTP_OPTIONS = HttpMethod::HttpMethod_Options;
+    constexpr HttpMethod HTTP_CONNECT = HttpMethod::HttpMethod_Connect;
+    constexpr HttpMethod HTTP_PATCH = HttpMethod::HttpMethod_Patch;
+    constexpr HttpMethod HTTP_PRI = HttpMethod::HttpMethod_PRI;
+    constexpr HttpMethod HTTP_UNKNOWN = HttpMethod::HttpMethod_Unknown;
 
-    #define HTTP_VERSION_1_0 HttpVersion::Http_Version_1_0
-    #define HTTP_VERSION_1_1 HttpVersion::Http_Version_1_1
-    #define HTTP_VERSION_2_0 HttpVersion::Http_Version_2_0
+    constexpr HttpVersion HTTP_VERSION_1_0 = HttpVersion::HttpVersion_1_0;
+    constexpr HttpVersion HTTP_VERSION_1_1 = HttpVersion::HttpVersion_1_1;
+    constexpr HttpVersion HTTP_VERSION_2_0 = HttpVersion::HttpVersion_2_0;
 }
 
 #endif

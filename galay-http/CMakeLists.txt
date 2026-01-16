@@ -1,19 +1,29 @@
-file(GLOB SRC_LIST "*.cc" "protoc/*/*.cc" "utils/*.cc" "kernel/*/*.cc" "server/*.cc" "client/*.cc")
+# HTTP 源文件（移除 HTTPS 相关）
+set(HTTP_SOURCES
+    protoc/http/HttpBase.cc
+    protoc/http/HttpBody.cc
+    protoc/http/HttpError.cc
+    protoc/http/HttpHeader.cc
+    protoc/http/HttpRequest.cc
+    protoc/http/HttpResponse.cc
+    utils/HttpUtils.cc
+)
 
-find_package(Galay REQUIRED)
-find_package(OpenSSL REQUIRED)
+# HTTP/2 和 WebSocket 暂时移除，后续单独重构
+# set(HTTP2_SOURCES ...)
+# set(WS_SOURCES ...)
 
-include_directories(${OPENSSL_INCLUDE_DIR})
+# 合并所有源文件（目前只有 HTTP）
+set(SRC_LIST ${HTTP_SOURCES})
 
+find_package(spdlog REQUIRED)
+find_package(galay-kernel REQUIRED)
 
-if(NOT TARGET Galay::galay)
-    message(FATAL_ERROR "Galay::Galay target not found. Please check Galay installation and CMake config.")
+if(NOT TARGET galay-kernel::galay-kernel)
+    message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
 endif()
 
 # ========== 调试日志控制 ==========
-# 根据 CMAKE_BUILD_TYPE 自动设置 ENABLE_DEBUG 宏
-# Debug 模式：启用所有 debug 日志（性能会受影响）
-# Release 模式：禁用 debug 日志（零性能开销）
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     message(STATUS "Build type: Debug - Enabling ENABLE_DEBUG macro")
     add_definitions(-DENABLE_DEBUG)
@@ -24,15 +34,11 @@ endif()
 
 add_library(${PROJECT_NAME} SHARED ${SRC_LIST})
 
-# 链接 Galay 库
+# 链接 galay-kernel 库
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC Galay::galay
-    PUBLIC OpenSSL::SSL    # 使用OpenSSL目标
-    PUBLIC OpenSSL::Crypto # 使用OpenSSL目标
+    PUBLIC galay-kernel::galay-kernel
     PUBLIC pthread
 )
-
-target_include_directories(${PROJECT_NAME} PUBLIC ${OPENSSL_INCLUDE_DIR})
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
         CXX_STANDARD 23
@@ -53,7 +59,7 @@ install(TARGETS ${PROJECT_NAME}
 # 安装 galay-http 目录下的头文件
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
     DESTINATION include/galay-http
-    FILES_MATCHING 
+    FILES_MATCHING
     PATTERN "*.h"
     PATTERN "*.hpp"
     PATTERN "*.inl"

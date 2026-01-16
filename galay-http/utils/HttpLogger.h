@@ -1,10 +1,17 @@
 #ifndef GALAY_HTTP_LOGGER_H
-#define GALAY_HTTP_LOGGER_H 
+#define GALAY_HTTP_LOGGER_H
 
 #include "galay-http/protoc/http/HttpBase.h"
+#include "galay-kernel/common/Log.h"
+#include <memory>
+#include <string>
+#include <spdlog/spdlog.h>
+#include <spdlog/async.h>
 
 namespace galay::http
 {
+    using kernel::Logger;
+
     class HttpLogger
     {
     public:
@@ -46,20 +53,20 @@ namespace galay::http
     }
 
     inline spdlog::string_view_t method_color(HttpMethod method) {
-        using enum HttpMethod; 
+        using enum HttpMethod;
 
         switch (method) {
-        case Http_Method_Get:     return "\033[32m"; // 绿色 - 安全操作
-        case Http_Method_Post:    return "\033[33m"; // 黄色 - 数据修改
-        case Http_Method_Put:     return "\033[34m"; // 蓝色 - 更新操作  
-        case Http_Method_Delete:  return "\033[31m"; // 红色 - 危险操作
-        case Http_Method_Head:    return "\033[36m"; // 青色 - 元数据操作
-        case Http_Method_Options: return "\033[35m"; // 品红 - 调试用途
-        case Http_Method_Patch:   return "\033[35;1m"; // 亮品红 - 部分更新
-        case Http_Method_Trace:   return "\033[37m"; // 灰色 - 诊断用途
-        case Http_Method_Connect: return "\033[33;1m"; // 亮黄色 - 隧道连接
-        case Http_Method_PRI:     return "\033[36;1m"; // 亮青色 - HTTP/2 升级
-        case Http_Method_Unknown: 
+        case HttpMethod_Get:     return "\033[32m"; // 绿色 - 安全操作
+        case HttpMethod_Post:    return "\033[33m"; // 黄色 - 数据修改
+        case HttpMethod_Put:     return "\033[34m"; // 蓝色 - 更新操作
+        case HttpMethod_Delete:  return "\033[31m"; // 红色 - 危险操作
+        case HttpMethod_Head:    return "\033[36m"; // 青色 - 元数据操作
+        case HttpMethod_Options: return "\033[35m"; // 品红 - 调试用途
+        case HttpMethod_Patch:   return "\033[35;1m"; // 亮品红 - 部分更新
+        case HttpMethod_Trace:   return "\033[37m"; // 灰色 - 诊断用途
+        case HttpMethod_Connect: return "\033[33;1m"; // 亮黄色 - 隧道连接
+        case HttpMethod_PRI:     return "\033[36;1m"; // 亮青色 - HTTP/2 升级
+        case HttpMethod_Unknown:
         default:                  return "\033[90m"; // 暗灰色 - 未知方法
         }
         return "\033[0m";
@@ -73,10 +80,11 @@ namespace galay::http
 
     inline int method_length(HttpMethod method)
     {
+        (void)method;
         return DEFAULT_LOG_METHOD_LENGTH;
     }
 
-    inline int uri_length(const std::string& uri) 
+    inline int uri_length(const std::string& uri)
     {
         int length = uri.length() + 2;
         // 限制最大宽度为 60，避免终端换行
@@ -86,15 +94,17 @@ namespace galay::http
 
     inline int status_length(HttpStatusCode code)
     {
+        (void)code;
         return DEFAULT_LOG_STATUS_LENGTH;
     }
 
     inline int status_code_length(HttpStatusCode code)
     {
+        (void)code;
         return DEFAULT_LOG_STATUS_TEXT_LENGTH;
     }
 
-    
+
 
 }
 
