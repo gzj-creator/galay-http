@@ -7,6 +7,11 @@ set(HTTP_SOURCES
     protoc/http/HttpRequest.cc
     protoc/http/HttpResponse.cc
     utils/HttpUtils.cc
+    kernel/http/HttpReader.cc
+    kernel/http/HttpWriter.cc
+    kernel/http/HttpConn.cc
+    kernel/http/HttpServer.cc
+    # kernel/http/HttpClient.cc  # 暂时注释，需要重新设计
 )
 
 # HTTP/2 和 WebSocket 暂时移除，后续单独重构

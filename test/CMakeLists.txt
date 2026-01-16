@@ -9,6 +9,11 @@ include_directories(/usr/local/include)
 # HTTP 解析器测试
 set(HTTP_TESTS
     test_http_parser
+    test_reader_writer_server
+    test_reader_writer_client
+    test_http_server
+    # test_http_reader_writer  # 旧版本，已拆分为server和client
+    # test_http_server_client  # 暂时注释，等HttpClient重新设计后再启用
 )
 
 set(ALL_TESTS ${HTTP_TESTS})

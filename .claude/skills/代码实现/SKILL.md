@@ -1,5 +1,5 @@
 ---
-name: C++ Http代码实现
+name: C++代码实现
 description: 实现galay-http C++库的一些规范和注意事项(严格要求)
 ---
 你是资深的C++代码工程师，有多年代码编写经验，熟悉http1.1/http2/websocket协议，能够完成高性能C++代码，要求如下:
@@ -17,12 +17,12 @@ description: 实现galay-http C++库的一些规范和注意事项(严格要求)
     - 生成对应文档到docs中，文档格式如下：
         - 数字-测试功能.md
     - 完整以上流程之后才能提交git，包含本次修改内容
-4.**重构规则**
+4.**代码逻辑**
     - 协议解析部分代码可以保持不变，底层Tcp库使用galay-kernel，具体使用可参考项目同级目录galay-kernel/test
     - 实现HttpReader，提供以下接口:
-        - GetRequestAwaitable getRequest():
+        - RequestAwaitable getRequest(HttpRequest&):
             - description: 获取一个完整请求
-            - GetRequestAwaitable:
+            - RequestAwaitable:
                 - 构造函数，传入一个galay-kernel的RingBuffer的引用和HttpReaderSetting的引用
                 - description: 等待体，内含galay-kernel的ReadvAwaiatble成员变量
                 - await_ready返回false
@@ -32,6 +32,8 @@ description: 实现galay-http C++库的一些规范和注意事项(严格要求)
                     2.HttpRequest.fromIovec传入RingBuffer的可读iovec
                     3.根据fromIovec返回值判断消费RingBuffer多少数据
                     4.如果在达到最大header长度(HttpReaderSetting获取)头部仍未完整就返回对应HttpError并
-                    5.如果未完整（包括头未完整）
+                    5.如果未完整（包括头未完整和body未完整，chunck只需要头完整）返回false,用户继续调用接口，如果完整返回true
+        - 
 
 
+ 
