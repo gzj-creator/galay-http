@@ -1,26 +1,42 @@
-# HTTP Parser 增量解析设计
+# HTTP Parser 模块
 
-## 概述
+## 1. 概述
 
-HTTP Parser 支持增量解析模式，调用方每次传入新数据，解析器返回已消费的字节数，调用方负责 consume 已解析的数据。
+HTTP Parser 负责解析 HTTP 请求和响应，支持增量解析模式，适用于流式数据处理。
 
-## 核心接口
+## 2. 核心组件
+
+### 2.1 HttpRequest
+- **文件**: `galay-http/protoc/http/HttpRequest.h/cc`
+- **功能**: HTTP 请求的解析和存储
+
+### 2.2 HttpResponse
+- **文件**: `galay-http/protoc/http/HttpResponse.h/cc`
+- **功能**: HTTP 响应的序列化和存储
+
+## 3. 增量解析设计
+
+### 3.1 核心接口
 
 ```cpp
 std::pair<HttpErrorCode, ssize_t> fromIOVec(const std::vector<iovec>& iovecs);
 ```
 
-### 返回值说明
+### 3.2 返回值说明
 
-- `{kNoError, consumed}`: 解析成功，`consumed` 为本次消费的字节数
-- `{kIncomplete, consumed}`: 数据不完整，`consumed` 为已消费的字节数，需要更多数据
-- `{kXxxError, -1}`: 解析错误
+| 返回值 | 说明 |
+|--------|------|
+| `{kNoError, consumed}` | 解析成功，`consumed` 为本次消费的字节数 |
+| `{kIncomplete, consumed}` | 数据不完整，`consumed` 为已消费的字节数，需要更多数据 |
+| `{kXxxError, -1}` | 解析错误 |
 
-## 使用约定
+### 3.3 使用约定
 
 **调用方必须在每次 `fromIOVec` 返回 `consumed > 0` 后调用 `buffer.consume(consumed)`**，确保下次传入的是新数据。
 
-## 使用示例
+## 4. 使用示例
+
+### 4.1 基本用法
 
 ```cpp
 RingBuffer buffer(4096);
@@ -52,7 +68,7 @@ if (request.isComplete()) {
 }
 ```
 
-## 分片解析示例
+### 4.2 分片解析示例
 
 ```cpp
 // Header 分多次到达
@@ -72,7 +88,7 @@ auto [err2, consumed2] = request.fromIOVec(iovecs2);
 buffer.consume(consumed2);
 ```
 
-## 错误码说明
+## 5. 错误码说明
 
 | 错误码 | 说明 |
 |--------|------|
@@ -82,8 +98,25 @@ buffer.consume(consumed2);
 | `kVersionNotSupport` | HTTP 版本不支持 |
 | `kHttpCodeInvalid` | HTTP 状态码无效 |
 
-## 设计优势
+## 6. 设计优势
 
 1. **零拷贝**: 直接从 RingBuffer 的 iovec 解析，无需拷贝数据
 2. **内存高效**: 增量消费数据，不需要缓存完整报文
 3. **简单可靠**: 调用方只需关注 consume 逻辑，解析器内部状态自动维护
+
+## 7. 测试
+
+### 7.1 单元测试
+
+```bash
+./test/test_http_parser
+```
+
+### 7.2 测试覆盖
+
+- ✅ 完整请求解析
+- ✅ 分片数据解析
+- ✅ 错误请求处理
+- ✅ 各种 HTTP 方法
+- ✅ 请求头解析
+- ✅ 请求体解析

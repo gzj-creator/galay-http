@@ -6,6 +6,7 @@
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/async/TcpSocket.h"
 #include <expected>
 #include <coroutine>
 
@@ -13,6 +14,7 @@ namespace galay::http
 {
 
 using namespace galay::kernel;
+using namespace galay::async;
 
 /**
  * @brief HTTP请求读取等待体
@@ -85,26 +87,29 @@ public:
      * @brief 构造函数
      * @param ring_buffer RingBuffer引用，用于缓冲接收的数据
      * @param setting HttpReaderSetting引用，包含读取配置
+     * @param socket TcpSocket引用，用于IO操作
      */
-    HttpReader(RingBuffer& ring_buffer, const HttpReaderSetting& setting)
+    HttpReader(RingBuffer& ring_buffer, const HttpReaderSetting& setting, TcpSocket& socket)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
+        , m_socket(socket)
     {
     }
 
     /**
      * @brief 获取一个完整的HTTP请求
      * @param request HttpRequest引用，用于存储解析结果
-     * @param readv_awaitable ReadvAwaitable右值引用，用于实际的IO操作
      * @return RequestAwaitable 请求等待体
      */
-    RequestAwaitable getRequest(HttpRequest& request, ReadvAwaitable&& readv_awaitable) {
-        return RequestAwaitable(m_ring_buffer, m_setting, request, std::move(readv_awaitable));
+    RequestAwaitable getRequest(HttpRequest& request) {
+        return RequestAwaitable(m_ring_buffer, m_setting, request,
+                              m_socket.readv(m_ring_buffer.getWriteIovecs()));
     }
 
 private:
     RingBuffer& m_ring_buffer;
     const HttpReaderSetting& m_setting;
+    TcpSocket& m_socket;
 };
 
 } // namespace galay::http

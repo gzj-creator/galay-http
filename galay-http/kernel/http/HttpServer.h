@@ -5,15 +5,21 @@
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/IOScheduler.hpp"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/common/Host.hpp"
 #include <memory>
 #include <atomic>
+#include <functional>
 
 namespace galay::http
 {
 
 using namespace galay::async;
 using namespace galay::kernel;
+
+/**
+ * @brief HTTP连接处理器类型
+ * @details 用户提供的处理函数，接收HttpRequest并返回HttpResponse
+ */
+using HttpHandler = std::function<void(HttpRequest&, HttpResponse&)>;
 
 /**
  * @brief HTTP服务器配置
@@ -24,6 +30,7 @@ struct HttpServerConfig
     uint16_t port = 8080;
     int backlog = 128;
     HttpReaderSetting reader_setting;
+    HttpWriterSetting writer_setting;
 };
 
 /**

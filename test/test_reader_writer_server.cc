@@ -89,25 +89,18 @@ Coroutine echoServer() {
 
         // 创建RingBuffer和HttpReader
         RingBuffer ringBuffer(8192);
-        HttpReaderSetting setting;
-        HttpReader reader(ringBuffer, setting);
-        HttpWriter writer;
+        HttpReaderSetting readerSetting;
+        HttpWriterSetting writerSetting;
+        HttpReader reader(ringBuffer, readerSetting, client);
+        HttpWriter writer(ringBuffer, writerSetting, client);
 
         // 读取HTTP请求
         HttpRequest request;
         bool requestComplete = false;
 
         while (!requestComplete) {
-            // 获取可写iovec
-            auto writeIovecs = ringBuffer.getWriteIovecs();
-            if (writeIovecs.empty()) {
-                LogError("Ring buffer full");
-                break;
-            }
-
-            // 异步读取数据
-            auto readvAwaitable = client.readv(std::move(writeIovecs));
-            auto result = co_await reader.getRequest(request, std::move(readvAwaitable));
+            // 异步读取数据（getRequest 内部会自动调用 readv）
+            auto result = co_await reader.getRequest(request);
 
             if (!result) {
                 auto& error = result.error();
@@ -145,12 +138,7 @@ Coroutine echoServer() {
             response.setBodyStr(std::move(body));
 
             // 发送响应
-            std::string responseStr = response.toString();
-            std::vector<struct iovec> iovecs(1);
-            iovecs[0].iov_base = const_cast<char*>(responseStr.data());
-            iovecs[0].iov_len = responseStr.size();
-
-            auto sendResult = co_await writer.sendResponse(response, client.writev(std::move(iovecs)));
+            auto sendResult = co_await writer.sendResponse(response);
 
             if (sendResult) {
                 LogInfo("Response sent: {} bytes", sendResult.value());

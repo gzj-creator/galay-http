@@ -116,7 +116,11 @@ Coroutine HttpServer::serverLoop()
 Coroutine HttpServer::handleConnection(TcpSocket socket)
 {
     // 创建HttpConn
-    HttpConn conn(std::move(socket), m_config.reader_setting);
+    HttpConn conn(std::move(socket), m_config.reader_setting, m_config.writer_setting);
+
+    // 获取 Reader 和 Writer
+    auto reader = conn.getReader();
+    auto writer = conn.getWriter();
 
     // 处理连接（在当前协程中执行）
     HttpRequest request;
@@ -129,17 +133,8 @@ Coroutine HttpServer::handleConnection(TcpSocket socket)
         // 读取HTTP请求
         bool request_complete = false;
         while (!request_complete) {
-            // 获取可写iovec用于readv
-            auto write_iovecs = conn.m_ring_buffer.getWriteIovecs();
-            if (write_iovecs.empty()) {
-                HTTP_LOG_DEBUG("ring buffer full, closing connection");
-                co_await conn.m_socket.close();
-                co_return;
-            }
-
-            // 异步读取数据
-            auto readv_awaitable = conn.m_socket.readv(std::move(write_iovecs));
-            auto result = co_await conn.m_reader.getRequest(request, std::move(readv_awaitable));
+            // 异步读取数据（getRequest 内部会自动调用 readv）
+            auto result = co_await reader.getRequest(request);
 
             if (!result) {
                 // 解析错误
@@ -161,13 +156,8 @@ Coroutine HttpServer::handleConnection(TcpSocket socket)
                 response.setHeader(std::move(error_header));
                 response.setBodyStr("");
 
-                std::string response_str = response.toString();
-                std::vector<struct iovec> iovecs(1);
-                iovecs[0].iov_base = const_cast<char*>(response_str.data());
-                iovecs[0].iov_len = response_str.size();
-
-                co_await conn.m_writer.sendResponse(response, conn.m_socket.writev(std::move(iovecs)));
-                co_await conn.m_socket.close();
+                co_await writer.sendResponse(response);
+                co_await conn.socket().close();
                 co_return;
             }
 
@@ -182,15 +172,10 @@ Coroutine HttpServer::handleConnection(TcpSocket socket)
         m_handler(request, response);
 
         // 发送响应
-        std::string response_str = response.toString();
-        std::vector<struct iovec> iovecs(1);
-        iovecs[0].iov_base = const_cast<char*>(response_str.data());
-        iovecs[0].iov_len = response_str.size();
-
-        auto send_result = co_await conn.m_writer.sendResponse(response, conn.m_socket.writev(std::move(iovecs)));
+        auto send_result = co_await writer.sendResponse(response);
         if (!send_result) {
             HTTP_LOG_DEBUG("send response failed: {}", send_result.error().message());
-            co_await conn.m_socket.close();
+            co_await conn.socket().close();
             co_return;
         }
 
@@ -199,13 +184,13 @@ Coroutine HttpServer::handleConnection(TcpSocket socket)
         // 检查是否需要关闭连接
         std::string connection_header = request.header().headerPairs().getValue("Connection");
         if (!connection_header.empty() && connection_header == "close") {
-            co_await conn.m_socket.close();
+            co_await conn.socket().close();
             co_return;
         }
 
         // HTTP/1.0默认关闭连接
         if (request.header().version() == HttpVersion::HttpVersion_1_0) {
-            co_await conn.m_socket.close();
+            co_await conn.socket().close();
             co_return;
         }
     }

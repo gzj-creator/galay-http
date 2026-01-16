@@ -1,9 +1,12 @@
 #ifndef GALAY_HTTP_WRITER_H
 #define GALAY_HTTP_WRITER_H
 
+#include "HttpWriterSetting.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/async/TcpSocket.h"
+#include "galay-kernel/common/Buffer.h"
 #include <expected>
 #include <coroutine>
 
@@ -11,6 +14,7 @@ namespace galay::http
 {
 
 using namespace galay::kernel;
+using namespace galay::async;
 
 /**
  * @brief HTTP响应写入等待体
@@ -24,7 +28,7 @@ public:
      * @param response HttpResponse引用
      * @param writev_awaitable WritevAwaitable右值引用
      */
-    ResponseAwaitable(const HttpResponse& response, WritevAwaitable&& writev_awaitable)
+    ResponseAwaitable(HttpResponse& response, WritevAwaitable&& writev_awaitable)
         : m_response(response)
         , m_writev_awaitable(std::move(writev_awaitable))
     {
@@ -41,7 +45,7 @@ public:
     std::expected<size_t, HttpError> await_resume();
 
 private:
-    const HttpResponse& m_response;
+    HttpResponse& m_response;
     WritevAwaitable m_writev_awaitable;
 };
 
@@ -52,18 +56,38 @@ private:
 class HttpWriter
 {
 public:
-    HttpWriter() = default;
-    ~HttpWriter() = default;
+    /**
+     * @brief 构造函数
+     * @param ring_buffer RingBuffer引用，用于缓冲发送的数据
+     * @param setting HttpWriterSetting引用，包含写入配置
+     * @param socket TcpSocket引用，用于IO操作
+     */
+    HttpWriter(RingBuffer& ring_buffer, const HttpWriterSetting& setting, TcpSocket& socket)
+        : m_ring_buffer(ring_buffer)
+        , m_setting(setting)
+        , m_socket(socket)
+    {
+    }
 
     /**
      * @brief 发送HTTP响应
      * @param response HttpResponse引用
-     * @param writev_awaitable WritevAwaitable右值引用
      * @return ResponseAwaitable 响应等待体
      */
-    ResponseAwaitable sendResponse(const HttpResponse& response, WritevAwaitable&& writev_awaitable) {
-        return ResponseAwaitable(response, std::move(writev_awaitable));
+    ResponseAwaitable sendResponse(HttpResponse& response) {
+        // 将响应序列化到 RingBuffer
+        std::string responseStr = response.toString();
+        m_ring_buffer.write(responseStr.data(), responseStr.size());
+
+        // 获取可读的 iovec 并发送
+        auto readIovecs = m_ring_buffer.getReadIovecs();
+        return ResponseAwaitable(response, m_socket.writev(std::move(readIovecs)));
     }
+
+private:
+    RingBuffer& m_ring_buffer;
+    const HttpWriterSetting& m_setting;
+    TcpSocket& m_socket;
 };
 
 } // namespace galay::http
