@@ -5,6 +5,7 @@
 #include "HttpReader.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include <string>
@@ -28,8 +29,13 @@ class HttpClient;
  *          - HttpResponse: 请求和响应全部完成
  *          - std::nullopt: 需要继续调用（数据未完全发送或接收）
  *          - HttpError: 发生错误
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await client.get("/api/data").timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class HttpClientAwaitable
+class HttpClientAwaitable : public galay::kernel::TimeoutSupport<HttpClientAwaitable>
 {
 public:
     /**
@@ -64,6 +70,7 @@ public:
         m_send_awaitable.reset();
         m_recv_awaitable.reset();
         m_response = HttpResponse();  // 清空响应
+        m_result = std::nullopt;  // 重置为 nullopt
     }
 
 private:
@@ -81,6 +88,11 @@ private:
     // 持有底层的 awaitable 对象
     std::optional<SendResponseAwaitable> m_send_awaitable;
     std::optional<GetResponseAwaitable> m_recv_awaitable;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    // 注意：这里使用 IOError 类型，因为 TimeoutSupport 会设置 IOError
+    std::expected<std::optional<HttpResponse>, galay::kernel::IOError> m_result;
 };
 
 using namespace galay::async;

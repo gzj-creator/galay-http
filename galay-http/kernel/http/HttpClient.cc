@@ -36,6 +36,26 @@ bool HttpClientAwaitable::await_suspend(std::coroutine_handle<> handle)
 
 std::expected<std::optional<HttpResponse>, HttpError> HttpClientAwaitable::await_resume()
 {
+    // 首先检查是否有超时错误（由 TimeoutSupport 设置）
+    if (!m_result.has_value()) {
+        // m_result 已被 TimeoutSupport 设置为 IOError，需要转换为 HttpError
+        auto& io_error = m_result.error();
+        HTTP_LOG_DEBUG("request failed with IO error: {}", io_error.message());
+
+        // 将 IOError 转换为 HttpError
+        HttpErrorCode http_error_code;
+        if (io_error.code() == kTimeout) {
+            http_error_code = kRequestTimeOut;
+        } else if (io_error.code() == kDisconnectError) {
+            http_error_code = kConnectionClose;
+        } else {
+            http_error_code = kTcpRecvError;
+        }
+
+        reset();
+        return std::unexpected(HttpError(http_error_code, io_error.message()));
+    }
+
     if (m_state == State::Sending) {
         // 检查发送结果
         auto sendResult = m_send_awaitable->await_resume();
@@ -83,7 +103,8 @@ std::expected<std::optional<HttpResponse>, HttpError> HttpClientAwaitable::await
     } else {
         // Invalid 状态，不应该被调用
         HTTP_LOG_ERROR("await_resume called in Invalid state");
-        return std::unexpected(HttpError(kInvalidState, "HttpClientAwaitable in Invalid state"));
+        reset();
+        return std::unexpected(HttpError(kInternalError, "HttpClientAwaitable in Invalid state"));
     }
 }
 
