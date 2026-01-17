@@ -16,13 +16,22 @@ HttpReader 和 HttpWriter 提供异步的 HTTP 请求读取和响应发送功能
 
 ### 2.2 HttpWriter
 - **文件**: `galay-http/kernel/http/HttpWriter.h/cc`
-- **功能**: 异步发送 HTTP 响应
+- **功能**: 异步发送 HTTP 响应和请求
 - **特性**:
-  - 自动将响应序列化为字符串
+  - 自动将响应/请求序列化为字符串
   - 使用 `socket.send()` 发送数据
   - 完全隐藏 `IOController` 和 `SendAwaitable`
   - 返回 `ResponseAwaitable`
   - 不依赖 `RingBuffer`
+  - 支持多种发送方式
+
+**支持的接口**:
+1. `sendResponse(HttpResponse&)` - 发送完整的 HTTP 响应
+2. `sendRequest(HttpRequest&)` - 发送完整的 HTTP 请求
+3. `sendHeader(HttpResponseHeader&&)` - 发送 HTTP 响应头
+4. `sendHeader(HttpRequestHeader&&)` - 发送 HTTP 请求头
+5. `send(std::string&&)` - 发送字符串数据
+6. `send(const char*, size_t)` - 发送原始数据
 
 ### 2.3 HttpReaderSetting
 - **文件**: `galay-http/kernel/http/HttpReaderSetting.h`
@@ -156,6 +165,31 @@ Coroutine handleClient(TcpSocket client) {
 }
 ```
 
+### 4.3 使用不同的发送方式
+
+```cpp
+// 方式1: 发送完整响应
+HttpResponse response;
+// ... 构造响应 ...
+auto result = co_await writer.sendResponse(response);
+
+// 方式2: 分离发送头部和body
+HttpResponseHeader header;
+// ... 构造头部 ...
+auto headerResult = co_await writer.sendHeader(std::move(header));
+std::string body = "Hello, World!";
+auto bodyResult = co_await writer.send(std::move(body));
+
+// 方式3: 发送原始数据
+const char* data = "HTTP/1.1 200 OK\r\n\r\nHello";
+auto result = co_await writer.send(data, strlen(data));
+
+// 方式4: 发送请求（用于客户端）
+HttpRequest request;
+// ... 构造请求 ...
+auto result = co_await writer.sendRequest(request);
+```
+
 ## 5. 特性
 
 ### 5.1 零拷贝
@@ -206,6 +240,10 @@ curl -X POST -d "test data" http://127.0.0.1:9999/post
 - ✅ POST 请求
 - ✅ 多个连续请求
 - ✅ 并发请求
+- ✅ sendResponse 接口
+- ✅ sendHeader + send 分离发送
+- ✅ send(buffer, length) 原始数据发送
+- ✅ 三种发送方式轮流测试
 
 ### 6.3 性能测试
 
@@ -238,6 +276,11 @@ wrk -t4 -c100 -d10s http://127.0.0.1:9999/test
 - ✅ 自动调用 `socket.send()`
 - ✅ 完全隐藏 `IOController` 和 `SendAwaitable`
 - ✅ 不依赖 `RingBuffer`
+- ✅ sendResponse 接口正常
+- ✅ sendRequest 接口正常
+- ✅ sendHeader 接口正常
+- ✅ send(string) 接口正常
+- ✅ send(buffer, length) 接口正常
 
 ## 8. API 对比
 

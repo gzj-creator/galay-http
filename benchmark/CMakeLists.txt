@@ -9,6 +9,7 @@ include_directories(/usr/local/include)
 # Benchmark 测试
 set(BENCHMARKS
     bench_http_parser
+    bench_chunked
 )
 
 foreach(BENCH_NAME ${BENCHMARKS})

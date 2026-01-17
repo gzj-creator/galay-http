@@ -6,6 +6,7 @@ set(HTTP_SOURCES
     protoc/http/HttpHeader.cc
     protoc/http/HttpRequest.cc
     protoc/http/HttpResponse.cc
+    protoc/http/HttpChunk.cc
     utils/HttpUtils.cc
     kernel/http/HttpReader.cc
     kernel/http/HttpWriter.cc

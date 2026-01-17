@@ -122,28 +122,85 @@ Coroutine echoServer() {
                     static_cast<int>(request.header().method()),
                     request.header().uri());
 
-            // 创建响应
-            HttpResponse response;
-            HttpResponseHeader respHeader;
-            respHeader.version() = HttpVersion::HttpVersion_1_1;
-            respHeader.code() = HttpStatusCode::OK_200;
-            respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
-            respHeader.headerPairs().addHeaderPair("Server", "galay-http-test/1.0");
+            // 测试不同的发送方式
+            int testCase = g_request_count.load() % 3;
 
-            std::string body = "Echo: " + request.header().uri() + "\n";
-            body += "Request #" + std::to_string(g_request_count.load());
-            respHeader.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+            if (testCase == 0) {
+                // 方式1: 使用 sendResponse 发送完整响应
+                HttpResponse response;
+                HttpResponseHeader respHeader;
+                respHeader.version() = HttpVersion::HttpVersion_1_1;
+                respHeader.code() = HttpStatusCode::OK_200;
+                respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
+                respHeader.headerPairs().addHeaderPair("Server", "galay-http-test/1.0");
 
-            response.setHeader(std::move(respHeader));
-            response.setBodyStr(std::move(body));
+                std::string body = "Echo: " + request.header().uri() + "\n";
+                body += "Request #" + std::to_string(g_request_count.load());
+                respHeader.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
 
-            // 发送响应
-            auto sendResult = co_await writer.sendResponse(response);
+                response.setHeader(std::move(respHeader));
+                response.setBodyStr(std::move(body));
 
-            if (sendResult) {
-                LogInfo("Response sent: {} bytes", sendResult.value());
+                auto sendResult = co_await writer.sendResponse(response);
+                if (sendResult) {
+                    LogInfo("Response sent (sendResponse): {} bytes", sendResult.value());
+                } else {
+                    LogError("Failed to send response: {}", sendResult.error().message());
+                }
+            } else if (testCase == 1) {
+                // 方式2: 使用 sendHeader + send(string) 分离发送
+                HttpResponseHeader respHeader;
+                respHeader.version() = HttpVersion::HttpVersion_1_1;
+                respHeader.code() = HttpStatusCode::OK_200;
+                respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
+                respHeader.headerPairs().addHeaderPair("Server", "galay-http-test/1.0");
+
+                std::string body = "Echo: " + request.header().uri() + "\n";
+                body += "Request #" + std::to_string(g_request_count.load());
+                respHeader.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+
+                // 发送头部
+                auto headerResult = co_await writer.sendHeader(std::move(respHeader));
+                if (!headerResult) {
+                    LogError("Failed to send header: {}", headerResult.error().message());
+                } else {
+                    // 发送body
+                    auto bodyResult = co_await writer.send(std::move(body));
+                    if (bodyResult) {
+                        LogInfo("Response sent (sendHeader+send): {} bytes",
+                               headerResult.value() + bodyResult.value());
+                    } else {
+                        LogError("Failed to send body: {}", bodyResult.error().message());
+                    }
+                }
             } else {
-                LogError("Failed to send response: {}", sendResult.error().message());
+                // 方式3: 使用 send(buffer, length) 发送原始数据
+                HttpResponseHeader respHeader;
+                respHeader.version() = HttpVersion::HttpVersion_1_1;
+                respHeader.code() = HttpStatusCode::OK_200;
+                respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
+                respHeader.headerPairs().addHeaderPair("Server", "galay-http-test/1.0");
+
+                std::string body = "Echo: " + request.header().uri() + "\n";
+                body += "Request #" + std::to_string(g_request_count.load());
+                respHeader.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+
+                std::string headerStr = respHeader.toString();
+
+                // 发送头部（原始数据）
+                auto headerResult = co_await writer.send(headerStr.data(), headerStr.size());
+                if (!headerResult) {
+                    LogError("Failed to send header: {}", headerResult.error().message());
+                } else {
+                    // 发送body（原始数据）
+                    auto bodyResult = co_await writer.send(body.data(), body.size());
+                    if (bodyResult) {
+                        LogInfo("Response sent (send raw): {} bytes",
+                               headerResult.value() + bodyResult.value());
+                    } else {
+                        LogError("Failed to send body: {}", bodyResult.error().message());
+                    }
+                }
             }
         }
 

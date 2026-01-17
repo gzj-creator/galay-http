@@ -225,26 +225,79 @@ router.addRoute<GET, POST, PUT>("/api/resource", handleResource);
 
 ## Chunked Transfer-Encoding
 
+galay-http 完整支持 HTTP Chunked Transfer Encoding (RFC 7230)。详细文档请参考 [docs/03-http_chunked.md](docs/03-http_chunked.md)。
+
+### 服务器端接收 Chunked 请求
+
+```cpp
+// 1. 读取请求头
+HttpRequest request;
+auto result = co_await reader.getRequest(request);
+
+// 2. 检查是否是 chunked 编码
+if (result.value() == false && request.header().isChunked()) {
+    std::string allData;
+    bool isLast = false;
+
+    // 3. 循环读取所有 chunk
+    while (!isLast) {
+        auto chunkResult = co_await reader.getChunk(allData);
+        if (!chunkResult) {
+            // 错误处理
+            break;
+        }
+        isLast = chunkResult.value();
+        // allData 包含所有已接收的 chunk 数据（追加方式）
+    }
+
+    LogInfo("Received all chunks: {} bytes", allData.size());
+}
+```
+
 ### 服务器端发送 Chunked 响应
 
 ```cpp
-Coroutine<nil> handleChunked(HttpRequest& request, HttpReader& reader,
-                              HttpWriter& writer, HttpParams params) {
-    auto response = HttpUtils::defaultOk("txt", "");
-    
-    // 发送 chunked 响应头
-    co_await writer.replyChunkHeader(response.header());
-    
-    // 发送多个数据块
-    for (int i = 0; i < 10; ++i) {
-        std::string data = "Chunk " + std::to_string(i);
-        bool isLast = (i == 9);
-        co_await writer.replyChunkData(data, isLast);
-    }
-    
-    co_return nil();
-}
+// 1. 发送响应头
+HttpResponseHeader header;
+header.version() = HttpVersion::HttpVersion_1_1;
+header.code() = HttpStatusCode::OK_200;
+header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+co_await writer.sendHeader(std::move(header));
+
+// 2. 发送多个 chunk
+co_await writer.sendChunk("First chunk\n", false);
+co_await writer.sendChunk("Second chunk\n", false);
+co_await writer.sendChunk("Third chunk\n", false);
+
+// 3. 发送最后一个 chunk
+std::string empty;
+co_await writer.sendChunk(empty, true);
 ```
+
+### 客户端发送 Chunked 请求
+
+```cpp
+// 1. 发送请求头
+HttpRequestHeader header;
+header.method() = HttpMethod::HttpMethod_Post;
+header.uri() = "/upload";
+header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+co_await writer.sendHeader(std::move(header));
+
+// 2. 发送数据块
+co_await writer.sendChunk("chunk1", false);
+co_await writer.sendChunk("chunk2", false);
+
+// 3. 发送最后一个 chunk
+std::string empty;
+co_await writer.sendChunk(empty, true);
+```
+
+### 性能数据
+
+- **编码性能**: 400万 ops/sec (0.25 μs/op)
+- **解析性能**: 217万 ops/sec (0.46 μs/op)
+- **RingBuffer 集成**: 96万 ops/sec (1.04 μs/op)
 
 ### 客户端接收 Chunked 响应
 
