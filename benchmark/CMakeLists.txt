@@ -10,6 +10,7 @@ include_directories(/usr/local/include)
 set(BENCHMARKS
     bench_http_parser
     bench_chunked
+    bench_websocket
 )
 
 foreach(BENCH_NAME ${BENCHMARKS})

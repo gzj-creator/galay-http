@@ -15,12 +15,18 @@ set(HTTP_SOURCES
     # kernel/http/HttpClient.cc  # 暂时注释，需要重新设计
 )
 
-# HTTP/2 和 WebSocket 暂时移除，后续单独重构
-# set(HTTP2_SOURCES ...)
-# set(WS_SOURCES ...)
+# WebSocket 源文件
+set(WS_SOURCES
+    protoc/websocket/WebSocketFrame.cc
+    kernel/websocket/WsReader.cc
+    kernel/websocket/WsWriter.cc
+)
 
-# 合并所有源文件（目前只有 HTTP）
-set(SRC_LIST ${HTTP_SOURCES})
+# HTTP/2 暂时移除，后续单独重构
+# set(HTTP2_SOURCES ...)
+
+# 合并所有源文件
+set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES})
 
 find_package(spdlog REQUIRED)
 find_package(galay-kernel REQUIRED)

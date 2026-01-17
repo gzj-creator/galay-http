@@ -20,7 +20,14 @@ set(HTTP_TESTS
     # test_http_server_client  # 暂时注释，等HttpClient重新设计后再启用
 )
 
-set(ALL_TESTS ${HTTP_TESTS})
+# WebSocket 测试
+set(WEBSOCKET_TESTS
+    test_websocket_frame
+    test_websocket_conn
+    websocket_usage_example
+)
+
+set(ALL_TESTS ${HTTP_TESTS} ${WEBSOCKET_TESTS})
 
 foreach(TEST_NAME ${ALL_TESTS})
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${TEST_NAME}.cc")
