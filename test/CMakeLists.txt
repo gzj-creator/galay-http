@@ -21,6 +21,7 @@ set(HTTP_TESTS
     test_timeout_simple
     test_socket_timeout
     test_all_awaitable_timeout_complete
+    test_http_methods
     test_chunked_server
     test_chunked_client
     # test_http_reader_writer  # 旧版本，已拆分为server和client
