@@ -4,8 +4,8 @@
 namespace galay::http
 {
 
-HttpServer::HttpServer(IOScheduler* scheduler, const HttpServerConfig& config)
-    : m_scheduler(scheduler)
+HttpServer::HttpServer(const HttpServerConfig& config)
+    : m_runtime(LoadBalanceStrategy::ROUND_ROBIN, config.io_scheduler_count, config.compute_scheduler_count)
     , m_config(config)
     , m_handler(nullptr)
     , m_listener(nullptr)
@@ -30,6 +30,25 @@ bool HttpServer::start()
         return false;
     }
 
+    // 启动 Runtime
+    HTTP_LOG_INFO("starting runtime with {} IO schedulers and {} compute schedulers",
+                  m_config.io_scheduler_count == 0 ? "auto" : std::to_string(m_config.io_scheduler_count),
+                  m_config.compute_scheduler_count == 0 ? "auto" : std::to_string(m_config.compute_scheduler_count));
+
+    m_runtime.start();
+
+    HTTP_LOG_INFO("runtime started with {} IO schedulers and {} compute schedulers",
+                  m_runtime.getIOSchedulerCount(),
+                  m_runtime.getComputeSchedulerCount());
+
+    // 获取第一个 IO 调度器用于监听
+    auto* scheduler = m_runtime.getNextIOScheduler();
+    if (!scheduler) {
+        HTTP_LOG_ERROR("no IO scheduler available");
+        m_runtime.stop();
+        return false;
+    }
+
     // 创建监听socket
     m_listener = std::make_unique<TcpSocket>(IPType::IPV4);
 
@@ -37,12 +56,14 @@ bool HttpServer::start()
     auto reuse_result = m_listener->option().handleReuseAddr();
     if (!reuse_result) {
         HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
+        m_runtime.stop();
         return false;
     }
 
     auto nonblock_result = m_listener->option().handleNonBlock();
     if (!nonblock_result) {
         HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
+        m_runtime.stop();
         return false;
     }
 
@@ -51,6 +72,7 @@ bool HttpServer::start()
     auto bind_result = m_listener->bind(bind_host);
     if (!bind_result) {
         HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
+        m_runtime.stop();
         return false;
     }
 
@@ -58,6 +80,7 @@ bool HttpServer::start()
     auto listen_result = m_listener->listen(m_config.backlog);
     if (!listen_result) {
         HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
+        m_runtime.stop();
         return false;
     }
 
@@ -65,7 +88,7 @@ bool HttpServer::start()
     HTTP_LOG_INFO("HTTP server started on {}:{}", m_config.host, m_config.port);
 
     // 启动服务器循环协程
-    m_scheduler->spawn(serverLoop());
+    scheduler->spawn(serverLoop());
 
     return true;
 }
@@ -83,6 +106,9 @@ void HttpServer::stop()
     if (m_listener) {
         m_listener.reset();
     }
+
+    // 停止 Runtime
+    m_runtime.stop();
 
     HTTP_LOG_INFO("HTTP server stopped");
 }
@@ -103,96 +129,24 @@ Coroutine HttpServer::serverLoop()
 
         HTTP_LOG_INFO("client connected from {}:{}", client_host.ip(), client_host.port());
 
+        // 使用负载均衡获取下一个 IO 调度器
+        auto* scheduler = m_runtime.getNextIOScheduler();
+        if (!scheduler) {
+            HTTP_LOG_ERROR("no IO scheduler available");
+            continue;
+        }
+
         // 创建客户端socket并启动处理协程
         TcpSocket client_socket(accept_result.value());
-        client_socket.option().handleNonBlock();
-
-        m_scheduler->spawn(handleConnection(std::move(client_socket)));
-    }
-
-    co_return;
-}
-
-Coroutine HttpServer::handleConnection(TcpSocket socket)
-{
-    // 创建HttpConn
-    HttpConn conn(std::move(socket), m_config.reader_setting, m_config.writer_setting);
-
-    // 获取 Reader 和 Writer
-    auto reader = conn.getReader();
-    auto writer = conn.getWriter();
-
-    // 处理连接（在当前协程中执行）
-    HttpRequest request;
-    HttpResponse response;
-
-    while (true) {
-        // 重置请求和响应
-        request.reset();
-
-        // 读取HTTP请求
-        bool request_complete = false;
-        while (!request_complete) {
-            // 异步读取数据（getRequest 内部会自动调用 readv）
-            auto result = co_await reader.getRequest(request);
-
-            if (!result) {
-                // 解析错误
-                auto& error = result.error();
-                HTTP_LOG_DEBUG("request parse error: {}", error.message());
-
-                if (error.code() == kConnectionClose) {
-                    co_await conn.m_socket.close();
-                    co_return;
-                }
-
-                // 发送错误响应
-                HttpResponseHeader error_header;
-                error_header.version() = HttpVersion::HttpVersion_1_1;
-                error_header.code() = error.toHttpStatusCode();
-                error_header.headerPairs().addHeaderPair("Content-Length", "0");
-                error_header.headerPairs().addHeaderPair("Connection", "close");
-
-                response.setHeader(std::move(error_header));
-                response.setBodyStr("");
-
-                co_await writer.sendResponse(response);
-                co_await conn.socket().close();
-                co_return;
-            }
-
-            request_complete = result.value();
+        auto nonblock_result = client_socket.option().handleNonBlock();
+        if (!nonblock_result) {
+            HTTP_LOG_ERROR("failed to set client socket non-block: {}", nonblock_result.error().message());
+            continue;
         }
 
-        HTTP_LOG_DEBUG("request received: {} {}",
-                     static_cast<int>(request.header().method()),
-                     request.header().uri());
-
-        // 调用用户处理函数
-        m_handler(request, response);
-
-        // 发送响应
-        auto send_result = co_await writer.sendResponse(response);
-        if (!send_result) {
-            HTTP_LOG_DEBUG("send response failed: {}", send_result.error().message());
-            co_await conn.socket().close();
-            co_return;
-        }
-
-        HTTP_LOG_DEBUG("response sent: {} bytes", send_result.value());
-
-        // 检查是否需要关闭连接
-        std::string connection_header = request.header().headerPairs().getValue("Connection");
-        if (!connection_header.empty() && connection_header == "close") {
-            co_await conn.socket().close();
-            co_return;
-        }
-
-        // HTTP/1.0默认关闭连接
-        if (request.header().version() == HttpVersion::HttpVersion_1_0) {
-            co_await conn.socket().close();
-            co_return;
-        }
+        // 创建HttpConn
+        HttpConn conn(std::move(client_socket), m_config.reader_setting, m_config.writer_setting);
+        scheduler->spawn(m_handler(std::move(conn)));
     }
 
     co_return;

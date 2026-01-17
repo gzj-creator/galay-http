@@ -65,7 +65,7 @@ void test_request_complete_in_one_shot()
     TEST_ASSERT(consumed == static_cast<ssize_t>(raw.size()), "Should consume all bytes");
     TEST_ASSERT(request.isComplete(), "Request should be complete");
     TEST_ASSERT(request.header().uri() == "/index.html", "URI should match");
-    TEST_ASSERT(request.header().method() == HttpMethod::HttpMethod_Get, "Method should be GET");
+    TEST_ASSERT(request.header().method() == HttpMethod::GET, "Method should be GET");
     TEST_ASSERT(request.getBodyStr() == "hello", "Body should match");
 
     buffer.consume(consumed);
@@ -220,7 +220,7 @@ void test_request_multiple_complete()
     TEST_ASSERT(err3 == kNoError, "Should parse third request");
     TEST_ASSERT(request3.isComplete(), "Third request should be complete");
     TEST_ASSERT(request3.header().uri() == "/api", "Third URI should match");
-    TEST_ASSERT(request3.header().method() == HttpMethod::HttpMethod_Post, "Third method should be POST");
+    TEST_ASSERT(request3.header().method() == HttpMethod::POST, "Third method should be POST");
     TEST_ASSERT(request3.getBodyStr() == "test", "Third body should match");
 
     buffer.consume(consumed3);
@@ -370,7 +370,7 @@ void test_request_reset()
 
     TEST_ASSERT(request.isComplete(), "Second request should be complete");
     TEST_ASSERT(request.header().uri() == "/second", "Second URI should match");
-    TEST_ASSERT(request.header().method() == HttpMethod::HttpMethod_Post, "Method should be POST");
+    TEST_ASSERT(request.header().method() == HttpMethod::POST, "Method should be POST");
     TEST_ASSERT(request.getBodyStr() == "abc", "Body should match");
 
     TEST_PASS("Request reset and reuse");

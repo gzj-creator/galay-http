@@ -168,22 +168,26 @@ private:
 
 ## 7. 移动语义
 
-HttpConn 禁用了拷贝和移动：
+HttpConn 支持移动语义：
 
 ```cpp
 // 禁用拷贝
 HttpConn(const HttpConn&) = delete;
 HttpConn& operator=(const HttpConn&) = delete;
 
-// 禁用移动
-HttpConn(HttpConn&&) = delete;
-HttpConn& operator=(HttpConn&&) = delete;
+// 启用移动
+HttpConn(HttpConn&&) = default;
+HttpConn& operator=(HttpConn&&) = default;
 ```
 
-**原因**:
-- `HttpReader` 和 `HttpWriter` 包含引用成员
-- 移动会导致引用失效
-- 通常不需要移动 HttpConn
+**设计说明**:
+- 所有成员变量（`TcpSocket`、`RingBuffer`、`HttpReaderSetting`、`HttpWriterSetting`）都支持移动语义
+- 可以安全地将 `HttpConn` 移动传递给协程或函数
+- 常用于 `HttpServer` 中将连接传递给处理协程：
+  ```cpp
+  HttpConn conn(std::move(client_socket), reader_setting, writer_setting);
+  scheduler->spawn(handler(std::move(conn)));
+  ```
 
 ## 8. 设计优势
 

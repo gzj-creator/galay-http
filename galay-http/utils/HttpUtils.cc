@@ -16,7 +16,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Get;
+        header.method() = HttpMethod::GET;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
@@ -29,7 +29,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Post;
+        header.method() = HttpMethod::POST;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
@@ -49,7 +49,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Put;
+        header.method() = HttpMethod::PUT;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
@@ -69,7 +69,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Delete;
+        header.method() = HttpMethod::DELETE;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
@@ -82,7 +82,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Patch;
+        header.method() = HttpMethod::PATCH;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
@@ -102,7 +102,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Head;
+        header.method() = HttpMethod::HEAD;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
@@ -115,7 +115,7 @@ namespace galay::http
     {
         HttpRequest request;
         HttpRequestHeader header;
-        header.method() = HttpMethod::HttpMethod_Options;
+        header.method() = HttpMethod::OPTIONS;
         header.uri() = uri;
         header.version() = HttpVersion::HttpVersion_1_1;
         header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);

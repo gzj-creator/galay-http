@@ -179,7 +179,7 @@ Coroutine handleClient(TcpSocket client, Host clientHost) {
 
         auto sendResult = co_await writer.sendResponse(response);
         if (sendResult) {
-            LogInfo("Response sent: {} bytes", sendResult.value());
+            LogInfo("Response sent: complete");
         } else {
             LogError("Failed to send response: {}", sendResult.error().message());
         }

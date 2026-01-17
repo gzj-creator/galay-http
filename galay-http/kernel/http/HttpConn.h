@@ -38,9 +38,9 @@ public:
     HttpConn(const HttpConn&) = delete;
     HttpConn& operator=(const HttpConn&) = delete;
 
-    // 禁用移动（因为HttpReader/Writer包含引用成员）
-    HttpConn(HttpConn&&) = delete;
-    HttpConn& operator=(HttpConn&&) = delete;
+    // 启用移动
+    HttpConn(HttpConn&&) = default;
+    HttpConn& operator=(HttpConn&&) = default;
 
     /**
      * @brief 关闭连接

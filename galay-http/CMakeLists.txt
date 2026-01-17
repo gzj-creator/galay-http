@@ -12,7 +12,7 @@ set(HTTP_SOURCES
     kernel/http/HttpWriter.cc
     kernel/http/HttpConn.cc
     kernel/http/HttpServer.cc
-    # kernel/http/HttpClient.cc  # 暂时注释，需要重新设计
+    kernel/http/HttpClient.cc
 )
 
 # WebSocket 源文件

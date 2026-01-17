@@ -46,7 +46,7 @@ public:
         return m_send_awaitable.await_suspend(handle);
     }
 
-    std::expected<size_t, HttpError> await_resume();
+    std::expected<bool, HttpError> await_resume();
 
 private:
     HttpWriter& m_writer;

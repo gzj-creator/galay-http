@@ -430,7 +430,7 @@ namespace galay::http
     void HttpRequestHeader::reset()
     {
         m_version = HttpVersion::HttpVersion_Unknown;
-        m_method = HttpMethod::HttpMethod_Unknown;
+        m_method = HttpMethod::UNKNOWN;
         if(!m_uri.empty()) m_uri.clear();
         if(!m_argList.empty()) m_argList.clear();
         m_headerPairs.clear();

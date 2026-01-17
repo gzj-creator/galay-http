@@ -31,10 +31,39 @@ using namespace galay::http;
 using namespace galay::kernel;
 
 std::atomic<bool> g_server_running{false};
+std::atomic<int> g_request_count{0};
 
-// HTTP请求处理器
-void handleRequest(HttpRequest& request, HttpResponse& response) {
-    LogInfo("Handling request: {} {}",
+// HTTP请求处理器协程
+Coroutine handleRequest(HttpConn conn) {
+    g_request_count++;
+
+    // 获取 Reader 和 Writer
+    auto reader = conn.getReader();
+    auto writer = conn.getWriter();
+
+    // 读取HTTP请求
+    HttpRequest request;
+    bool requestComplete = false;
+
+    while (!requestComplete) {
+        auto result = co_await reader.getRequest(request);
+
+        if (!result) {
+            auto& error = result.error();
+            if (error.code() == kConnectionClose) {
+                LogInfo("Client disconnected");
+            } else {
+                LogError("Request parse error: {}", error.message());
+            }
+            co_await conn.close();
+            co_return;
+        }
+
+        requestComplete = result.value();
+    }
+
+    LogInfo("Request #{} received: {} {}",
+            g_request_count.load(),
             static_cast<int>(request.header().method()),
             request.header().uri());
 
@@ -118,8 +147,20 @@ void handleRequest(HttpRequest& request, HttpResponse& response) {
 
     resp_header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
 
+    // 发送响应
+    HttpResponse response;
     response.setHeader(std::move(resp_header));
     response.setBodyStr(std::move(body));
+
+    auto sendResult = co_await writer.sendResponse(response);
+    if (!sendResult) {
+        LogError("Failed to send response: {}", sendResult.error().message());
+    } else {
+        LogInfo("Response sent: complete");
+    }
+
+    co_await conn.close();
+    co_return;
 }
 
 int main() {
@@ -128,17 +169,13 @@ int main() {
     LogInfo("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
-    IOSchedulerType scheduler;
-    scheduler.start();
-    LogInfo("Scheduler started");
-
     // 配置并启动服务器
     HttpServerConfig server_config;
     server_config.host = "127.0.0.1";
     server_config.port = 8080;
     server_config.backlog = 128;
 
-    HttpServer server(&scheduler, server_config);
+    HttpServer server(server_config);
     server.setHandler(handleRequest);
 
     if (!server.start()) {
@@ -165,7 +202,6 @@ int main() {
     }
 
     server.stop();
-    scheduler.stop();
     LogInfo("Server stopped");
 #else
     LogWarn("This test requires kqueue (macOS), epoll or io_uring (Linux)");

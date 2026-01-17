@@ -5,7 +5,7 @@
 namespace galay::http
 {
 
-std::expected<size_t, HttpError> SendResponseAwaitable::await_resume()
+std::expected<bool, HttpError> SendResponseAwaitable::await_resume()
 {
     // 获取SendAwaitable的结果
     auto send_result = m_send_awaitable.await_resume();
@@ -16,12 +16,20 @@ std::expected<size_t, HttpError> SendResponseAwaitable::await_resume()
     }
 
     size_t bytes_written = send_result.value();
-    HTTP_LOG_DEBUG("sent {} bytes", bytes_written);
+    HTTP_LOG_DEBUG("sent {} bytes, remaining: {}", bytes_written, m_writer.getRemainingBytes());
 
     // 更新Writer的剩余发送字节数
     m_writer.updateRemaining(bytes_written);
 
-    return bytes_written;
+    // 检查是否发送完成
+    if (m_writer.getRemainingBytes() == 0) {
+        HTTP_LOG_DEBUG("send completed");
+        return true;
+    }
+
+    // 还有数据需要发送
+    HTTP_LOG_DEBUG("send incomplete, remaining: {} bytes", m_writer.getRemainingBytes());
+    return false;
 }
 
 SendResponseAwaitable HttpWriter::sendChunk(const std::string& data, bool is_last)

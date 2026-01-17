@@ -44,7 +44,7 @@ namespace galay::http
                 return static_cast<HttpMethod>(i);
             }
         }
-        return HttpMethod::HttpMethod_Unknown;
+        return HttpMethod::UNKNOWN;
     }
 
     std::string httpStatusCodeToString(HttpStatusCode code)

@@ -64,7 +64,7 @@ Coroutine sendChunkedRequest() {
 
     // 构造chunked请求头
     HttpRequestHeader reqHeader;
-    reqHeader.method() = HttpMethod::HttpMethod_Post;
+    reqHeader.method() = HttpMethod::POST;
     reqHeader.uri() = "/test";
     reqHeader.version() = HttpVersion::HttpVersion_1_1;
     reqHeader.headerPairs().addHeaderPair("Host", "127.0.0.1:9999");

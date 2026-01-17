@@ -143,7 +143,7 @@ Coroutine echoServer() {
 
                 auto sendResult = co_await writer.sendResponse(response);
                 if (sendResult) {
-                    LogInfo("Response sent (sendResponse): {} bytes", sendResult.value());
+                    LogInfo("Response sent (sendResponse): complete");
                 } else {
                     LogError("Failed to send response: {}", sendResult.error().message());
                 }
@@ -167,8 +167,7 @@ Coroutine echoServer() {
                     // 发送body
                     auto bodyResult = co_await writer.send(std::move(body));
                     if (bodyResult) {
-                        LogInfo("Response sent (sendHeader+send): {} bytes",
-                               headerResult.value() + bodyResult.value());
+                        LogInfo("Response sent (sendHeader+send): complete");
                     } else {
                         LogError("Failed to send body: {}", bodyResult.error().message());
                     }
@@ -195,8 +194,7 @@ Coroutine echoServer() {
                     // 发送body（原始数据）
                     auto bodyResult = co_await writer.send(body.data(), body.size());
                     if (bodyResult) {
-                        LogInfo("Response sent (send raw): {} bytes",
-                               headerResult.value() + bodyResult.value());
+                        LogInfo("Response sent (send raw): complete");
                     } else {
                         LogError("Failed to send body: {}", bodyResult.error().message());
                     }

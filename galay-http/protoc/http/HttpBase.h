@@ -39,18 +39,17 @@ namespace galay::http
 
     enum class HttpMethod: int
     {
-        HttpMethod_Get = 0,
-        HttpMethod_Post = 1,
-        HttpMethod_Head = 2,
-        HttpMethod_Put = 3,
-        HttpMethod_Delete = 4,
-        HttpMethod_Trace = 5,
-        HttpMethod_Options = 6,
-        HttpMethod_Connect = 7,
-        HttpMethod_Patch = 8,
-        HttpMethod_PRI = 9,        // HTTP/2 connection preface
-        HttpMethod_Unknown = 10,
-        HttpMethod_Size = HttpMethod_Unknown
+        GET = 0,
+        POST = 1,
+        HEAD = 2,
+        PUT = 3,
+        DELETE = 4,
+        TRACE = 5,
+        OPTIONS = 6,
+        CONNECT = 7,
+        PATCH = 8,
+        PRI = 9,        // HTTP/2 connection preface
+        UNKNOWN = 10,
     };
 
     enum class HttpVersion: int
@@ -153,17 +152,17 @@ namespace galay::http
     };
 
     // HTTP 方法常量（避免使用宏以防止与其他库冲突）
-    constexpr HttpMethod HTTP_GET = HttpMethod::HttpMethod_Get;
-    constexpr HttpMethod HTTP_POST = HttpMethod::HttpMethod_Post;
-    constexpr HttpMethod HTTP_HEAD = HttpMethod::HttpMethod_Head;
-    constexpr HttpMethod HTTP_PUT = HttpMethod::HttpMethod_Put;
-    constexpr HttpMethod HTTP_DELETE = HttpMethod::HttpMethod_Delete;
-    constexpr HttpMethod HTTP_TRACE = HttpMethod::HttpMethod_Trace;
-    constexpr HttpMethod HTTP_OPTIONS = HttpMethod::HttpMethod_Options;
-    constexpr HttpMethod HTTP_CONNECT = HttpMethod::HttpMethod_Connect;
-    constexpr HttpMethod HTTP_PATCH = HttpMethod::HttpMethod_Patch;
-    constexpr HttpMethod HTTP_PRI = HttpMethod::HttpMethod_PRI;
-    constexpr HttpMethod HTTP_UNKNOWN = HttpMethod::HttpMethod_Unknown;
+    constexpr HttpMethod HTTP_GET = HttpMethod::GET;
+    constexpr HttpMethod HTTP_POST = HttpMethod::POST;
+    constexpr HttpMethod HTTP_HEAD = HttpMethod::HEAD;
+    constexpr HttpMethod HTTP_PUT = HttpMethod::PUT;
+    constexpr HttpMethod HTTP_DELETE = HttpMethod::DELETE;
+    constexpr HttpMethod HTTP_TRACE = HttpMethod::TRACE;
+    constexpr HttpMethod HTTP_OPTIONS = HttpMethod::OPTIONS;
+    constexpr HttpMethod HTTP_CONNECT = HttpMethod::CONNECT;
+    constexpr HttpMethod HTTP_PATCH = HttpMethod::PATCH;
+    constexpr HttpMethod HTTP_PRI = HttpMethod::PRI;
+    constexpr HttpMethod HTTP_UNKNOWN = HttpMethod::UNKNOWN;
 
     constexpr HttpVersion HTTP_VERSION_1_0 = HttpVersion::HttpVersion_1_0;
     constexpr HttpVersion HTTP_VERSION_1_1 = HttpVersion::HttpVersion_1_1;

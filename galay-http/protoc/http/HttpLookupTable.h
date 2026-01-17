@@ -115,13 +115,13 @@ private:
 // 内联实现以获得最佳性能
 inline HttpMethod HttpLookupTable::parseMethod(std::string_view str) noexcept {
     if (str.empty()) {
-        return HttpMethod::HttpMethod_Unknown;
+        return HttpMethod::UNKNOWN;
     }
 
     char first = str[0];
     // 检查是否为大写字母
     if (first < 'A' || first > 'Z') {
-        return HttpMethod::HttpMethod_Unknown;
+        return HttpMethod::UNKNOWN;
     }
 
     size_t len = str.size();
@@ -131,32 +131,32 @@ inline HttpMethod HttpLookupTable::parseMethod(std::string_view str) noexcept {
         case 'G':
             // GET (3)
             if (len == 3 && str[1] == 'E' && str[2] == 'T') {
-                return HttpMethod::HttpMethod_Get;
+                return HttpMethod::GET;
             }
             break;
 
         case 'P':
             // POST (4), PUT (3), PATCH (5), PRI (3)
             if (len == 4 && str[1] == 'O' && str[2] == 'S' && str[3] == 'T') {
-                return HttpMethod::HttpMethod_Post;
+                return HttpMethod::POST;
             }
             if (len == 3) {
                 if (str[1] == 'U' && str[2] == 'T') {
-                    return HttpMethod::HttpMethod_Put;
+                    return HttpMethod::PUT;
                 }
                 if (str[1] == 'R' && str[2] == 'I') {
-                    return HttpMethod::HttpMethod_PRI;
+                    return HttpMethod::PRI;
                 }
             }
             if (len == 5 && str[1] == 'A' && str[2] == 'T' && str[3] == 'C' && str[4] == 'H') {
-                return HttpMethod::HttpMethod_Patch;
+                return HttpMethod::PATCH;
             }
             break;
 
         case 'H':
             // HEAD (4)
             if (len == 4 && str[1] == 'E' && str[2] == 'A' && str[3] == 'D') {
-                return HttpMethod::HttpMethod_Head;
+                return HttpMethod::HEAD;
             }
             break;
 
@@ -164,7 +164,7 @@ inline HttpMethod HttpLookupTable::parseMethod(std::string_view str) noexcept {
             // DELETE (6)
             if (len == 6 && str[1] == 'E' && str[2] == 'L' && str[3] == 'E' &&
                 str[4] == 'T' && str[5] == 'E') {
-                return HttpMethod::HttpMethod_Delete;
+                return HttpMethod::DELETE;
             }
             break;
 
@@ -172,7 +172,7 @@ inline HttpMethod HttpLookupTable::parseMethod(std::string_view str) noexcept {
             // OPTIONS (7)
             if (len == 7 && str[1] == 'P' && str[2] == 'T' && str[3] == 'I' &&
                 str[4] == 'O' && str[5] == 'N' && str[6] == 'S') {
-                return HttpMethod::HttpMethod_Options;
+                return HttpMethod::OPTIONS;
             }
             break;
 
@@ -180,14 +180,14 @@ inline HttpMethod HttpLookupTable::parseMethod(std::string_view str) noexcept {
             // CONNECT (7)
             if (len == 7 && str[1] == 'O' && str[2] == 'N' && str[3] == 'N' &&
                 str[4] == 'E' && str[5] == 'C' && str[6] == 'T') {
-                return HttpMethod::HttpMethod_Connect;
+                return HttpMethod::CONNECT;
             }
             break;
 
         case 'T':
             // TRACE (5)
             if (len == 5 && str[1] == 'R' && str[2] == 'A' && str[3] == 'C' && str[4] == 'E') {
-                return HttpMethod::HttpMethod_Trace;
+                return HttpMethod::TRACE;
             }
             break;
 
@@ -195,7 +195,7 @@ inline HttpMethod HttpLookupTable::parseMethod(std::string_view str) noexcept {
             break;
     }
 
-    return HttpMethod::HttpMethod_Unknown;
+    return HttpMethod::UNKNOWN;
 }
 
 inline HttpVersion HttpLookupTable::parseVersion(std::string_view str) noexcept {

@@ -100,15 +100,31 @@ HttpWriter writer(writerSetting, client);  // Writer 不需要 RingBuffer
 
 // 读取请求
 HttpRequest request;
-auto result = co_await reader.getRequest(request);
+bool requestComplete = false;
+while (!requestComplete) {
+    auto result = co_await reader.getRequest(request);
+    if (!result) {
+        // 错误处理
+        break;
+    }
+    requestComplete = result.value();
+}
 
-if (result && result.value()) {
+if (requestComplete) {
     // 请求完整，处理业务逻辑
     HttpResponse response;
     // ... 构造响应 ...
 
-    // 发送响应
-    auto sendResult = co_await writer.sendResponse(response);
+    // 发送响应（支持断点续传）
+    bool sendComplete = false;
+    while (!sendComplete) {
+        auto sendResult = co_await writer.sendResponse(response);
+        if (!sendResult) {
+            // 发送错误
+            break;
+        }
+        sendComplete = sendResult.value();
+    }
 }
 ```
 
@@ -125,34 +141,43 @@ Coroutine handleClient(TcpSocket client) {
 
     while (true) {
         HttpRequest request;
-        auto result = co_await reader.getRequest(request);
+        bool requestComplete = false;
 
-        if (!result) {
-            // 错误处理
-            auto& error = result.error();
-            if (error.code() == kConnectionClose) {
-                break;
+        // 读取请求（支持增量解析）
+        while (!requestComplete) {
+            auto result = co_await reader.getRequest(request);
+
+            if (!result) {
+                // 错误处理
+                auto& error = result.error();
+                if (error.code() == kConnectionClose) {
+                    co_await client.close();
+                    co_return;
+                }
+                // 发送错误响应
+                HttpResponse errorResponse;
+                // ... 构造错误响应 ...
+                co_await writer.sendResponse(errorResponse);
+                co_await client.close();
+                co_return;
             }
-            // 发送错误响应
-            HttpResponse errorResponse;
-            // ... 构造错误响应 ...
-            co_await writer.sendResponse(errorResponse);
-            break;
-        }
 
-        if (!result.value()) {
-            // 数据不完整，继续读取
-            continue;
+            requestComplete = result.value();
         }
 
         // 处理请求
         HttpResponse response;
         // ... 业务逻辑 ...
 
-        // 发送响应
-        auto sendResult = co_await writer.sendResponse(response);
-        if (!sendResult) {
-            break;
+        // 发送响应（支持断点续传）
+        bool sendComplete = false;
+        while (!sendComplete) {
+            auto sendResult = co_await writer.sendResponse(response);
+            if (!sendResult) {
+                co_await client.close();
+                co_return;
+            }
+            sendComplete = sendResult.value();
         }
 
         // 检查是否需要关闭连接
@@ -197,10 +222,13 @@ auto result = co_await writer.sendRequest(request);
 - 直接从 socket 读取到 buffer
 - 直接从 buffer 发送到 socket
 
-### 5.2 增量解析
-- 支持分片数据的增量解析
-- 自动处理不完整的请求
-- 返回 `std::expected<bool, HttpError>` 表示解析状态
+### 5.2 增量解析和发送
+- **HttpReader**: 支持分片数据的增量解析，自动处理不完整的请求
+- **HttpWriter**: 支持断点续传，自动处理未完全发送的数据
+- 统一返回 `std::expected<bool, HttpError>` 表示完成状态：
+  - `true`: 数据读取/发送完成
+  - `false`: 需要继续读取/发送
+  - `HttpError`: 发生错误
 
 ### 5.3 异步 IO
 - 基于协程的异步 IO

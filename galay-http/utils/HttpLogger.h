@@ -56,17 +56,17 @@ namespace galay::http
         using enum HttpMethod;
 
         switch (method) {
-        case HttpMethod_Get:     return "\033[32m"; // 绿色 - 安全操作
-        case HttpMethod_Post:    return "\033[33m"; // 黄色 - 数据修改
-        case HttpMethod_Put:     return "\033[34m"; // 蓝色 - 更新操作
-        case HttpMethod_Delete:  return "\033[31m"; // 红色 - 危险操作
-        case HttpMethod_Head:    return "\033[36m"; // 青色 - 元数据操作
-        case HttpMethod_Options: return "\033[35m"; // 品红 - 调试用途
-        case HttpMethod_Patch:   return "\033[35;1m"; // 亮品红 - 部分更新
-        case HttpMethod_Trace:   return "\033[37m"; // 灰色 - 诊断用途
-        case HttpMethod_Connect: return "\033[33;1m"; // 亮黄色 - 隧道连接
-        case HttpMethod_PRI:     return "\033[36;1m"; // 亮青色 - HTTP/2 升级
-        case HttpMethod_Unknown:
+        case GET:     return "\033[32m"; // 绿色 - 安全操作
+        case POST:    return "\033[33m"; // 黄色 - 数据修改
+        case PUT:     return "\033[34m"; // 蓝色 - 更新操作
+        case DELETE:  return "\033[31m"; // 红色 - 危险操作
+        case HEAD:    return "\033[36m"; // 青色 - 元数据操作
+        case OPTIONS: return "\033[35m"; // 品红 - 调试用途
+        case PATCH:   return "\033[35;1m"; // 亮品红 - 部分更新
+        case TRACE:   return "\033[37m"; // 灰色 - 诊断用途
+        case CONNECT: return "\033[33;1m"; // 亮黄色 - 隧道连接
+        case PRI:     return "\033[36;1m"; // 亮青色 - HTTP/2 升级
+        case UNKNOWN:
         default:                  return "\033[90m"; // 暗灰色 - 未知方法
         }
         return "\033[0m";

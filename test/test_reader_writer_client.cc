@@ -67,7 +67,7 @@ Coroutine testClient(int test_id, const std::string& path) {
         co_return;
     }
 
-    LogInfo("Test #{}: Request sent: {} bytes", test_id, sendResult.value());
+    LogInfo("Test #{}: Request sent: complete", test_id);
 
     // 接收响应
     char buffer[4096];
