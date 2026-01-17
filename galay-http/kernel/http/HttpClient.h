@@ -8,9 +8,80 @@
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include <string>
+#include <optional>
+#include <coroutine>
+#include <map>
 
 namespace galay::http
 {
+
+using namespace galay::async;
+using namespace galay::kernel;
+
+// 前向声明
+class HttpClient;
+
+/**
+ * @brief HTTP客户端等待体
+ * @details 自动处理完整的请求发送和响应接收流程
+ *          返回 std::expected<std::optional<HttpResponse>, HttpError>
+ *          - HttpResponse: 请求和响应全部完成
+ *          - std::nullopt: 需要继续调用（数据未完全发送或接收）
+ *          - HttpError: 发生错误
+ */
+class HttpClientAwaitable
+{
+public:
+    /**
+     * @brief 构造函数
+     * @param client HttpClient引用
+     * @param request HttpRequest右值引用
+     */
+    HttpClientAwaitable(HttpClient& client, HttpRequest&& request);
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    bool await_suspend(std::coroutine_handle<> handle);
+
+    std::expected<std::optional<HttpResponse>, HttpError> await_resume();
+
+    /**
+     * @brief 检查状态是否为 Invalid
+     * @return true 如果状态为 Invalid
+     */
+    bool isInvalid() const {
+        return m_state == State::Invalid;
+    }
+
+    /**
+     * @brief 重置状态并清理资源
+     * @details 在错误发生时调用，确保资源正确清理
+     */
+    void reset() {
+        m_state = State::Invalid;
+        m_send_awaitable.reset();
+        m_recv_awaitable.reset();
+        m_response = HttpResponse();  // 清空响应
+    }
+
+private:
+    enum class State {
+        Invalid,           // 无效状态，可以重新创建
+        Sending,           // 正在发送请求
+        Receiving          // 正在接收响应
+    };
+
+    HttpClient& m_client;
+    HttpRequest m_request;
+    HttpResponse m_response;
+    State m_state;
+
+    // 持有底层的 awaitable 对象
+    std::optional<SendResponseAwaitable> m_send_awaitable;
+    std::optional<GetResponseAwaitable> m_recv_awaitable;
+};
 
 using namespace galay::async;
 using namespace galay::kernel;
@@ -51,6 +122,50 @@ public:
     // 禁用移动
     HttpClient(HttpClient&&) = delete;
     HttpClient& operator=(HttpClient&&) = delete;
+
+    /**
+     * @brief 发送GET请求
+     * @param uri 请求URI
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& get(const std::string& uri,
+                             const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送POST请求
+     * @param uri 请求URI
+     * @param body 请求体
+     * @param content_type Content-Type，默认为 application/x-www-form-urlencoded
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& post(const std::string& uri,
+                              const std::string& body,
+                              const std::string& content_type = "application/x-www-form-urlencoded",
+                              const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送PUT请求
+     * @param uri 请求URI
+     * @param body 请求体
+     * @param content_type Content-Type
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& put(const std::string& uri,
+                             const std::string& body,
+                             const std::string& content_type = "application/json",
+                             const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送DELETE请求
+     * @param uri 请求URI
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& del(const std::string& uri,
+                             const std::map<std::string, std::string>& headers = {});
 
     /**
      * @brief 发送HTTP请求
@@ -116,6 +231,7 @@ private:
     HttpClientConfig m_config;
     HttpWriter m_writer;
     HttpReader m_reader;
+    std::optional<HttpClientAwaitable> m_awaitable;  // 存储 awaitable 对象
 };
 
 } // namespace galay::http

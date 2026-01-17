@@ -15,6 +15,8 @@ set(HTTP_TESTS
     test_reader_writer_client
     test_http_server
     test_http_client
+    test_http_client_awaitable
+    test_http_client_awaitable_edge_cases
     test_chunked_server
     test_chunked_client
     # test_http_reader_writer  # 旧版本，已拆分为server和client
