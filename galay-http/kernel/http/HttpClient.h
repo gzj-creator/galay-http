@@ -180,6 +180,55 @@ public:
                              const std::map<std::string, std::string>& headers = {});
 
     /**
+     * @brief 发送HEAD请求
+     * @param uri 请求URI
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& head(const std::string& uri,
+                              const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送OPTIONS请求
+     * @param uri 请求URI
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& options(const std::string& uri,
+                                 const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送PATCH请求
+     * @param uri 请求URI
+     * @param body 请求体
+     * @param content_type Content-Type，默认为 application/json
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& patch(const std::string& uri,
+                               const std::string& body,
+                               const std::string& content_type = "application/json",
+                               const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送TRACE请求
+     * @param uri 请求URI
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& trace(const std::string& uri,
+                               const std::map<std::string, std::string>& headers = {});
+
+    /**
+     * @brief 发送CONNECT请求
+     * @param uri 请求URI（通常是 host:port 格式）
+     * @param headers 可选的额外请求头
+     * @return HttpClientAwaitable& 客户端等待体引用
+     */
+    HttpClientAwaitable& connect(const std::string& uri,
+                                 const std::map<std::string, std::string>& headers = {});
+
+    /**
      * @brief 发送HTTP请求
      * @param request HttpRequest引用
      * @return SendResponseAwaitable 发送等待体

@@ -239,4 +239,142 @@ HttpClientAwaitable& HttpClient::del(const std::string& uri,
     return *m_awaitable;
 }
 
+HttpClientAwaitable& HttpClient::head(const std::string& uri,
+                                      const std::map<std::string, std::string>& headers)
+{
+    // 只有当 awaitable 不存在或状态为 Invalid 时，才创建新的
+    if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
+        HttpRequest request;
+        HttpRequestHeader header;
+
+        header.method() = HttpMethod::HEAD;
+        header.uri() = uri;
+        header.version() = HttpVersion::HttpVersion_1_1;
+
+        // 添加额外的请求头
+        for (const auto& [key, value] : headers) {
+            header.headerPairs().addHeaderPair(key, value);
+        }
+
+        request.setHeader(std::move(header));
+
+        // 在 HttpClient 内部创建并存储 awaitable
+        m_awaitable.emplace(*this, std::move(request));
+    }
+
+    return *m_awaitable;
+}
+
+HttpClientAwaitable& HttpClient::options(const std::string& uri,
+                                         const std::map<std::string, std::string>& headers)
+{
+    // 只有当 awaitable 不存在或状态为 Invalid 时，才创建新的
+    if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
+        HttpRequest request;
+        HttpRequestHeader header;
+
+        header.method() = HttpMethod::OPTIONS;
+        header.uri() = uri;
+        header.version() = HttpVersion::HttpVersion_1_1;
+
+        // 添加额外的请求头
+        for (const auto& [key, value] : headers) {
+            header.headerPairs().addHeaderPair(key, value);
+        }
+
+        request.setHeader(std::move(header));
+
+        // 在 HttpClient 内部创建并存储 awaitable
+        m_awaitable.emplace(*this, std::move(request));
+    }
+
+    return *m_awaitable;
+}
+
+HttpClientAwaitable& HttpClient::patch(const std::string& uri,
+                                       const std::string& body,
+                                       const std::string& content_type,
+                                       const std::map<std::string, std::string>& headers)
+{
+    // 只有当 awaitable 不存在或状态为 Invalid 时，才创建新的
+    if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
+        HttpRequest request;
+        HttpRequestHeader header;
+
+        header.method() = HttpMethod::PATCH;
+        header.uri() = uri;
+        header.version() = HttpVersion::HttpVersion_1_1;
+        header.headerPairs().addHeaderPair("Content-Type", content_type);
+        header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+
+        // 添加额外的请求头
+        for (const auto& [key, value] : headers) {
+            header.headerPairs().addHeaderPair(key, value);
+        }
+
+        request.setHeader(std::move(header));
+
+        // 创建 body 的可修改副本
+        std::string body_copy = body;
+        request.setBodyStr(std::move(body_copy));
+
+        // 在 HttpClient 内部创建并存储 awaitable
+        m_awaitable.emplace(*this, std::move(request));
+    }
+
+    return *m_awaitable;
+}
+
+HttpClientAwaitable& HttpClient::trace(const std::string& uri,
+                                       const std::map<std::string, std::string>& headers)
+{
+    // 只有当 awaitable 不存在或状态为 Invalid 时，才创建新的
+    if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
+        HttpRequest request;
+        HttpRequestHeader header;
+
+        header.method() = HttpMethod::TRACE;
+        header.uri() = uri;
+        header.version() = HttpVersion::HttpVersion_1_1;
+
+        // 添加额外的请求头
+        for (const auto& [key, value] : headers) {
+            header.headerPairs().addHeaderPair(key, value);
+        }
+
+        request.setHeader(std::move(header));
+
+        // 在 HttpClient 内部创建并存储 awaitable
+        m_awaitable.emplace(*this, std::move(request));
+    }
+
+    return *m_awaitable;
+}
+
+HttpClientAwaitable& HttpClient::connect(const std::string& uri,
+                                         const std::map<std::string, std::string>& headers)
+{
+    // 只有当 awaitable 不存在或状态为 Invalid 时，才创建新的
+    if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
+        HttpRequest request;
+        HttpRequestHeader header;
+
+        header.method() = HttpMethod::CONNECT;
+        header.uri() = uri;
+        header.version() = HttpVersion::HttpVersion_1_1;
+
+        // 添加额外的请求头
+        for (const auto& [key, value] : headers) {
+            header.headerPairs().addHeaderPair(key, value);
+        }
+
+        request.setHeader(std::move(header));
+
+        // 在 HttpClient 内部创建并存储 awaitable
+        m_awaitable.emplace(*this, std::move(request));
+    }
+
+    return *m_awaitable;
+}
+
 } // namespace galay::http
