@@ -5,6 +5,7 @@
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/websocket/WebSocketError.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
 #include <coroutine>
@@ -21,8 +22,13 @@ class WsWriter;
 
 /**
  * @brief WebSocket帧发送等待体
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await writer.sendText("hello").timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class SendFrameAwaitable
+class SendFrameAwaitable : public galay::kernel::TimeoutSupport<SendFrameAwaitable>
 {
 public:
     SendFrameAwaitable(WsWriter& writer, SendAwaitable&& send_awaitable)
@@ -44,6 +50,10 @@ public:
 private:
     WsWriter& m_writer;
     SendAwaitable m_send_awaitable;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<size_t, galay::kernel::IOError> m_result;
 };
 
 /**

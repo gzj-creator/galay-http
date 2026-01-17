@@ -7,6 +7,7 @@
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
 #include <coroutine>
@@ -20,8 +21,13 @@ using namespace galay::async;
 /**
  * @brief HTTP请求读取等待体
  * @details 用于异步读取HTTP请求，内部使用ReadvAwaitable进行实际的IO操作
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await reader.getRequest(request).timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class GetRequestAwaitable
+class GetRequestAwaitable : public galay::kernel::TimeoutSupport<GetRequestAwaitable>
 {
 public:
     /**
@@ -75,13 +81,22 @@ private:
     HttpRequest& m_request;
     ReadvAwaitable m_readv_awaitable;
     size_t m_total_received;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
  * @brief HTTP响应读取等待体
  * @details 用于异步读取HTTP响应，内部使用ReadvAwaitable进行实际的IO操作
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await reader.getResponse(response).timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class GetResponseAwaitable
+class GetResponseAwaitable : public galay::kernel::TimeoutSupport<GetResponseAwaitable>
 {
 public:
     /**
@@ -135,14 +150,23 @@ private:
     HttpResponse& m_response;
     ReadvAwaitable m_readv_awaitable;
     size_t m_total_received;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
  * @brief HTTP Chunk读取等待体
  * @details 用于异步读取HTTP chunked编码的数据块
  *          每次调用从RingBuffer消费一个或多个完整的chunk
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await reader.getChunk(chunk_data).timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class GetChunkAwaitable
+class GetChunkAwaitable : public galay::kernel::TimeoutSupport<GetChunkAwaitable>
 {
 public:
     /**
@@ -194,6 +218,10 @@ private:
     const HttpReaderSetting& m_setting;
     std::string& m_chunk_data;
     ReadvAwaitable m_readv_awaitable;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**

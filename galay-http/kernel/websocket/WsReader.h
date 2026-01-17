@@ -6,6 +6,7 @@
 #include "galay-http/protoc/websocket/WebSocketError.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
 #include <coroutine>
@@ -18,8 +19,13 @@ using namespace galay::async;
 
 /**
  * @brief WebSocket帧读取等待体
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await reader.getFrame(frame).timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class GetFrameAwaitable
+class GetFrameAwaitable : public galay::kernel::TimeoutSupport<GetFrameAwaitable>
 {
 public:
     GetFrameAwaitable(RingBuffer& ring_buffer,
@@ -60,13 +66,22 @@ private:
     ReadvAwaitable m_readv_awaitable;
     bool m_is_server;
     size_t m_total_received;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
  * @brief WebSocket消息读取等待体
  * @details 自动处理分片消息，返回完整的消息内容
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await reader.getMessage(message, opcode).timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class GetMessageAwaitable
+class GetMessageAwaitable : public galay::kernel::TimeoutSupport<GetMessageAwaitable>
 {
 public:
     GetMessageAwaitable(RingBuffer& ring_buffer,
@@ -112,6 +127,10 @@ private:
     bool m_is_server;
     size_t m_total_received;
     bool m_first_frame;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**

@@ -6,6 +6,7 @@
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
 #include <coroutine>
@@ -23,8 +24,13 @@ class HttpWriter;
 /**
  * @brief HTTP响应写入等待体
  * @details 用于异步写入HTTP响应，支持断点续传
+ *
+ * @note 支持超时设置：
+ * @code
+ * auto result = co_await writer.sendResponse(response).timeout(std::chrono::seconds(5));
+ * @endcode
  */
-class SendResponseAwaitable
+class SendResponseAwaitable : public galay::kernel::TimeoutSupport<SendResponseAwaitable>
 {
 public:
     /**
@@ -51,6 +57,10 @@ public:
 private:
     HttpWriter& m_writer;
     SendAwaitable m_send_awaitable;
+
+public:
+    // TimeoutSupport 需要访问此成员来设置超时错误
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
