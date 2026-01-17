@@ -31,8 +31,8 @@ HttpConn 是一个轻量级的连接容器，负责存储配置和底层资源�
 HttpConn 提供工厂方法，按需创建 Reader 和 Writer：
 
 ```cpp
-HttpReader getReader();
-HttpWriter getWriter();
+HttpReader getReader();   // 需要 RingBuffer
+HttpWriter getWriter();   // 不需要 RingBuffer
 ```
 
 **设计优势**:

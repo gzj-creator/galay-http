@@ -73,7 +73,7 @@ public:
      * @return HttpWriter 临时构造的Writer对象
      */
     HttpWriter getWriter() {
-        return HttpWriter(m_ring_buffer, m_writer_setting, m_socket);
+        return HttpWriter(m_writer_setting, m_socket);
     }
 
     // 允许HttpServer访问私有成员

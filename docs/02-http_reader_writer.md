@@ -18,10 +18,11 @@ HttpReader 和 HttpWriter 提供异步的 HTTP 请求读取和响应发送功能
 - **文件**: `galay-http/kernel/http/HttpWriter.h/cc`
 - **功能**: 异步发送 HTTP 响应
 - **特性**:
-  - 自动将响应序列化到 `RingBuffer`
-  - 自动调用 `socket.writev(ringBuffer.getReadIovecs())`
-  - 完全隐藏 `IOController` 和 `WritevAwaitable`
+  - 自动将响应序列化为字符串
+  - 使用 `socket.send()` 发送数据
+  - 完全隐藏 `IOController` 和 `SendAwaitable`
   - 返回 `ResponseAwaitable`
+  - 不依赖 `RingBuffer`
 
 ### 2.3 HttpReaderSetting
 - **文件**: `galay-http/kernel/http/HttpReaderSetting.h`
@@ -55,15 +56,14 @@ RequestAwaitable getRequest(HttpRequest& request) {
 
 **HttpWriter**:
 ```cpp
-// 构造时接收 TcpSocket& 引用和 RingBuffer&
-HttpWriter(RingBuffer& ring_buffer, const HttpWriterSetting& setting, TcpSocket& socket);
+// 构造时接收 TcpSocket& 引用（不需要 RingBuffer）
+HttpWriter(const HttpWriterSetting& setting, TcpSocket& socket);
 
-// sendResponse() 内部自动序列化并调用 socket.writev()
+// sendResponse() 内部自动序列化并调用 socket.send()
 ResponseAwaitable sendResponse(HttpResponse& response) {
     std::string responseStr = response.toString();
-    m_ring_buffer.write(responseStr.data(), responseStr.size());
-    auto readIovecs = m_ring_buffer.getReadIovecs();
-    return ResponseAwaitable(response, m_socket.writev(std::move(readIovecs)));
+    return ResponseAwaitable(std::move(responseStr),
+                            m_socket.send(responseStr.data(), responseStr.size()));
 }
 ```
 
@@ -87,7 +87,7 @@ HttpWriterSetting writerSetting;
 
 // 创建 Reader 和 Writer
 HttpReader reader(ringBuffer, readerSetting, client);
-HttpWriter writer(ringBuffer, writerSetting, client);
+HttpWriter writer(writerSetting, client);  // Writer 不需要 RingBuffer
 
 // 读取请求
 HttpRequest request;
@@ -112,7 +112,7 @@ Coroutine handleClient(TcpSocket client) {
     HttpWriterSetting writerSetting;
 
     HttpReader reader(ringBuffer, readerSetting, client);
-    HttpWriter writer(ringBuffer, writerSetting, client);
+    HttpWriter writer(writerSetting, client);  // Writer 不需要 RingBuffer
 
     while (true) {
         HttpRequest request;
@@ -233,10 +233,11 @@ wrk -t4 -c100 -d10s http://127.0.0.1:9999/test
 ### 7.2 HttpWriter 验证
 - ✅ 正确序列化 HTTP 响应
 - ✅ 异步发送功能正常
-- ✅ 使用 WritevAwaitable 进行零拷贝发送
-- ✅ 自动管理 RingBuffer
-- ✅ 自动调用 `socket.writev()`
-- ✅ 完全隐藏 `IOController` 和 `WritevAwaitable`
+- ✅ 使用 SendAwaitable 进行发送
+- ✅ 自动管理响应字符串生命周期
+- ✅ 自动调用 `socket.send()`
+- ✅ 完全隐藏 `IOController` 和 `SendAwaitable`
+- ✅ 不依赖 `RingBuffer`
 
 ## 8. API 对比
 
@@ -263,7 +264,7 @@ auto sendResult = co_await writer.sendResponse(response, client.writev(std::move
 
 ```cpp
 HttpReader reader(ringBuffer, readerSetting, client);
-HttpWriter writer(ringBuffer, writerSetting, client);
+HttpWriter writer(writerSetting, client);  // Writer 不需要 RingBuffer
 
 // 自动化处理，简洁明了
 auto result = co_await reader.getRequest(request);

@@ -92,7 +92,7 @@ Coroutine echoServer() {
         HttpReaderSetting readerSetting;
         HttpWriterSetting writerSetting;
         HttpReader reader(ringBuffer, readerSetting, client);
-        HttpWriter writer(ringBuffer, writerSetting, client);
+        HttpWriter writer(writerSetting, client);
 
         // 读取HTTP请求
         HttpRequest request;

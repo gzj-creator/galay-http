@@ -6,9 +6,9 @@
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/common/Buffer.h"
 #include <expected>
 #include <coroutine>
+#include <string>
 
 namespace galay::http
 {
@@ -25,12 +25,12 @@ class ResponseAwaitable
 public:
     /**
      * @brief 构造函数
-     * @param response HttpResponse引用
-     * @param writev_awaitable WritevAwaitable右值引用
+     * @param response_str 响应字符串（需要保持生命周期）
+     * @param send_awaitable SendAwaitable右值引用
      */
-    ResponseAwaitable(HttpResponse& response, WritevAwaitable&& writev_awaitable)
-        : m_response(response)
-        , m_writev_awaitable(std::move(writev_awaitable))
+    ResponseAwaitable(std::string&& response_str, SendAwaitable&& send_awaitable)
+        : m_response_str(std::move(response_str))
+        , m_send_awaitable(std::move(send_awaitable))
     {
     }
 
@@ -39,14 +39,14 @@ public:
     }
 
     auto await_suspend(std::coroutine_handle<> handle) {
-        return m_writev_awaitable.await_suspend(handle);
+        return m_send_awaitable.await_suspend(handle);
     }
 
     std::expected<size_t, HttpError> await_resume();
 
 private:
-    HttpResponse& m_response;
-    WritevAwaitable m_writev_awaitable;
+    std::string m_response_str;  // 保持响应字符串的生命周期
+    SendAwaitable m_send_awaitable;
 };
 
 /**
@@ -58,13 +58,11 @@ class HttpWriter
 public:
     /**
      * @brief 构造函数
-     * @param ring_buffer RingBuffer引用，用于缓冲发送的数据
      * @param setting HttpWriterSetting引用，包含写入配置
      * @param socket TcpSocket引用，用于IO操作
      */
-    HttpWriter(RingBuffer& ring_buffer, const HttpWriterSetting& setting, TcpSocket& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
+    HttpWriter(const HttpWriterSetting& setting, TcpSocket& socket)
+        : m_setting(setting)
         , m_socket(socket)
     {
     }
@@ -75,17 +73,15 @@ public:
      * @return ResponseAwaitable 响应等待体
      */
     ResponseAwaitable sendResponse(HttpResponse& response) {
-        // 将响应序列化到 RingBuffer
+        // 将响应序列化为字符串
         std::string responseStr = response.toString();
-        m_ring_buffer.write(responseStr.data(), responseStr.size());
 
-        // 获取可读的 iovec 并发送
-        auto readIovecs = m_ring_buffer.getReadIovecs();
-        return ResponseAwaitable(response, m_socket.writev(std::move(readIovecs)));
+        // 返回 ResponseAwaitable，内部持有 responseStr 保持生命周期
+        return ResponseAwaitable(std::move(responseStr),
+                                m_socket.send(responseStr.data(), responseStr.size()));
     }
 
 private:
-    RingBuffer& m_ring_buffer;
     const HttpWriterSetting& m_setting;
     TcpSocket& m_socket;
 };
