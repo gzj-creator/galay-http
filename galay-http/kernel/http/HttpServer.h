@@ -17,9 +17,9 @@ using namespace galay::kernel;
 
 /**
  * @brief HTTP连接处理器类型
- * @details 用户提供的处理函数，接收HttpConn引用
+ * @details 用户提供的处理函数，接收HttpConn
  */
-using HttpHandler = std::function<Coroutine(HttpConn)>;
+using HttpConnHandler = std::function<Coroutine(HttpConn)>;
 
 /**
  * @brief HTTP服务器配置
@@ -61,16 +61,9 @@ public:
      * @brief 设置HTTP请求处理器
      * @param handler 处理函数
      */
-    void setHandler(HttpHandler handler) {
-        m_handler = std::move(handler);
-    }
+    void start(HttpConnHandler handler);
 
-    /**
-     * @brief 启动服务器
-     * @return 是否启动成功
-     * @details 会自动启动内置的 Runtime
-     */
-    bool start();
+
 
     /**
      * @brief 停止服务器
@@ -96,6 +89,14 @@ public:
 
 private:
     /**
+     * @brief 启动服务器
+     * @return 是否启动成功
+     * @details 会自动启动内置的 Runtime
+     */
+    bool start();
+
+
+    /**
      * @brief 服务器主循环协程
      */
     Coroutine serverLoop();
@@ -103,7 +104,7 @@ private:
 private:
     Runtime m_runtime;                  // 内置的 Runtime
     HttpServerConfig m_config;
-    HttpHandler m_handler;
+    HttpConnHandler m_handler;
     std::unique_ptr<TcpSocket> m_listener;
     std::atomic<bool> m_running;
 };

@@ -11,6 +11,7 @@ set(BENCHMARKS
     bench_http_parser
     bench_chunked
     bench_websocket
+    benchmark_http_router
 )
 
 foreach(BENCH_NAME ${BENCHMARKS})

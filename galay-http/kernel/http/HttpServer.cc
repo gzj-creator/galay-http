@@ -18,6 +18,12 @@ HttpServer::~HttpServer()
     stop();
 }
 
+void HttpServer::start(HttpConnHandler handler)
+{
+    m_handler = handler;
+    start();
+}
+
 bool HttpServer::start()
 {
     if (m_running.load()) {
