@@ -146,5 +146,28 @@ namespace galay::http
         m_contentLength = 0;
         m_bodyParsed = 0;
         m_headerParsed = false;
+        m_routeParams.clear();
+    }
+
+    // ==================== 路由参数方法实现 ====================
+    void HttpRequest::setRouteParams(std::map<std::string, std::string>&& params)
+    {
+        m_routeParams = std::move(params);
+    }
+
+    const std::map<std::string, std::string>& HttpRequest::routeParams() const
+    {
+        return m_routeParams;
+    }
+
+    std::string HttpRequest::getRouteParam(const std::string& name, const std::string& defaultValue) const
+    {
+        auto it = m_routeParams.find(name);
+        return it != m_routeParams.end() ? it->second : defaultValue;
+    }
+
+    bool HttpRequest::hasRouteParam(const std::string& name) const
+    {
+        return m_routeParams.find(name) != m_routeParams.end();
     }
 }
