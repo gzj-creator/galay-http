@@ -43,6 +43,7 @@ struct RouteTrieNode
     std::string paramName;                                                      // 参数名（如果是参数节点）
     bool isParam = false;                                                       // 是否为参数节点（:id）
     bool isWildcard = false;                                                    // 是否为通配符节点（*）
+    std::vector<std::string> routeParamNames;                                   // 完整路由的参数名列表（仅在终点节点有效）
 };
 
 /**
@@ -142,6 +143,14 @@ private:
      * @return 路径段列表
      */
     std::vector<std::string> splitPath(const std::string& path) const;
+
+    /**
+     * @brief 验证路径格式是否合法
+     * @param path 路径
+     * @param error 错误信息（输出参数）
+     * @return 是否合法
+     */
+    bool validatePath(const std::string& path, std::string& error) const;
 
     /**
      * @brief 在Trie树中插入路由

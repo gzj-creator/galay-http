@@ -25,6 +25,7 @@ set(HTTP_TESTS
     test_chunked_server
     test_chunked_client
     test_http_router
+    test_http_router_validation
     # test_http_reader_writer  # 旧版本，已拆分为server和client
     # test_http_server_client  # 暂时注释，等HttpClient重新设计后再启用
 )
