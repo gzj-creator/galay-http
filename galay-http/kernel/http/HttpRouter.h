@@ -43,7 +43,6 @@ struct RouteTrieNode
     std::string paramName;                                                      // 参数名（如果是参数节点）
     bool isParam = false;                                                       // 是否为参数节点（:id）
     bool isWildcard = false;                                                    // 是否为通配符节点（*）
-    std::vector<std::string> routeParamNames;                                   // 完整路由的参数名列表（仅在终点节点有效）
 };
 
 /**
@@ -55,8 +54,8 @@ struct RouteTrieNode
  *          支持的路径模式：
  *          - 精确路径：/api/users
  *          - 路径参数：/user/:id 匹配 /user/123，提取 id=123
- *          - 通配符：/static/* 匹配 /static/任意单段
- *          - 贪婪通配符：/files/** 匹配 /files/任意多段
+ *          - 通配符：/static/\* 匹配 /static/任意单段
+ *          - 贪婪通配符：/files/\*\* 匹配 /files/任意多段
  */
 class HttpRouter
 {
@@ -85,7 +84,7 @@ public:
      * @param path 路由路径，支持：
      *             - 精确路径：/api/users
      *             - 路径参数：/user/:id 或 /user/:id/posts/:postId
-     *             - 通配符：/static/* 或 /files/**
+     *             - 通配符：/static/\* 或 /files/\*\*
      * @param handler 处理函数
      * @details 支持多个HTTP方法，例如: addHandler<HttpMethod::GET, HttpMethod::POST>("/api", handler)
      */
@@ -108,7 +107,7 @@ public:
      * @param path 路由路径
      * @return 是否成功移除
      */
-    bool removeHandler(HttpMethod method, const std::string& path);
+    bool delHandler(HttpMethod method, const std::string& path);
 
     /**
      * @brief 清空所有路由

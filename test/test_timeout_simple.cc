@@ -48,7 +48,7 @@ Coroutine testConnectTimeout(IOScheduler* scheduler)
 
     if (!result) {
         LogInfo("Connect failed as expected: {}", result.error().message());
-        LogInfo("Error code: {}", result.error().code());
+        LogInfo("Error code: {}", static_cast<int>(result.error().code()));
 
         // 验证是否是超时错误
         if (result.error().code() == kTimeout) {
@@ -61,7 +61,7 @@ Coroutine testConnectTimeout(IOScheduler* scheduler)
                 LogError("❌ Timeout duration is incorrect: {} ms (expected ~2000ms)", elapsed);
             }
         } else {
-            LogError("❌ Expected timeout error, but got error code: {}", result.error().code());
+            LogError("❌ Expected timeout error, but got error code: {}", static_cast<int>(result.error().code()));
         }
     } else {
         LogError("❌ Connect should have timed out but succeeded!");
@@ -101,7 +101,7 @@ Coroutine testNormalConnect(IOScheduler* scheduler)
 
     if (!result) {
         LogInfo("Connect failed: {}", result.error().message());
-        LogInfo("Error code: {}", result.error().code());
+        LogInfo("Error code: {}", static_cast<int>(result.error().code()));
 
         // 连接到本地回环地址应该快速失败（不是超时）
         if (result.error().code() != kTimeout) {
@@ -169,7 +169,7 @@ Coroutine testHttpRequestTimeout(IOScheduler* scheduler)
         if (!result) {
             LogInfo("Request failed after {} ms (loop {})", elapsed, loop_count);
             LogInfo("Error: {}", result.error().message());
-            LogInfo("Error code: {}", result.error().code());
+            LogInfo("Error code: {}", static_cast<int>(result.error().code()));
 
             if (result.error().code() == kRequestTimeOut || result.error().code() == kRecvTimeOut) {
                 LogInfo("✓ Request timed out as expected!");
@@ -180,7 +180,7 @@ Coroutine testHttpRequestTimeout(IOScheduler* scheduler)
                     LogInfo("⚠ Timeout duration: {} ms (expected ~1000ms)", elapsed);
                 }
             } else {
-                LogInfo("⚠ Got error but not timeout: {}", result.error().code());
+                LogInfo("⚠ Got error but not timeout: {}", static_cast<int>(result.error().code()));
             }
             break;
         } else if (result.value().has_value()) {

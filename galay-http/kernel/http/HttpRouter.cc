@@ -1,7 +1,6 @@
 #include "HttpRouter.h"
 #include "HttpLog.h"
 #include <sstream>
-#include <algorithm>
 #include <set>
 #include <cctype>
 
@@ -79,7 +78,7 @@ RouteMatch HttpRouter::findHandler(HttpMethod method, const std::string& path)
     return result;  // 未找到，handler为nullptr
 }
 
-bool HttpRouter::removeHandler(HttpMethod method, const std::string& path)
+bool HttpRouter::delHandler(HttpMethod method, const std::string& path)
 {
     // 尝试从精确匹配中移除
     auto methodIt = m_exactRoutes.find(method);
@@ -135,7 +134,6 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
                              HttpRouteHandler handler)
 {
     RouteTrieNode* node = root;
-    std::vector<std::string> paramNames;  // 收集参数名
 
     for (const auto& segment : segments) {
         // 判断段类型
@@ -151,12 +149,16 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
             // 参数节点（:id）
             // 所有参数节点共享同一个键 ":param"
             std::string paramName = segment.substr(1);  // 去掉冒号
-            paramNames.push_back(paramName);  // 收集参数名
 
             auto& child = node->children[":param"];
             if (!child) {
                 child = std::make_unique<RouteTrieNode>();
                 child->isParam = true;
+                child->paramName = paramName;  // 保存参数名在节点上
+            } else if (child->paramName != paramName) {
+                // 检测冲突：同一位置有不同的参数名
+                HTTP_LOG_WARN("Parameter name conflict at same position: '{}' vs '{}', using '{}'",
+                             child->paramName, paramName, child->paramName);
             }
             node = child.get();
         } else {
@@ -169,10 +171,9 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
         }
     }
 
-    // 标记为路径终点并设置处理函数和参数名列表
+    // 标记为路径终点并设置处理函数
     node->isEnd = true;
     node->handler = handler;
-    node->routeParamNames = std::move(paramNames);  // 存储完整的参数名列表
 }
 
 HttpRouteHandler* HttpRouter::searchRoute(RouteTrieNode* root, const std::vector<std::string>& segments,
@@ -181,20 +182,12 @@ HttpRouteHandler* HttpRouter::searchRoute(RouteTrieNode* root, const std::vector
     params.clear();
 
     // 使用递归进行深度优先搜索
-    // 同时收集参数值
-    std::vector<std::string> paramValues;  // 收集参数值
-
     std::function<HttpRouteHandler*(RouteTrieNode*, size_t)> dfs =
         [&](RouteTrieNode* node, size_t depth) -> HttpRouteHandler* {
 
         // 到达路径末尾
         if (depth == segments.size()) {
             if (node->isEnd) {
-                // 使用终点节点存储的参数名列表来构建参数映射
-                params.clear();
-                for (size_t i = 0; i < node->routeParamNames.size() && i < paramValues.size(); ++i) {
-                    params[node->routeParamNames[i]] = paramValues[i];
-                }
                 return &node->handler;
             }
             return nullptr;
@@ -212,14 +205,16 @@ HttpRouteHandler* HttpRouter::searchRoute(RouteTrieNode* root, const std::vector
         // 2. 尝试参数匹配（:param）
         auto paramIt = node->children.find(":param");
         if (paramIt != node->children.end()) {
-            // 保存参数值
-            paramValues.push_back(segment);
+            auto* paramNode = paramIt->second.get();
 
-            auto result = dfs(paramIt->second.get(), depth + 1);
+            // 直接使用节点的参数名保存参数值
+            params[paramNode->paramName] = segment;
+
+            auto result = dfs(paramNode, depth + 1);
             if (result) return result;
 
-            // 回溯：如果这条路径不匹配，移除参数值
-            paramValues.pop_back();
+            // 回溯：如果这条路径不匹配，移除参数
+            params.erase(paramNode->paramName);
         }
 
         // 3. 尝试单段通配符（*）

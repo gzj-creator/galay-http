@@ -76,7 +76,7 @@ Coroutine testGet(IOScheduler* scheduler)
     LogInfo("GET request successful:");
     LogInfo("  Status: {} {}",
             static_cast<int>(response.header().code()),
-            response.header().reason());
+            httpStatusCodeToString(response.header().code()));
     LogInfo("  Body length: {} bytes", response.getBodyStr().size());
     LogInfo("  Body preview: {}",
             response.getBodyStr().substr(0, std::min<size_t>(100, response.getBodyStr().size())));
@@ -153,7 +153,7 @@ Coroutine testPost(IOScheduler* scheduler)
     LogInfo("POST request successful:");
     LogInfo("  Status: {} {}",
             static_cast<int>(response.header().code()),
-            response.header().reason());
+            httpStatusCodeToString(response.header().code()));
     LogInfo("  Body length: {} bytes", response.getBodyStr().size());
 
     co_await client.close();
@@ -244,7 +244,7 @@ Coroutine testChunked(IOScheduler* scheduler)
     LogInfo("Chunked POST request successful:");
     LogInfo("  Status: {} {}",
             static_cast<int>(response.header().code()),
-            response.header().reason());
+            httpStatusCodeToString(response.header().code()));
     LogInfo("  Body length: {} bytes", response.getBodyStr().size());
 
     co_await client.close();

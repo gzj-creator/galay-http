@@ -51,6 +51,7 @@ foreach(TEST_NAME ${ALL_TESTS})
             ${CMAKE_SOURCE_DIR}/galay-http
             /usr/local/include
         )
+        target_compile_definitions(${TEST_NAME} PRIVATE USE_LOG)
         set_target_properties(${TEST_NAME} PROPERTIES
             CXX_STANDARD 23
             CXX_STANDARD_REQUIRED ON

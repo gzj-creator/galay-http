@@ -159,7 +159,7 @@ Coroutine sendChunkedRequest() {
 
     LogInfo("Response received: {} {}",
             static_cast<int>(response.header().code()),
-            response.header().code());
+            httpStatusCodeToString(response.header().code()));
 
     // 检查响应是否是chunked编码
     if (response.header().isChunked()) {

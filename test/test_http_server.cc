@@ -176,12 +176,6 @@ int main() {
     server_config.backlog = 128;
 
     HttpServer server(server_config);
-    server.setHandler(handleRequest);
-
-    if (!server.start()) {
-        LogError("Failed to start server");
-        return 1;
-    }
 
     g_server_running = true;
     LogInfo("========================================");
@@ -197,6 +191,7 @@ int main() {
     LogInfo("========================================\n");
 
     // 运行服务器（阻塞）
+    server.start(handleRequest);
     while (g_server_running.load()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }

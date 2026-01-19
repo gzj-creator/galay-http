@@ -60,7 +60,7 @@ Coroutine testGet(IOScheduler* scheduler)
             LogInfo("✓ GET request completed successfully!");
             LogInfo("  Status: {} {}",
                     static_cast<int>(response.header().code()),
-                    response.header().reason());
+                    httpStatusCodeToString(response.header().code()));
             LogInfo("  Body: {}", response.getBodyStr());
             LogInfo("  Total loops: {}", loop_count);
             break;
@@ -122,7 +122,7 @@ Coroutine testPost(IOScheduler* scheduler)
             LogInfo("✓ POST request completed successfully!");
             LogInfo("  Status: {} {}",
                     static_cast<int>(response.header().code()),
-                    response.header().reason());
+                    httpStatusCodeToString(response.header().code()));
             LogInfo("  Total loops: {}", loop_count);
             break;
         }

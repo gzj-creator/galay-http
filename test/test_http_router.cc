@@ -8,41 +8,40 @@
 #include "galay-http/kernel/http/HttpRouter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 
 using namespace galay::http;
-using namespace galay::kernel;
 
 // 测试用的简单处理器
 Coroutine testHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("Test handler called");
+    HTTP_LOG_INFO("Test handler called");
     co_return;
 }
 
 Coroutine userHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("User handler called");
+    HTTP_LOG_INFO("User handler called");
     co_return;
 }
 
 Coroutine postHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("Post handler called");
+    HTTP_LOG_INFO("Post handler called");
     co_return;
 }
 
 Coroutine staticHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("Static handler called");
+    HTTP_LOG_INFO("Static handler called");
     co_return;
 }
 
 Coroutine filesHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("Files handler called");
+    HTTP_LOG_INFO("Files handler called");
     co_return;
 }
 
 void testExactMatch() {
-    LogInfo("========================================");
-    LogInfo("Test 1: Exact Match");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 1: Exact Match");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
@@ -55,32 +54,32 @@ void testExactMatch() {
     auto match1 = router.findHandler(HttpMethod::GET, "/api/users");
     assert(match1.handler != nullptr);
     assert(match1.params.empty());
-    LogInfo("✓ GET /api/users matched");
+    HTTP_LOG_INFO("✓ GET /api/users matched");
 
     auto match2 = router.findHandler(HttpMethod::POST, "/api/users");
     assert(match2.handler != nullptr);
-    LogInfo("✓ POST /api/users matched");
+    HTTP_LOG_INFO("✓ POST /api/users matched");
 
     auto match3 = router.findHandler(HttpMethod::GET, "/api/posts");
     assert(match3.handler != nullptr);
-    LogInfo("✓ GET /api/posts matched");
+    HTTP_LOG_INFO("✓ GET /api/posts matched");
 
     // 测试不匹配
     auto match4 = router.findHandler(HttpMethod::GET, "/api/comments");
     assert(match4.handler == nullptr);
-    LogInfo("✓ GET /api/comments not matched (expected)");
+    HTTP_LOG_INFO("✓ GET /api/comments not matched (expected)");
 
     auto match5 = router.findHandler(HttpMethod::DELETE, "/api/users");
     assert(match5.handler == nullptr);
-    LogInfo("✓ DELETE /api/users not matched (expected)");
+    HTTP_LOG_INFO("✓ DELETE /api/users not matched (expected)");
 
-    LogInfo("✓ All exact match tests passed\n");
+    HTTP_LOG_INFO("✓ All exact match tests passed\n");
 }
 
 void testPathParameters() {
-    LogInfo("========================================");
-    LogInfo("Test 2: Path Parameters");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 2: Path Parameters");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
@@ -93,12 +92,12 @@ void testPathParameters() {
     assert(match1.handler != nullptr);
     assert(match1.params.size() == 1);
     assert(match1.params["id"] == "123");
-    LogInfo("✓ GET /user/123 matched, id={}", match1.params["id"]);
+    HTTP_LOG_INFO("✓ GET /user/123 matched, id={}", match1.params["id"]);
 
     auto match2 = router.findHandler(HttpMethod::GET, "/user/abc");
     assert(match2.handler != nullptr);
     assert(match2.params["id"] == "abc");
-    LogInfo("✓ GET /user/abc matched, id={}", match2.params["id"]);
+    HTTP_LOG_INFO("✓ GET /user/abc matched, id={}", match2.params["id"]);
 
     // 测试多个参数
     auto match3 = router.findHandler(HttpMethod::GET, "/user/456/posts/789");
@@ -106,25 +105,25 @@ void testPathParameters() {
     assert(match3.params.size() == 2);
     assert(match3.params["id"] == "456");
     assert(match3.params["postId"] == "789");
-    LogInfo("✓ GET /user/456/posts/789 matched, id={}, postId={}",
+    HTTP_LOG_INFO("✓ GET /user/456/posts/789 matched, id={}, postId={}",
             match3.params["id"], match3.params["postId"]);
 
     // 测试不匹配
     auto match4 = router.findHandler(HttpMethod::GET, "/user");
     assert(match4.handler == nullptr);
-    LogInfo("✓ GET /user not matched (expected)");
+    HTTP_LOG_INFO("✓ GET /user not matched (expected)");
 
     auto match5 = router.findHandler(HttpMethod::GET, "/user/123/posts");
     assert(match5.handler == nullptr);
-    LogInfo("✓ GET /user/123/posts not matched (expected)");
+    HTTP_LOG_INFO("✓ GET /user/123/posts not matched (expected)");
 
-    LogInfo("✓ All path parameter tests passed\n");
+    HTTP_LOG_INFO("✓ All path parameter tests passed\n");
 }
 
 void testWildcard() {
-    LogInfo("========================================");
-    LogInfo("Test 3: Wildcard Matching");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 3: Wildcard Matching");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
@@ -135,33 +134,33 @@ void testWildcard() {
     // 测试单段通配符
     auto match1 = router.findHandler(HttpMethod::GET, "/static/css");
     assert(match1.handler != nullptr);
-    LogInfo("✓ GET /static/css matched");
+    HTTP_LOG_INFO("✓ GET /static/css matched");
 
     auto match2 = router.findHandler(HttpMethod::GET, "/static/js");
     assert(match2.handler != nullptr);
-    LogInfo("✓ GET /static/js matched");
+    HTTP_LOG_INFO("✓ GET /static/js matched");
 
     // 单段通配符不应匹配多段
     auto match3 = router.findHandler(HttpMethod::GET, "/static/css/style.css");
     assert(match3.handler == nullptr);
-    LogInfo("✓ GET /static/css/style.css not matched by /* (expected)");
+    HTTP_LOG_INFO("✓ GET /static/css/style.css not matched by /* (expected)");
 
     // 测试贪婪通配符
     auto match4 = router.findHandler(HttpMethod::GET, "/files/a");
     assert(match4.handler != nullptr);
-    LogInfo("✓ GET /files/a matched");
+    HTTP_LOG_INFO("✓ GET /files/a matched");
 
     auto match5 = router.findHandler(HttpMethod::GET, "/files/a/b/c");
     assert(match5.handler != nullptr);
-    LogInfo("✓ GET /files/a/b/c matched");
+    HTTP_LOG_INFO("✓ GET /files/a/b/c matched");
 
-    LogInfo("✓ All wildcard tests passed\n");
+    HTTP_LOG_INFO("✓ All wildcard tests passed\n");
 }
 
 void testMultipleMethods() {
-    LogInfo("========================================");
-    LogInfo("Test 4: Multiple HTTP Methods");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 4: Multiple HTTP Methods");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
@@ -170,27 +169,27 @@ void testMultipleMethods() {
 
     auto match1 = router.findHandler(HttpMethod::GET, "/api/resource");
     assert(match1.handler != nullptr);
-    LogInfo("✓ GET /api/resource matched");
+    HTTP_LOG_INFO("✓ GET /api/resource matched");
 
     auto match2 = router.findHandler(HttpMethod::POST, "/api/resource");
     assert(match2.handler != nullptr);
-    LogInfo("✓ POST /api/resource matched");
+    HTTP_LOG_INFO("✓ POST /api/resource matched");
 
     auto match3 = router.findHandler(HttpMethod::PUT, "/api/resource");
     assert(match3.handler != nullptr);
-    LogInfo("✓ PUT /api/resource matched");
+    HTTP_LOG_INFO("✓ PUT /api/resource matched");
 
     auto match4 = router.findHandler(HttpMethod::DELETE, "/api/resource");
     assert(match4.handler == nullptr);
-    LogInfo("✓ DELETE /api/resource not matched (expected)");
+    HTTP_LOG_INFO("✓ DELETE /api/resource not matched (expected)");
 
-    LogInfo("✓ All multiple methods tests passed\n");
+    HTTP_LOG_INFO("✓ All multiple methods tests passed\n");
 }
 
 void testPriorityMatching() {
-    LogInfo("========================================");
-    LogInfo("Test 5: Priority Matching (Exact > Param > Wildcard)");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 5: Priority Matching (Exact > Param > Wildcard)");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
@@ -203,62 +202,62 @@ void testPriorityMatching() {
     auto match1 = router.findHandler(HttpMethod::GET, "/api/users");
     assert(match1.handler != nullptr);
     assert(match1.params.empty());
-    LogInfo("✓ /api/users matched exact route (highest priority)");
+    HTTP_LOG_INFO("✓ /api/users matched exact route (highest priority)");
 
     // 参数匹配应该次之
     auto match2 = router.findHandler(HttpMethod::GET, "/api/posts");
     assert(match2.handler != nullptr);
     assert(match2.params.size() == 1);
     assert(match2.params["resource"] == "posts");
-    LogInfo("✓ /api/posts matched param route, resource={}", match2.params["resource"]);
+    HTTP_LOG_INFO("✓ /api/posts matched param route, resource={}", match2.params["resource"]);
 
-    LogInfo("✓ All priority matching tests passed\n");
+    HTTP_LOG_INFO("✓ All priority matching tests passed\n");
 }
 
 void testRouterOperations() {
-    LogInfo("========================================");
-    LogInfo("Test 6: Router Operations (size, clear, remove)");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 6: Router Operations (size, clear, remove)");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
     // 测试 size
     assert(router.size() == 0);
-    LogInfo("✓ Initial size is 0");
+    HTTP_LOG_INFO("✓ Initial size is 0");
 
     router.addHandler<HttpMethod::GET>("/api/users", testHandler);
     router.addHandler<HttpMethod::POST>("/api/users", postHandler);
     router.addHandler<HttpMethod::GET>("/user/:id", userHandler);
 
     assert(router.size() == 3);
-    LogInfo("✓ Size is 3 after adding 3 routes");
+    HTTP_LOG_INFO("✓ Size is 3 after adding 3 routes");
 
     // 测试 remove
-    bool removed = router.removeHandler(HttpMethod::GET, "/api/users");
+    bool removed = router.delHandler(HttpMethod::GET, "/api/users");
     assert(removed);
     assert(router.size() == 2);
-    LogInfo("✓ Removed GET /api/users, size is now 2");
+    HTTP_LOG_INFO("✓ Removed GET /api/users, size is now 2");
 
     auto match = router.findHandler(HttpMethod::GET, "/api/users");
     assert(match.handler == nullptr);
-    LogInfo("✓ GET /api/users no longer matches");
+    HTTP_LOG_INFO("✓ GET /api/users no longer matches");
 
     // 测试 clear
     router.clear();
     assert(router.size() == 0);
-    LogInfo("✓ Cleared router, size is 0");
+    HTTP_LOG_INFO("✓ Cleared router, size is 0");
 
     match = router.findHandler(HttpMethod::POST, "/api/users");
     assert(match.handler == nullptr);
-    LogInfo("✓ All routes cleared");
+    HTTP_LOG_INFO("✓ All routes cleared");
 
-    LogInfo("✓ All router operation tests passed\n");
+    HTTP_LOG_INFO("✓ All router operation tests passed\n");
 }
 
 void testEdgeCases() {
-    LogInfo("========================================");
-    LogInfo("Test 7: Edge Cases");
-    LogInfo("========================================");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 7: Edge Cases");
+    HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
 
@@ -266,26 +265,26 @@ void testEdgeCases() {
     router.addHandler<HttpMethod::GET>("/", testHandler);
     auto match1 = router.findHandler(HttpMethod::GET, "/");
     assert(match1.handler != nullptr);
-    LogInfo("✓ Root path / matched");
+    HTTP_LOG_INFO("✓ Root path / matched");
 
     // 带尾部斜杠的路径
     router.addHandler<HttpMethod::GET>("/api/users/", userHandler);
     auto match2 = router.findHandler(HttpMethod::GET, "/api/users/");
     assert(match2.handler != nullptr);
-    LogInfo("✓ Path with trailing slash matched");
+    HTTP_LOG_INFO("✓ Path with trailing slash matched");
 
     // 空段应该被忽略
     auto match3 = router.findHandler(HttpMethod::GET, "//api//users//");
     // 这取决于 splitPath 的实现，应该与 /api/users/ 相同
-    LogInfo("✓ Path with multiple slashes handled");
+    HTTP_LOG_INFO("✓ Path with multiple slashes handled");
 
-    LogInfo("✓ All edge case tests passed\n");
+    HTTP_LOG_INFO("✓ All edge case tests passed\n");
 }
 
 int main() {
-    LogInfo("========================================");
-    LogInfo("HttpRouter Unit Tests");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HttpRouter Unit Tests");
+    HTTP_LOG_INFO("========================================\n");
 
     try {
         testExactMatch();
@@ -296,12 +295,12 @@ int main() {
         testRouterOperations();
         testEdgeCases();
 
-        LogInfo("========================================");
-        LogInfo("✓ ALL TESTS PASSED!");
-        LogInfo("========================================");
+        HTTP_LOG_INFO("========================================");
+        HTTP_LOG_INFO("✓ ALL TESTS PASSED!");
+        HTTP_LOG_INFO("========================================");
         return 0;
     } catch (const std::exception& e) {
-        LogError("Test failed with exception: {}", e.what());
+        HTTP_LOG_ERROR("Test failed with exception: {}", e.what());
         return 1;
     }
 }
