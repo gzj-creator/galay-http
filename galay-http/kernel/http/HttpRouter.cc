@@ -1,8 +1,12 @@
 #include "HttpRouter.h"
 #include "HttpLog.h"
+#include "galay-http/protoc/http/HttpResponse.h"
 #include <sstream>
 #include <set>
 #include <cctype>
+#include <fstream>
+#include <filesystem>
+#include <sys/stat.h>
 
 namespace galay::http
 {
@@ -58,11 +62,15 @@ RouteMatch HttpRouter::findHandler(HttpMethod method, const std::string& path)
 {
     RouteMatch result;
 
+    HTTP_LOG_DEBUG("Finding handler for: {} {}", static_cast<int>(method), path);
+
     // 1. 先尝试精确匹配（O(1)）
     auto methodIt = m_exactRoutes.find(method);
     if (methodIt != m_exactRoutes.end()) {
+        HTTP_LOG_DEBUG("Exact routes for method {}: {}", static_cast<int>(method), methodIt->second.size());
         auto pathIt = methodIt->second.find(path);
         if (pathIt != methodIt->second.end()) {
+            HTTP_LOG_DEBUG("Found exact match for: {}", path);
             result.handler = &pathIt->second;
             return result;
         }
@@ -72,7 +80,18 @@ RouteMatch HttpRouter::findHandler(HttpMethod method, const std::string& path)
     auto fuzzyIt = m_fuzzyRoutes.find(method);
     if (fuzzyIt != m_fuzzyRoutes.end() && fuzzyIt->second) {
         auto segments = splitPath(path);
+        HTTP_LOG_DEBUG("Trying fuzzy match with {} segments", segments.size());
+        for (size_t i = 0; i < segments.size(); i++) {
+            HTTP_LOG_DEBUG("  Segment[{}]: {}", i, segments[i]);
+        }
         result.handler = searchRoute(fuzzyIt->second.get(), segments, result.params);
+        if (result.handler) {
+            HTTP_LOG_DEBUG("Found fuzzy match for: {}", path);
+        } else {
+            HTTP_LOG_DEBUG("No fuzzy match found for: {}", path);
+        }
+    } else {
+        HTTP_LOG_DEBUG("No fuzzy routes for method {}", static_cast<int>(method));
     }
 
     return result;  // 未找到，handler为nullptr
@@ -340,4 +359,254 @@ bool HttpRouter::validatePath(const std::string& path, std::string& error) const
     return true;
 }
 
+// ==================== 静态文件服务实现 ====================
+
+void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPath)
+{
+    namespace fs = std::filesystem;
+
+    // 验证目录是否存在
+    if (!fs::exists(dirPath) || !fs::is_directory(dirPath)) {
+        HTTP_LOG_ERROR("Mount failed: directory '{}' does not exist", dirPath);
+        return;
+    }
+
+    // 保存挂载信息
+    m_mountedDirs[routePrefix] = dirPath;
+
+    // 创建动态文件处理器
+    auto handler = createStaticFileHandler(routePrefix, dirPath);
+
+    // 注册通配符路由：routePrefix/**
+    std::string wildcardPath = routePrefix;
+    if (wildcardPath.back() != '/') {
+        wildcardPath += '/';
+    }
+    wildcardPath += "**";
+
+    // 为 GET 方法注册路由
+    addHandler<HttpMethod::GET>(wildcardPath, handler);
+
+    HTTP_LOG_INFO("Mounted directory '{}' to route '{}'", dirPath, routePrefix);
+}
+
+void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& dirPath)
+{
+    namespace fs = std::filesystem;
+
+    // 验证目录是否存在
+    if (!fs::exists(dirPath) || !fs::is_directory(dirPath)) {
+        HTTP_LOG_ERROR("MountHardly failed: directory '{}' does not exist", dirPath);
+        return;
+    }
+
+    // 递归遍历目录并注册所有文件
+    registerFilesRecursively(routePrefix, dirPath, "");
+
+    HTTP_LOG_INFO("Mounted directory '{}' to route '{}' (static mode)", dirPath, routePrefix);
+}
+
+HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePrefix, const std::string& dirPath)
+{
+    // 捕获 routePrefix 和 dirPath，返回一个协程处理器
+    return [routePrefix, dirPath](HttpConn& conn, HttpRequest req) -> Coroutine {
+        namespace fs = std::filesystem;
+
+        // 获取请求的路径参数（通配符匹配的部分）
+        std::string requestPath = req.header().uri();
+
+        // 从 URI 中提取相对路径
+        // 例如：/static/css/style.css -> css/style.css
+        std::string relativePath;
+        if (requestPath.size() > routePrefix.size()) {
+            // 跳过 routePrefix 和后面的 /
+            size_t start = routePrefix.size();
+            if (requestPath[start] == '/') {
+                start++;
+            }
+            relativePath = requestPath.substr(start);
+        }
+
+        // 构建完整文件路径
+        fs::path fullPath = fs::path(dirPath) / relativePath;
+
+        // 安全检查：防止路径遍历攻击
+        fs::path canonicalDir = fs::canonical(dirPath);
+        fs::path canonicalFile;
+        bool fileNotFound = false;
+        try {
+            canonicalFile = fs::canonical(fullPath);
+        } catch (const fs::filesystem_error&) {
+            fileNotFound = true;
+        }
+
+        if (fileNotFound) {
+            // 文件不存在
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::NotFound_404;
+            response.setBodyStr("404 Not Found");
+            auto writer = conn.getWriter();
+            co_await writer.send(response.toString());
+            co_return;
+        }
+
+        // 检查文件是否在允许的目录内
+        auto [dirIt, fileIt] = std::mismatch(canonicalDir.begin(), canonicalDir.end(),
+                                              canonicalFile.begin());
+        if (dirIt != canonicalDir.end()) {
+            // 路径遍历攻击
+            HTTP_LOG_WARN("Path traversal attempt: {}", requestPath);
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::Forbidden_403;
+            response.setBodyStr("403 Forbidden");
+            auto writer = conn.getWriter();
+            co_await writer.send(response.toString());
+            co_return;
+        }
+
+        // 检查文件是否存在且是普通文件
+        if (!fs::exists(canonicalFile) || !fs::is_regular_file(canonicalFile)) {
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::NotFound_404;
+            response.setBodyStr("404 Not Found");
+            auto writer = conn.getWriter();
+            co_await writer.send(response.toString());
+            co_return;
+        }
+
+        // 读取文件内容
+        std::ifstream file(canonicalFile, std::ios::binary);
+        if (!file) {
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::InternalServerError_500;
+            response.setBodyStr("500 Internal Server Error");
+            auto writer = conn.getWriter();
+            co_await writer.send(response.toString());
+            co_return;
+        }
+
+        // 获取文件大小
+        file.seekg(0, std::ios::end);
+        size_t fileSize = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        // 读取文件内容
+        std::string content(fileSize, '\0');
+        file.read(&content[0], fileSize);
+
+        // 构建响应
+        HttpResponse response;
+        response.header().code() = HttpStatusCode::OK_200;
+
+        // 设置 Content-Type
+        std::string extension = canonicalFile.extension().string();
+        // 去掉扩展名前面的点
+        std::string ext = extension.empty() ? "" : extension.substr(1);
+        std::string mimeType = MimeType::convertToMimeType(ext);
+        response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
+
+        response.setBodyStr(std::move(content));
+
+        // 发送响应
+        auto writer = conn.getWriter();
+        co_await writer.send(response.toString());
+        co_return;
+    };
+}
+
+void HttpRouter::registerFilesRecursively(const std::string& routePrefix,
+                                          const std::string& dirPath,
+                                          const std::string& currentPath)
+{
+    namespace fs = std::filesystem;
+
+    fs::path fullPath = fs::path(dirPath) / currentPath;
+
+    try {
+        for (const auto& entry : fs::directory_iterator(fullPath)) {
+            std::string entryName = entry.path().filename().string();
+            std::string relativePath = currentPath.empty() ? entryName : currentPath + "/" + entryName;
+
+            if (entry.is_directory()) {
+                // 递归处理子目录
+                registerFilesRecursively(routePrefix, dirPath, relativePath);
+            } else if (entry.is_regular_file()) {
+                // 为文件创建路由
+                std::string routePath = routePrefix;
+                if (routePath.back() != '/') {
+                    routePath += '/';
+                }
+                routePath += relativePath;
+
+                // 创建文件处理器
+                std::string filePath = entry.path().string();
+                auto handler = createSingleFileHandler(filePath);
+
+                // 注册路由
+                addHandler<HttpMethod::GET>(routePath, handler);
+            }
+        }
+    } catch (const fs::filesystem_error& e) {
+        HTTP_LOG_ERROR("Error reading directory '{}': {}", fullPath.string(), e.what());
+    }
+}
+
+HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath)
+{
+    // 捕获文件路径
+    return [filePath](HttpConn& conn, HttpRequest req) -> Coroutine {
+        namespace fs = std::filesystem;
+
+        // 检查文件是否存在
+        if (!fs::exists(filePath) || !fs::is_regular_file(filePath)) {
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::NotFound_404;
+            response.setBodyStr("404 Not Found");
+            auto writer = conn.getWriter();
+            co_await writer.send(response.toString());
+            co_return;
+        }
+
+        // 读取文件内容
+        std::ifstream file(filePath, std::ios::binary);
+        if (!file) {
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::InternalServerError_500;
+            response.setBodyStr("500 Internal Server Error");
+            auto writer = conn.getWriter();
+            co_await writer.send(response.toString());
+            co_return;
+        }
+
+        // 获取文件大小
+        file.seekg(0, std::ios::end);
+        size_t fileSize = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        // 读取文件内容
+        std::string content(fileSize, '\0');
+        file.read(&content[0], fileSize);
+
+        // 构建响应
+        HttpResponse response;
+        response.header().code() = HttpStatusCode::OK_200;
+
+        // 设置 Content-Type
+        fs::path path(filePath);
+        std::string extension = path.extension().string();
+        // 去掉扩展名前面的点
+        std::string ext = extension.empty() ? "" : extension.substr(1);
+        std::string mimeType = MimeType::convertToMimeType(ext);
+        response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
+
+        response.setBodyStr(std::move(content));
+
+        // 发送响应
+        auto writer = conn.getWriter();
+        co_await writer.send(response.toString());
+        co_return;
+    };
+}
+
 } // namespace galay::http
+

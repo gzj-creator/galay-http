@@ -120,6 +120,26 @@ public:
      */
     size_t size() const;
 
+    /**
+     * @brief 动态挂载静态文件目录（运行时查找）
+     * @param routePrefix 路由前缀，例如 "/static"
+     * @param dirPath 本地文件系统目录路径
+     * @details 注册一个模糊匹配路由，运行时动态查找文件系统中的文件
+     *          例如：mount("/static", "./public")
+     *          访问 /static/css/style.css 会查找 ./public/css/style.css
+     */
+    void mount(const std::string& routePrefix, const std::string& dirPath);
+
+    /**
+     * @brief 静态挂载静态文件目录（启动时注册）
+     * @param routePrefix 路由前缀，例如 "/static"
+     * @param dirPath 本地文件系统目录路径
+     * @details 在调用时遍历目录，为所有文件创建精确路由并注册到 map
+     *          例如：mountHardly("/static", "./public")
+     *          会为 ./public 下的所有文件创建精确路由
+     */
+    void mountHardly(const std::string& routePrefix, const std::string& dirPath);
+
 private:
     /**
      * @brief 内部添加路由处理器的实现
@@ -170,6 +190,31 @@ private:
     HttpRouteHandler* searchRoute(RouteTrieNode* root, const std::vector<std::string>& segments,
                                   std::map<std::string, std::string>& params);
 
+    /**
+     * @brief 创建静态文件服务处理器（动态查找）
+     * @param routePrefix 路由前缀
+     * @param dirPath 文件系统目录路径
+     * @return 处理函数
+     */
+    HttpRouteHandler createStaticFileHandler(const std::string& routePrefix, const std::string& dirPath);
+
+    /**
+     * @brief 递归遍历目录并注册所有文件
+     * @param routePrefix 路由前缀
+     * @param dirPath 文件系统目录路径
+     * @param currentPath 当前遍历的相对路径
+     */
+    void registerFilesRecursively(const std::string& routePrefix,
+                                   const std::string& dirPath,
+                                   const std::string& currentPath = "");
+
+    /**
+     * @brief 创建单个文件的处理器
+     * @param filePath 文件完整路径
+     * @return 处理函数
+     */
+    HttpRouteHandler createSingleFileHandler(const std::string& filePath);
+
 private:
     // 精确匹配路由表：HttpMethod -> (path -> handler)
     // 使用 unordered_map 实现 O(1) 查找
@@ -178,6 +223,9 @@ private:
     // 模糊匹配路由树：HttpMethod -> Trie树根节点
     // 使用 Trie树 实现 O(k) 查找（k为路径段数）
     std::unordered_map<HttpMethod, std::unique_ptr<RouteTrieNode>> m_fuzzyRoutes;
+
+    // 动态挂载的目录映射：路由前缀 -> 文件系统目录路径
+    std::unordered_map<std::string, std::string> m_mountedDirs;
 
     // 路由计数
     size_t m_routeCount = 0;

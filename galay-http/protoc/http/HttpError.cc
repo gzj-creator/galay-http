@@ -3,38 +3,45 @@
 namespace galay::http
 {
     const char* g_http_error_messages[] = {
-        "No error",                           // kNoError
-        "Connection closed",                  // kConnectionClose
-        "Tcp recv error",                     // kTcpRecvError"
-        "Tcp send error",                     // kTcpSendError"
-        "Request timeout",                    // kRequestTimeOut
-        "Not contains Content-Length",        // kContentLengthNotContained"
-        "Content-Length convert error",       // kContentLengthConvertError
-        "HTTP header incomplete",             // kHeaderInComplete
-        "HTTP body incomplete",               // kBodyInComplete
-        "HTTP header too long",               // kHeaderTooLong
-        "URI too long",                       // kUriTooLong
-        "Chunked transfer encoding error",    // kChunkHasError
-        "Invalid HTTP status code",           // kHttpCodeInvalid
-        "HTTP header key-value pair already exists",  // kHeaderPairExist
-        "HTTP header key-value pair does not exist",  // kHeaderPairNotExist
-        "Bad request format",                 // kBadRequest
-        "Invalid URL format",                 // kUrlInvalid
-        "Invalid port number",                // kPortInvalid
-        "HTTP method not allowed",            // kMethodNotAllow
-        "HTTP version not supported",         // kVersionNotSupport
-        "Request entity too large",           // kRequestEntityTooLarge
-        "URI encoding error",                 // kUriEncodeError
-        "Invalid Content-Type",               // kContentTypeInvalid
-        "Invalid chunk format",               // kInvalidChunkFormat
-        "Invalid chunk length",
-        "Body length not match Content-Length",// kBodyLengthNotMatch
-        "Recv time out",                       // kRecvTimeOut
-        "Send timeout",                         //kSendTimeOut
-        "Not found",                            // kNotFound  
-        "Not implemented",                      // kNotImplemented
-        "Upgrade failed",                       // kUpgradeFailed
-        "Unknown error",                      // kUnknownError
+        "No error",                           // kNoError = 0
+        "Incomplete data",                    // kIncomplete = 1
+        "Connection closed",                  // kConnectionClose = 2
+        "Tcp recv error",                     // kTcpRecvError = 3
+        "Tcp send error",                     // kTcpSendError = 4
+        "Request timeout",                    // kRequestTimeOut = 5
+        "Not contains Content-Length",        // kContentLengthNotContained = 6
+        "Content-Length convert error",       // kContentLengthConvertError = 7
+        "HTTP header incomplete",             // kHeaderInComplete = 8
+        "HTTP body incomplete",               // kBodyInComplete = 9
+        "HTTP header too long",               // kHeaderTooLong = 10
+        "URI too long",                       // kUriTooLong = 11
+        "Chunked transfer encoding error",    // kChunkHasError = 12
+        "Invalid HTTP status code",           // kHttpCodeInvalid = 13
+        "HTTP header key-value pair already exists",  // kHeaderPairExist = 14
+        "HTTP header key-value pair does not exist",  // kHeaderPairNotExist = 15
+        "Bad request format",                 // kBadRequest = 16
+        "Invalid URL format",                 // kUrlInvalid = 17
+        "Invalid port number",                // kPortInvalid = 18
+        "HTTP method not allowed",            // kMethodNotAllow = 19
+        "HTTP version not supported",         // kVersionNotSupport = 20
+        "Request entity too large",           // kRequestEntityTooLarge = 21
+        "URI encoding error",                 // kUriEncodeError = 22
+        "Invalid Content-Type",               // kContentTypeInvalid = 23
+        "Invalid chunk format",               // kInvalidChunkFormat = 24
+        "Invalid chunk length",               // kInvalidChunkLength = 25
+        "Body length not match Content-Length",// kBodyLengthNotMatch = 26
+        "Recv time out",                       // kRecvTimeOut = 27
+        "Send timeout",                        // kSendTimeOut = 28
+        "Not found",                           // kNotFound = 29
+        "Not implemented",                     // kNotImplemented = 30
+        "Upgrade failed",                      // kUpgradeFailed = 31
+        "Unknown error",                       // kUnknownError = 32
+        "HTTP header too large",               // kHeaderTooLarge = 33
+        "Recv error",                          // kRecvError = 34
+        "Send error",                          // kSendError = 35
+        "Close error",                         // kCloseError = 36
+        "Internal error",                      // kInternalError = 37
+        "TCP connect error",                   // kTcpConnectError = 38
     };
 
 
@@ -50,7 +57,8 @@ namespace galay::http
 
     std::string HttpError::message() const
     {
-        if(static_cast<uint32_t>(m_code) >= sizeof(g_http_error_messages)) {
+        constexpr size_t message_count = sizeof(g_http_error_messages) / sizeof(g_http_error_messages[0]);
+        if(static_cast<uint32_t>(m_code) >= message_count) {
             return "Unknown Http error";
         }
         return g_http_error_messages[m_code];
