@@ -7,6 +7,8 @@
 #include <fstream>
 #include <filesystem>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace galay::http
 {
@@ -361,7 +363,8 @@ bool HttpRouter::validatePath(const std::string& path, std::string& error) const
 
 // ==================== 静态文件服务实现 ====================
 
-void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPath)
+void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPath,
+                       const StaticFileConfig& config)
 {
     namespace fs = std::filesystem;
 
@@ -375,7 +378,7 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
     m_mountedDirs[routePrefix] = dirPath;
 
     // 创建动态文件处理器
-    auto handler = createStaticFileHandler(routePrefix, dirPath);
+    auto handler = createStaticFileHandler(routePrefix, dirPath, config);
 
     // 注册通配符路由：routePrefix/**
     std::string wildcardPath = routePrefix;
@@ -390,7 +393,8 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
     HTTP_LOG_INFO("Mounted directory '{}' to route '{}'", dirPath, routePrefix);
 }
 
-void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& dirPath)
+void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& dirPath,
+                             const StaticFileConfig& config)
 {
     namespace fs = std::filesystem;
 
@@ -401,15 +405,17 @@ void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& 
     }
 
     // 递归遍历目录并注册所有文件
-    registerFilesRecursively(routePrefix, dirPath, "");
+    registerFilesRecursively(routePrefix, dirPath, config, "");
 
     HTTP_LOG_INFO("Mounted directory '{}' to route '{}' (static mode)", dirPath, routePrefix);
 }
 
-HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePrefix, const std::string& dirPath)
+HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePrefix,
+                                                     const std::string& dirPath,
+                                                     const StaticFileConfig& config)
 {
-    // 捕获 routePrefix 和 dirPath，返回一个协程处理器
-    return [routePrefix, dirPath](HttpConn& conn, HttpRequest req) -> Coroutine {
+    // 捕获 routePrefix、dirPath 和 config，返回一个协程处理器
+    return [routePrefix, dirPath, config](HttpConn& conn, HttpRequest req) -> Coroutine {
         namespace fs = std::filesystem;
 
         // 获取请求的路径参数（通配符匹配的部分）
@@ -474,48 +480,23 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
             co_return;
         }
 
-        // 读取文件内容
-        std::ifstream file(canonicalFile, std::ios::binary);
-        if (!file) {
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::InternalServerError_500;
-            response.setBodyStr("500 Internal Server Error");
-            auto writer = conn.getWriter();
-            co_await writer.send(response.toString());
-            co_return;
-        }
-
         // 获取文件大小
-        file.seekg(0, std::ios::end);
-        size_t fileSize = file.tellg();
-        file.seekg(0, std::ios::beg);
-
-        // 读取文件内容
-        std::string content(fileSize, '\0');
-        file.read(&content[0], fileSize);
-
-        // 构建响应
-        HttpResponse response;
-        response.header().code() = HttpStatusCode::OK_200;
+        size_t fileSize = fs::file_size(canonicalFile);
 
         // 设置 Content-Type
         std::string extension = canonicalFile.extension().string();
-        // 去掉扩展名前面的点
         std::string ext = extension.empty() ? "" : extension.substr(1);
         std::string mimeType = MimeType::convertToMimeType(ext);
-        response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
 
-        response.setBodyStr(std::move(content));
-
-        // 发送响应
-        auto writer = conn.getWriter();
-        co_await writer.send(response.toString());
+        // 使用配置的传输方式发送文件
+        sendFileContent(conn, canonicalFile.string(), fileSize, mimeType, config);
         co_return;
     };
 }
 
 void HttpRouter::registerFilesRecursively(const std::string& routePrefix,
                                           const std::string& dirPath,
+                                          const StaticFileConfig& config,
                                           const std::string& currentPath)
 {
     namespace fs = std::filesystem;
@@ -529,7 +510,7 @@ void HttpRouter::registerFilesRecursively(const std::string& routePrefix,
 
             if (entry.is_directory()) {
                 // 递归处理子目录
-                registerFilesRecursively(routePrefix, dirPath, relativePath);
+                registerFilesRecursively(routePrefix, dirPath, config, relativePath);
             } else if (entry.is_regular_file()) {
                 // 为文件创建路由
                 std::string routePath = routePrefix;
@@ -540,7 +521,7 @@ void HttpRouter::registerFilesRecursively(const std::string& routePrefix,
 
                 // 创建文件处理器
                 std::string filePath = entry.path().string();
-                auto handler = createSingleFileHandler(filePath);
+                auto handler = createSingleFileHandler(filePath, config);
 
                 // 注册路由
                 addHandler<HttpMethod::GET>(routePath, handler);
@@ -551,10 +532,11 @@ void HttpRouter::registerFilesRecursively(const std::string& routePrefix,
     }
 }
 
-HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath)
+HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath,
+                                                     const StaticFileConfig& config)
 {
-    // 捕获文件路径
-    return [filePath](HttpConn& conn, HttpRequest req) -> Coroutine {
+    // 捕获文件路径和配置
+    return [filePath, config](HttpConn& conn, HttpRequest req) -> Coroutine {
         namespace fs = std::filesystem;
 
         // 检查文件是否存在
@@ -567,45 +549,164 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
             co_return;
         }
 
-        // 读取文件内容
-        std::ifstream file(filePath, std::ios::binary);
-        if (!file) {
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::InternalServerError_500;
-            response.setBodyStr("500 Internal Server Error");
-            auto writer = conn.getWriter();
-            co_await writer.send(response.toString());
-            co_return;
-        }
-
         // 获取文件大小
-        file.seekg(0, std::ios::end);
-        size_t fileSize = file.tellg();
-        file.seekg(0, std::ios::beg);
-
-        // 读取文件内容
-        std::string content(fileSize, '\0');
-        file.read(&content[0], fileSize);
-
-        // 构建响应
-        HttpResponse response;
-        response.header().code() = HttpStatusCode::OK_200;
+        size_t fileSize = fs::file_size(filePath);
 
         // 设置 Content-Type
         fs::path path(filePath);
         std::string extension = path.extension().string();
-        // 去掉扩展名前面的点
         std::string ext = extension.empty() ? "" : extension.substr(1);
         std::string mimeType = MimeType::convertToMimeType(ext);
-        response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
 
-        response.setBodyStr(std::move(content));
-
-        // 发送响应
-        auto writer = conn.getWriter();
-        co_await writer.send(response.toString());
+        // 使用配置的传输方式发送文件
+        sendFileContent(conn, filePath, fileSize, mimeType, config);
         co_return;
     };
+}
+
+// ==================== 文件传输实现 ====================
+
+Coroutine HttpRouter::sendFileContent(HttpConn& conn,
+                                      const std::string& filePath,
+                                      size_t fileSize,
+                                      const std::string& mimeType,
+                                      const StaticFileConfig& config)
+{
+    // 根据配置决定传输模式
+    FileTransferMode mode = config.decideTransferMode(fileSize);
+
+    // 构建响应头
+    HttpResponse response;
+    response.header().code() = HttpStatusCode::OK_200;
+    response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
+
+    auto writer = conn.getWriter();
+
+    switch (mode) {
+        case FileTransferMode::MEMORY: {
+            // 内存模式：将文件完整读入内存后发送
+            HTTP_LOG_DEBUG("Using MEMORY mode for file: {} (size: {})", filePath, fileSize);
+
+            std::ifstream file(filePath, std::ios::binary);
+            if (!file) {
+                response.header().code() = HttpStatusCode::InternalServerError_500;
+                response.setBodyStr("500 Internal Server Error");
+                co_await writer.send(response.toString());
+                co_return;
+            }
+
+            std::string content(fileSize, '\0');
+            file.read(&content[0], fileSize);
+            response.setBodyStr(std::move(content));
+
+            auto result = co_await writer.send(response.toString());
+            if (!result) {
+                HTTP_LOG_ERROR("Failed to send response: {}", result.error().message());
+            }
+            break;
+        }
+
+        case FileTransferMode::CHUNK: {
+            // Chunk 模式：使用 HTTP chunked 编码分块传输
+            HTTP_LOG_DEBUG("Using CHUNK mode for file: {} (size: {})", filePath, fileSize);
+
+            response.header().headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+
+            // 发送响应头（只发送头部，不包含 body）
+            std::string headerStr = response.header().toString();
+            auto headerResult = co_await writer.send(std::move(headerStr));
+            if (!headerResult) {
+                HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+                co_return;
+            }
+
+            // 打开文件
+            int file_fd = open(filePath.c_str(), O_RDONLY);
+            if (file_fd < 0) {
+                HTTP_LOG_ERROR("Failed to open file: {}", filePath);
+                co_await writer.sendChunk("", true);  // 发送空 chunk 结束
+                co_return;
+            }
+
+            // 分块读取并发送
+            size_t chunkSize = config.getChunkSize();
+            std::vector<char> buffer(chunkSize);
+            ssize_t bytesRead;
+
+            while ((bytesRead = read(file_fd, buffer.data(), chunkSize)) > 0) {
+                std::string chunk(buffer.data(), bytesRead);
+                auto result = co_await writer.sendChunk(chunk, false);
+                if (!result) {
+                    HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
+                    close(file_fd);
+                    co_return;
+                }
+            }
+
+            close(file_fd);
+
+            // 发送最后一个空 chunk
+            co_await writer.sendChunk("", true);
+            break;
+        }
+
+        case FileTransferMode::SENDFILE: {
+            // SendFile 模式：使用零拷贝 sendfile 系统调用
+            HTTP_LOG_DEBUG("Using SENDFILE mode for file: {} (size: {})", filePath, fileSize);
+
+            response.header().headerPairs().addHeaderPair("Content-Length", std::to_string(fileSize));
+
+            // 发送响应头（只发送头部，不包含 body）
+            std::string headerStr = response.header().toString();
+            auto headerResult = co_await writer.send(std::move(headerStr));
+            if (!headerResult) {
+                HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+                co_return;
+            }
+
+            // 打开文件
+            int file_fd = open(filePath.c_str(), O_RDONLY);
+            if (file_fd < 0) {
+                HTTP_LOG_ERROR("Failed to open file: {}", filePath);
+                co_return;
+            }
+
+            // 使用 sendfile 零拷贝发送文件内容
+            off_t offset = 0;
+            size_t remaining = fileSize;
+            size_t sendfileChunkSize = config.getSendFileChunkSize();
+
+            while (remaining > 0) {
+                size_t toSend = std::min(remaining, sendfileChunkSize);
+                auto result = co_await conn.socket().sendfile(file_fd, offset, toSend);
+
+                if (!result) {
+                    HTTP_LOG_ERROR("Sendfile failed: {}", result.error().message());
+                    close(file_fd);
+                    co_return;
+                }
+
+                size_t sent = result.value();
+                if (sent == 0) {
+                    HTTP_LOG_WARN("Sendfile returned 0, connection may be closed");
+                    break;
+                }
+
+                offset += sent;
+                remaining -= sent;
+            }
+
+            close(file_fd);
+            break;
+        }
+
+        case FileTransferMode::AUTO:
+            // AUTO 模式应该在 decideTransferMode 中已经被转换为具体模式
+            HTTP_LOG_ERROR("AUTO mode should not reach here");
+            break;
+    }
+
+    co_return;
 }
 
 } // namespace galay::http

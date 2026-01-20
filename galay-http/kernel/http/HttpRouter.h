@@ -2,6 +2,7 @@
 #define GALAY_HTTP_ROUTER_H
 
 #include "HttpConn.h"
+#include "StaticFileConfig.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpBase.h"
 #include "galay-kernel/kernel/Coroutine.h"
@@ -124,21 +125,33 @@ public:
      * @brief 动态挂载静态文件目录（运行时查找）
      * @param routePrefix 路由前缀，例如 "/static"
      * @param dirPath 本地文件系统目录路径
+     * @param config 静态文件传输配置（可选）
      * @details 注册一个模糊匹配路由，运行时动态查找文件系统中的文件
      *          例如：mount("/static", "./public")
      *          访问 /static/css/style.css 会查找 ./public/css/style.css
+     *
+     *          支持三种传输模式：
+     *          - MEMORY: 将文件完整读入内存后发送（适合小文件）
+     *          - CHUNK: 使用 HTTP chunked 编码分块传输（适合中等文件）
+     *          - SENDFILE: 使用零拷贝 sendfile 系统调用（适合大文件）
+     *          - AUTO: 根据文件大小自动选择（默认）
      */
-    void mount(const std::string& routePrefix, const std::string& dirPath);
+    void mount(const std::string& routePrefix, const std::string& dirPath,
+               const StaticFileConfig& config = StaticFileConfig());
 
     /**
      * @brief 静态挂载静态文件目录（启动时注册）
      * @param routePrefix 路由前缀，例如 "/static"
      * @param dirPath 本地文件系统目录路径
+     * @param config 静态文件传输配置（可选）
      * @details 在调用时遍历目录，为所有文件创建精确路由并注册到 map
      *          例如：mountHardly("/static", "./public")
      *          会为 ./public 下的所有文件创建精确路由
+     *
+     *          支持三种传输模式（同 mount）
      */
-    void mountHardly(const std::string& routePrefix, const std::string& dirPath);
+    void mountHardly(const std::string& routePrefix, const std::string& dirPath,
+                     const StaticFileConfig& config = StaticFileConfig());
 
 private:
     /**
@@ -194,26 +207,48 @@ private:
      * @brief 创建静态文件服务处理器（动态查找）
      * @param routePrefix 路由前缀
      * @param dirPath 文件系统目录路径
+     * @param config 静态文件传输配置
      * @return 处理函数
      */
-    HttpRouteHandler createStaticFileHandler(const std::string& routePrefix, const std::string& dirPath);
+    HttpRouteHandler createStaticFileHandler(const std::string& routePrefix,
+                                             const std::string& dirPath,
+                                             const StaticFileConfig& config);
 
     /**
      * @brief 递归遍历目录并注册所有文件
      * @param routePrefix 路由前缀
      * @param dirPath 文件系统目录路径
+     * @param config 静态文件传输配置
      * @param currentPath 当前遍历的相对路径
      */
     void registerFilesRecursively(const std::string& routePrefix,
                                    const std::string& dirPath,
+                                   const StaticFileConfig& config,
                                    const std::string& currentPath = "");
 
     /**
      * @brief 创建单个文件的处理器
      * @param filePath 文件完整路径
+     * @param config 静态文件传输配置
      * @return 处理函数
      */
-    HttpRouteHandler createSingleFileHandler(const std::string& filePath);
+    HttpRouteHandler createSingleFileHandler(const std::string& filePath,
+                                             const StaticFileConfig& config);
+
+    /**
+     * @brief 发送文件内容（根据配置选择传输方式）
+     * @param conn HTTP连接
+     * @param filePath 文件路径
+     * @param fileSize 文件大小
+     * @param mimeType MIME类型
+     * @param config 静态文件传输配置
+     * @return 协程
+     */
+    static Coroutine sendFileContent(HttpConn& conn,
+                                     const std::string& filePath,
+                                     size_t fileSize,
+                                     const std::string& mimeType,
+                                     const StaticFileConfig& config);
 
 private:
     // 精确匹配路由表：HttpMethod -> (path -> handler)
