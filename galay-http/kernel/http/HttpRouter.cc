@@ -1,6 +1,8 @@
 #include "HttpRouter.h"
 #include "HttpLog.h"
 #include "FileDescriptor.h"
+#include "HttpRange.h"
+#include "HttpETag.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include <sstream>
 #include <set>
@@ -10,6 +12,7 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <chrono>
 
 namespace galay::http
 {
@@ -573,6 +576,17 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                                       const std::string& mimeType,
                                       const StaticFileConfig& config)
 {
+    namespace fs = std::filesystem;
+
+    // 生成 ETag
+    std::string etag = ETagGenerator::generate(filePath);
+    std::time_t lastModified = std::time(nullptr);  // 简化：使用当前时间
+
+    std::string lastModifiedStr = ETagGenerator::formatHttpDate(lastModified);
+
+    // 获取请求头（需要从 HttpRequest 中获取，这里暂时跳过）
+    // TODO: 从 HttpRequest 中提取 Range 和 If-None-Match 头
+
     // 根据配置决定传输模式
     FileTransferMode mode = config.decideTransferMode(fileSize);
 
@@ -580,6 +594,9 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     HttpResponse response;
     response.header().code() = HttpStatusCode::OK_200;
     response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
+    response.header().headerPairs().addHeaderPair("ETag", etag);
+    response.header().headerPairs().addHeaderPair("Last-Modified", lastModifiedStr);
+    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
 
     auto writer = conn.getWriter();
 
