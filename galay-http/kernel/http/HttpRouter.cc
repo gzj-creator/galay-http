@@ -1,5 +1,6 @@
 #include "HttpRouter.h"
 #include "HttpLog.h"
+#include "FileDescriptor.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include <sstream>
 #include <set>
@@ -620,11 +621,19 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                 co_return;
             }
 
-            // 打开文件
-            int file_fd = open(filePath.c_str(), O_RDONLY);
-            if (file_fd < 0) {
-                HTTP_LOG_ERROR("Failed to open file: {}", filePath);
-                co_await writer.sendChunk("", true);  // 发送空 chunk 结束
+            // 使用 RAII 管理文件描述符
+            FileDescriptor fd;
+            bool openSuccess = false;
+            try {
+                fd.open(filePath.c_str(), O_RDONLY);
+                openSuccess = true;
+            } catch (const std::system_error& e) {
+                HTTP_LOG_ERROR("Failed to open file for CHUNK mode: {} - {}", filePath, e.what());
+            }
+
+            if (!openSuccess) {
+                // 发送空 chunk 结束
+                co_await writer.sendChunk("", true);
                 co_return;
             }
 
@@ -632,21 +641,30 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             size_t chunkSize = config.getChunkSize();
             std::vector<char> buffer(chunkSize);
             ssize_t bytesRead;
+            bool hasError = false;
 
-            while ((bytesRead = read(file_fd, buffer.data(), chunkSize)) > 0) {
+            while ((bytesRead = read(fd.get(), buffer.data(), chunkSize)) > 0) {
                 std::string chunk(buffer.data(), bytesRead);
                 auto result = co_await writer.sendChunk(chunk, false);
                 if (!result) {
                     HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
-                    close(file_fd);
-                    co_return;
+                    hasError = true;
+                    break;
                 }
             }
 
-            close(file_fd);
+            // 检查读取错误
+            if (bytesRead < 0) {
+                HTTP_LOG_ERROR("Failed to read file: {}", strerror(errno));
+                hasError = true;
+            }
 
             // 发送最后一个空 chunk
-            co_await writer.sendChunk("", true);
+            if (!hasError) {
+                co_await writer.sendChunk("", true);
+            }
+
+            // fd 会在作用域结束时自动关闭
             break;
         }
 
@@ -664,10 +682,12 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                 co_return;
             }
 
-            // 打开文件
-            int file_fd = open(filePath.c_str(), O_RDONLY);
-            if (file_fd < 0) {
-                HTTP_LOG_ERROR("Failed to open file: {}", filePath);
+            // 使用 RAII 管理文件描述符
+            FileDescriptor fd;
+            try {
+                fd.open(filePath.c_str(), O_RDONLY);
+            } catch (const std::system_error& e) {
+                HTTP_LOG_ERROR("Failed to open file for SENDFILE mode: {} - {}", filePath, e.what());
                 co_return;
             }
 
@@ -678,12 +698,11 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
 
             while (remaining > 0) {
                 size_t toSend = std::min(remaining, sendfileChunkSize);
-                auto result = co_await conn.socket().sendfile(file_fd, offset, toSend);
+                auto result = co_await conn.socket().sendfile(fd.get(), offset, toSend);
 
                 if (!result) {
                     HTTP_LOG_ERROR("Sendfile failed: {}", result.error().message());
-                    close(file_fd);
-                    co_return;
+                    break;
                 }
 
                 size_t sent = result.value();
@@ -696,7 +715,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                 remaining -= sent;
             }
 
-            close(file_fd);
+            // fd 会在作用域结束时自动关闭
             break;
         }
 
