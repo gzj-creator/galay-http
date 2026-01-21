@@ -29,6 +29,7 @@ set(HTTP_TESTS
     test_static_file_server
     test_mount_functions
     test_static_file_transfer_modes
+    test_range_etag
     # test_http_reader_writer  # 旧版本，已拆分为server和client
     # test_http_server_client  # 暂时注释，等HttpClient重新设计后再启用
 )

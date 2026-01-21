@@ -4,7 +4,6 @@
 #include <string>
 #include <vector>
 #include <cstdint>
-#include <optional>
 #include <ctime>
 
 namespace galay::http
@@ -294,45 +293,50 @@ private:
         std::string startStr = rangeStr.substr(0, dashPos);
         std::string endStr = rangeStr.substr(dashPos + 1);
 
-        // 情况1: bytes=start-end
-        if (!startStr.empty() && !endStr.empty()) {
-            uint64_t start = std::stoull(startStr);
-            uint64_t end = std::stoull(endStr);
+        try {
+            // 情况1: bytes=start-end
+            if (!startStr.empty() && !endStr.empty()) {
+                uint64_t start = std::stoull(startStr);
+                uint64_t end = std::stoull(endStr);
 
-            // 验证范围
-            if (start > end || start >= fileSize) {
-                return HttpRange();  // 无效范围
+                // 验证范围
+                if (start > end || start >= fileSize) {
+                    return HttpRange();  // 无效范围
+                }
+
+                // 限制 end 不能超过文件大小
+                if (end >= fileSize) {
+                    end = fileSize - 1;
+                }
+
+                return HttpRange(start, end);
             }
 
-            // 限制 end 不能超过文件大小
-            if (end >= fileSize) {
-                end = fileSize - 1;
+            // 情况2: bytes=start- (后缀范围)
+            if (!startStr.empty() && endStr.empty()) {
+                uint64_t start = std::stoull(startStr);
+
+                if (start >= fileSize) {
+                    return HttpRange();  // 无效范围
+                }
+
+                return HttpRange(start, fileSize - 1);
             }
 
-            return HttpRange(start, end);
-        }
+            // 情况3: bytes=-suffix (前缀范围，最后 N 个字节)
+            if (startStr.empty() && !endStr.empty()) {
+                uint64_t suffix = std::stoull(endStr);
 
-        // 情况2: bytes=start- (后缀范围)
-        if (!startStr.empty() && endStr.empty()) {
-            uint64_t start = std::stoull(startStr);
+                if (suffix == 0 || suffix > fileSize) {
+                    suffix = fileSize;
+                }
 
-            if (start >= fileSize) {
-                return HttpRange();  // 无效范围
+                uint64_t start = fileSize - suffix;
+                return HttpRange(start, fileSize - 1);
             }
-
-            return HttpRange(start, fileSize - 1);
-        }
-
-        // 情况3: bytes=-suffix (前缀范围，最后 N 个字节)
-        if (startStr.empty() && !endStr.empty()) {
-            uint64_t suffix = std::stoull(endStr);
-
-            if (suffix == 0 || suffix > fileSize) {
-                suffix = fileSize;
-            }
-
-            uint64_t start = fileSize - suffix;
-            return HttpRange(start, fileSize - 1);
+        } catch (const std::exception&) {
+            // 解析失败，返回无效范围
+            return HttpRange();
         }
 
         return HttpRange();  // 无效格式

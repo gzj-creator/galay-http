@@ -1,8 +1,8 @@
 #include "HttpRouter.h"
 #include "HttpLog.h"
 #include "FileDescriptor.h"
-#include "HttpRange.h"
 #include "HttpETag.h"
+#include "HttpRange.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include <sstream>
 #include <set>
@@ -12,7 +12,6 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <chrono>
 
 namespace galay::http
 {
@@ -493,7 +492,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         std::string mimeType = MimeType::convertToMimeType(ext);
 
         // 使用配置的传输方式发送文件
-        sendFileContent(conn, canonicalFile.string(), fileSize, mimeType, config);
+        co_await sendFileContent(conn, req, canonicalFile.string(), fileSize, mimeType, config).wait();
         co_return;
     };
 }
@@ -563,7 +562,7 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
         std::string mimeType = MimeType::convertToMimeType(ext);
 
         // 使用配置的传输方式发送文件
-        sendFileContent(conn, filePath, fileSize, mimeType, config);
+        co_await sendFileContent(conn, req, filePath, fileSize, mimeType, config).wait();
         co_return;
     };
 }
@@ -571,22 +570,80 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
 // ==================== 文件传输实现 ====================
 
 Coroutine HttpRouter::sendFileContent(HttpConn& conn,
+                                      HttpRequest& req,
                                       const std::string& filePath,
                                       size_t fileSize,
                                       const std::string& mimeType,
                                       const StaticFileConfig& config)
 {
-    namespace fs = std::filesystem;
-
     // 生成 ETag
     std::string etag = ETagGenerator::generate(filePath);
     std::time_t lastModified = std::time(nullptr);  // 简化：使用当前时间
-
     std::string lastModifiedStr = ETagGenerator::formatHttpDate(lastModified);
 
-    // 获取请求头（需要从 HttpRequest 中获取，这里暂时跳过）
-    // TODO: 从 HttpRequest 中提取 Range 和 If-None-Match 头
+    auto writer = conn.getWriter();
 
+    // 1. 处理 If-None-Match (ETag 条件请求)
+    std::string ifNoneMatch = req.header().headerPairs().getValue("If-None-Match");
+    if (!ifNoneMatch.empty()) {
+        // 检查 ETag 是否匹配
+        if (ifNoneMatch == "*" || ETagGenerator::match(etag, ifNoneMatch)) {
+            // ETag 匹配，返回 304 Not Modified
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::NotModified_304;
+            response.header().headerPairs().addHeaderPair("ETag", etag);
+            response.header().headerPairs().addHeaderPair("Last-Modified", lastModifiedStr);
+            co_await writer.send(response.toString());
+            co_return;
+        }
+    }
+
+    // 2. 处理 Range 请求
+    std::string rangeHeader = req.header().headerPairs().getValue("Range");
+    bool hasRange = !rangeHeader.empty();
+    RangeParseResult rangeResult;
+
+    if (hasRange) {
+        // 解析 Range 请求
+        rangeResult = HttpRangeParser::parse(rangeHeader, fileSize);
+
+        // 3. 处理 If-Range 条件请求
+        std::string ifRangeHeader = req.header().headerPairs().getValue("If-Range");
+        if (!ifRangeHeader.empty()) {
+            // 检查 If-Range 条件
+            if (!HttpRangeParser::checkIfRange(ifRangeHeader, etag, lastModified)) {
+                // If-Range 条件不满足，忽略 Range 请求，返回完整文件
+                hasRange = false;
+                rangeResult = RangeParseResult();
+            }
+        }
+
+        // 验证 Range 是否有效
+        if (hasRange && !rangeResult.isValid()) {
+            // Range 无效，返回 416 Range Not Satisfiable
+            HttpResponse response;
+            response.header().code() = HttpStatusCode::RangeNotSatisfiable_416;
+            response.header().headerPairs().addHeaderPair("Content-Range", "bytes */" + std::to_string(fileSize));
+            response.setBodyStr("416 Range Not Satisfiable");
+            co_await writer.send(response.toString());
+            co_return;
+        }
+    }
+
+    // 4. 根据是否有 Range 请求决定响应方式
+    if (hasRange && rangeResult.isValid()) {
+        // 处理 Range 请求
+        if (rangeResult.type == RangeType::SINGLE_RANGE) {
+            // 单范围请求
+            co_await sendSingleRange(conn, req, filePath, fileSize, mimeType, etag, lastModifiedStr, rangeResult.ranges[0], config).wait();
+        } else if (rangeResult.type == RangeType::MULTIPLE_RANGES) {
+            // 多范围请求 (multipart/byteranges)
+            co_await sendMultipleRanges(conn, req, filePath, fileSize, mimeType, etag, lastModifiedStr, rangeResult, config).wait();
+        }
+        co_return;
+    }
+
+    // 5. 发送完整文件（无 Range 请求或 Range 无效）
     // 根据配置决定传输模式
     FileTransferMode mode = config.decideTransferMode(fileSize);
 
@@ -597,8 +654,6 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     response.header().headerPairs().addHeaderPair("ETag", etag);
     response.header().headerPairs().addHeaderPair("Last-Modified", lastModifiedStr);
     response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
-
-    auto writer = conn.getWriter();
 
     switch (mode) {
         case FileTransferMode::MEMORY: {
@@ -740,6 +795,264 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             // AUTO 模式应该在 decideTransferMode 中已经被转换为具体模式
             HTTP_LOG_ERROR("AUTO mode should not reach here");
             break;
+    }
+
+    co_return;
+}
+
+// ==================== Range 请求处理实现 ====================
+
+Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
+                                      HttpRequest& req,
+                                      const std::string& filePath,
+                                      size_t fileSize,
+                                      const std::string& mimeType,
+                                      const std::string& etag,
+                                      const std::string& lastModified,
+                                      const HttpRange& range,
+                                      const StaticFileConfig& config)
+{
+    auto writer = conn.getWriter();
+
+    // 构建 206 Partial Content 响应
+    HttpResponse response;
+    response.header().code() = HttpStatusCode::PartialContent_206;
+    response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
+    response.header().headerPairs().addHeaderPair("Content-Range",
+        HttpRangeParser::makeContentRange(range, fileSize));
+    response.header().headerPairs().addHeaderPair("Content-Length", std::to_string(range.length));
+    response.header().headerPairs().addHeaderPair("ETag", etag);
+    response.header().headerPairs().addHeaderPair("Last-Modified", lastModified);
+    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+
+    // 发送响应头
+    std::string headerStr = response.header().toString();
+    auto headerResult = co_await writer.send(std::move(headerStr));
+    if (!headerResult) {
+        HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+        co_return;
+    }
+
+    // 打开文件
+    FileDescriptor fd;
+    try {
+        fd.open(filePath.c_str(), O_RDONLY);
+    } catch (const std::system_error& e) {
+        HTTP_LOG_ERROR("Failed to open file for Range request: {} - {}", filePath, e.what());
+        co_return;
+    }
+
+    // 根据配置决定传输模式
+    FileTransferMode mode = config.decideTransferMode(range.length);
+
+    if (mode == FileTransferMode::SENDFILE) {
+        // 使用 sendfile 零拷贝发送范围内容
+        off_t offset = range.start;
+        size_t remaining = range.length;
+        size_t sendfileChunkSize = config.getSendFileChunkSize();
+
+        while (remaining > 0) {
+            size_t toSend = std::min(remaining, sendfileChunkSize);
+            auto result = co_await conn.socket().sendfile(fd.get(), offset, toSend);
+
+            if (!result) {
+                HTTP_LOG_ERROR("Sendfile failed: {}", result.error().message());
+                break;
+            }
+
+            size_t sent = result.value();
+            if (sent == 0) {
+                HTTP_LOG_WARN("Sendfile returned 0, connection may be closed");
+                break;
+            }
+
+            offset += sent;
+            remaining -= sent;
+        }
+    } else {
+        // 使用普通读取方式发送范围内容
+        // 定位到起始位置
+        if (lseek(fd.get(), range.start, SEEK_SET) == -1) {
+            HTTP_LOG_ERROR("Failed to seek file: {}", strerror(errno));
+            co_return;
+        }
+
+        // 分块读取并发送
+        size_t chunkSize = config.getChunkSize();
+        std::vector<char> buffer(chunkSize);
+        size_t remaining = range.length;
+
+        while (remaining > 0) {
+            size_t toRead = std::min(remaining, chunkSize);
+            ssize_t bytesRead = read(fd.get(), buffer.data(), toRead);
+
+            if (bytesRead < 0) {
+                HTTP_LOG_ERROR("Failed to read file: {}", strerror(errno));
+                break;
+            }
+
+            if (bytesRead == 0) {
+                break;
+            }
+
+            std::string chunk(buffer.data(), bytesRead);
+            auto result = co_await writer.send(std::move(chunk));
+            if (!result) {
+                HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
+                break;
+            }
+
+            remaining -= bytesRead;
+        }
+    }
+
+    co_return;
+}
+
+Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
+                                         HttpRequest& req,
+                                         const std::string& filePath,
+                                         size_t fileSize,
+                                         const std::string& mimeType,
+                                         const std::string& etag,
+                                         const std::string& lastModified,
+                                         const RangeParseResult& rangeResult,
+                                         const StaticFileConfig& config)
+{
+    auto writer = conn.getWriter();
+
+    // 构建 206 Partial Content 响应（multipart/byteranges）
+    std::string boundary = rangeResult.boundary;
+    HttpResponse response;
+    response.header().code() = HttpStatusCode::PartialContent_206;
+    response.header().headerPairs().addHeaderPair("Content-Type",
+        "multipart/byteranges; boundary=" + boundary);
+    response.header().headerPairs().addHeaderPair("ETag", etag);
+    response.header().headerPairs().addHeaderPair("Last-Modified", lastModified);
+    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+
+    // 计算总长度（包括所有边界和头部）
+    size_t totalLength = 0;
+    for (const auto& range : rangeResult.ranges) {
+        // 边界行
+        totalLength += 2 + boundary.length() + 2;  // "--boundary\r\n"
+        // Content-Type 头
+        totalLength += 14 + mimeType.length() + 2;  // "Content-Type: \r\n"
+        // Content-Range 头
+        std::string contentRange = HttpRangeParser::makeContentRange(range, fileSize);
+        totalLength += 16 + contentRange.length() + 2;  // "Content-Range: \r\n"
+        // 空行
+        totalLength += 2;  // "\r\n"
+        // 内容
+        totalLength += range.length;
+        // 换行
+        totalLength += 2;  // "\r\n"
+    }
+    // 最后的边界
+    totalLength += 2 + boundary.length() + 4;  // "--boundary--\r\n"
+
+    response.header().headerPairs().addHeaderPair("Content-Length", std::to_string(totalLength));
+
+    // 发送响应头
+    std::string headerStr = response.header().toString();
+    auto headerResult = co_await writer.send(std::move(headerStr));
+    if (!headerResult) {
+        HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+        co_return;
+    }
+
+    // 打开文件
+    FileDescriptor fd;
+    try {
+        fd.open(filePath.c_str(), O_RDONLY);
+    } catch (const std::system_error& e) {
+        HTTP_LOG_ERROR("Failed to open file for multipart Range request: {} - {}", filePath, e.what());
+        co_return;
+    }
+
+    // 发送每个范围
+    for (const auto& range : rangeResult.ranges) {
+        // 发送边界
+        std::string boundaryLine = "--" + boundary + "\r\n";
+        auto boundaryResult = co_await writer.send(std::move(boundaryLine));
+        if (!boundaryResult) {
+            HTTP_LOG_ERROR("Failed to send boundary: {}", boundaryResult.error().message());
+            co_return;
+        }
+
+        // 发送 Content-Type 头
+        std::string contentTypeHeader = "Content-Type: " + mimeType + "\r\n";
+        auto ctResult = co_await writer.send(std::move(contentTypeHeader));
+        if (!ctResult) {
+            HTTP_LOG_ERROR("Failed to send Content-Type header: {}", ctResult.error().message());
+            co_return;
+        }
+
+        // 发送 Content-Range 头
+        std::string contentRangeHeader = "Content-Range: " +
+            HttpRangeParser::makeContentRange(range, fileSize) + "\r\n";
+        auto crResult = co_await writer.send(std::move(contentRangeHeader));
+        if (!crResult) {
+            HTTP_LOG_ERROR("Failed to send Content-Range header: {}", crResult.error().message());
+            co_return;
+        }
+
+        // 发送空行
+        std::string emptyLine = "\r\n";
+        auto emptyLineResult = co_await writer.send(std::move(emptyLine));
+        if (!emptyLineResult) {
+            HTTP_LOG_ERROR("Failed to send empty line: {}", emptyLineResult.error().message());
+            co_return;
+        }
+
+        // 定位到起始位置
+        if (lseek(fd.get(), range.start, SEEK_SET) == -1) {
+            HTTP_LOG_ERROR("Failed to seek file: {}", strerror(errno));
+            co_return;
+        }
+
+        // 读取并发送范围内容
+        size_t chunkSize = config.getChunkSize();
+        std::vector<char> buffer(chunkSize);
+        size_t remaining = range.length;
+
+        while (remaining > 0) {
+            size_t toRead = std::min(remaining, chunkSize);
+            ssize_t bytesRead = read(fd.get(), buffer.data(), toRead);
+
+            if (bytesRead < 0) {
+                HTTP_LOG_ERROR("Failed to read file: {}", strerror(errno));
+                co_return;
+            }
+
+            if (bytesRead == 0) {
+                break;
+            }
+
+            std::string chunk(buffer.data(), bytesRead);
+            auto result = co_await writer.send(std::move(chunk));
+            if (!result) {
+                HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
+                co_return;
+            }
+
+            remaining -= bytesRead;
+        }
+
+        // 发送换行
+        std::string newline = "\r\n";
+        auto newlineResult = co_await writer.send(std::move(newline));
+        if (!newlineResult) {
+            HTTP_LOG_ERROR("Failed to send newline: {}", newlineResult.error().message());
+            co_return;
+        }
+    }
+
+    // 发送最后的边界
+    std::string finalBoundary = "--" + boundary + "--\r\n";
+    auto finalResult = co_await writer.send(std::move(finalBoundary));
+    if (!finalResult) {
+        HTTP_LOG_ERROR("Failed to send final boundary: {}", finalResult.error().message());
     }
 
     co_return;

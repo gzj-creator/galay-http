@@ -3,6 +3,7 @@
 
 #include "HttpConn.h"
 #include "StaticFileConfig.h"
+#include "HttpRange.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpBase.h"
 #include "galay-kernel/kernel/Coroutine.h"
@@ -238,6 +239,7 @@ private:
     /**
      * @brief 发送文件内容（根据配置选择传输方式）
      * @param conn HTTP连接
+     * @param req HTTP请求（用于处理 Range 和条件请求）
      * @param filePath 文件路径
      * @param fileSize 文件大小
      * @param mimeType MIME类型
@@ -245,10 +247,57 @@ private:
      * @return 协程
      */
     static Coroutine sendFileContent(HttpConn& conn,
+                                     HttpRequest& req,
                                      const std::string& filePath,
                                      size_t fileSize,
                                      const std::string& mimeType,
                                      const StaticFileConfig& config);
+
+    /**
+     * @brief 发送单个 Range 响应（206 Partial Content）
+     * @param conn HTTP连接
+     * @param req HTTP请求
+     * @param filePath 文件路径
+     * @param fileSize 文件大小
+     * @param mimeType MIME类型
+     * @param etag ETag
+     * @param lastModified 最后修改时间
+     * @param range Range 范围
+     * @param config 静态文件传输配置
+     * @return 协程
+     */
+    static Coroutine sendSingleRange(HttpConn& conn,
+                                     HttpRequest& req,
+                                     const std::string& filePath,
+                                     size_t fileSize,
+                                     const std::string& mimeType,
+                                     const std::string& etag,
+                                     const std::string& lastModified,
+                                     const HttpRange& range,
+                                     const StaticFileConfig& config);
+
+    /**
+     * @brief 发送多个 Range 响应（206 Partial Content with multipart/byteranges）
+     * @param conn HTTP连接
+     * @param req HTTP请求
+     * @param filePath 文件路径
+     * @param fileSize 文件大小
+     * @param mimeType MIME类型
+     * @param etag ETag
+     * @param lastModified 最后修改时间
+     * @param rangeResult Range 解析结果
+     * @param config 静态文件传输配置
+     * @return 协程
+     */
+    static Coroutine sendMultipleRanges(HttpConn& conn,
+                                        HttpRequest& req,
+                                        const std::string& filePath,
+                                        size_t fileSize,
+                                        const std::string& mimeType,
+                                        const std::string& etag,
+                                        const std::string& lastModified,
+                                        const RangeParseResult& rangeResult,
+                                        const StaticFileConfig& config);
 
 private:
     // 精确匹配路由表：HttpMethod -> (path -> handler)
