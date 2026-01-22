@@ -7,12 +7,14 @@
 - **协程驱动**: 完全基于 C++20/23 协程的异步 I/O 操作
 - **高性能**: 零拷贝路由匹配，高效的请求/响应处理
 - **易用的 API**: 简洁直观的服务器和客户端接口
+- **Builder 模式**: 链式调用构造 HTTP 请求和响应，代码更简洁优雅
+- **自动路由**: HttpServer 内置 Router 支持，自动处理路由匹配
 - **灵活的路由系统**: 支持精确匹配、通配符和参数化路由
   - 精确匹配: `/api/users`
   - 通配符: `/static/*`
   - 参数捕获: `/user/{id}/profile`
+- **静态文件服务**: 支持 Range 请求、ETag、多种传输模式（内存/分块/sendfile）
 - **Chunked 编码**: 完整支持 HTTP Chunked Transfer-Encoding
-- **Builder 模式**: 方便的配置和初始化
 
 ## 依赖项
 
@@ -56,103 +58,121 @@ target_link_libraries(your_target
 
 ## 快速开始
 
-### HTTP 服务器
+### HTTP 服务器（使用 Builder 模式）
 
 ```cpp
-#include "galay/kernel/runtime/Runtime.h"
-#include "galay-http/server/HttpServer.h"
-#include "galay-http/kernel/HttpRouter.h"
-#include "galay-http/utils/HttpUtils.h"
+#include "galay-http/kernel/http/HttpServer.h"
+#include "galay-http/kernel/http/HttpRouter.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 
-using namespace galay;
 using namespace galay::http;
+using namespace galay::kernel;
 
-Coroutine handleHello(HttpRequest& request, HttpReader& reader, 
-                           HttpWriter& writer, HttpParams params) {
-    auto response = HttpUtils::defaultOk("txt", "Hello, World!");
-    co_await writer.reply(response);
-    co_return nil();
+// 定义处理器
+Coroutine helloHandler(HttpConn& conn, HttpRequest req) {
+    // 使用 Builder 构造响应 - 简洁优雅！
+    auto response = Http1_1ResponseBuilder::ok()
+        .header("Server", "Galay-HTTP/1.0")
+        .text("Hello, World!")
+        .build();
+
+    auto writer = conn.getWriter();
+    co_await writer.sendResponse(response);
+    co_await conn.close();
+    co_return;
+}
+
+Coroutine apiHandler(HttpConn& conn, HttpRequest req) {
+    // JSON 响应
+    auto response = Http1_1ResponseBuilder::ok()
+        .json(R"({"status": "ok", "message": "API is working"})")
+        .build();
+
+    auto writer = conn.getWriter();
+    co_await writer.sendResponse(response);
+    co_await conn.close();
+    co_return;
 }
 
 int main() {
-    // 创建运行时
-    RuntimeBuilder runtimeBuilder;
-    auto runtime = runtimeBuilder.build();
-    runtime.start();
-    
-    // 创建 HTTP 服务器
-    HttpServerBuilder builder;
-    HttpServer server = builder
-        .addListen({"0.0.0.0", 8080})
-        .threads(4)
-        .build();
-    
-    server.listen(Host("0.0.0.0", 8080));
-    
-    // 配置路由
+    // 创建路由器
     HttpRouter router;
-    router.addRoute<GET>("/hello", handleHello);
-    
-    // 启动服务器
-    server.run(runtime, router);
-    server.wait();
-    server.stop();
-    
+    router.addHandler<HttpMethod::GET>("/hello", helloHandler);
+    router.addHandler<HttpMethod::GET>("/api", apiHandler);
+
+    // 配置并启动服务器
+    HttpServerConfig config;
+    config.host = "0.0.0.0";
+    config.port = 8080;
+
+    HttpServer server(config);
+
+    // 使用新 API：将 Router 移动到 Server，自动处理路由
+    server.start(std::move(router));
+
+    // 保持服务器运行
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
     return 0;
 }
 ```
 
-### HTTP 客户端
+### HTTP 客户端（使用 Builder 模式）
 
 ```cpp
-#include "galay-http/client/HttpClient.h"
-#include "galay-http/utils/HttpUtils.h"
+#include "galay-http/kernel/http/HttpClient.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
+#include "galay-kernel/async/TcpSocket.h"
+#include "galay-kernel/kernel/Runtime.h"
 
-using namespace galay;
 using namespace galay::http;
+using namespace galay::kernel;
+using namespace galay::async;
 
 Coroutine makeRequest(Runtime& runtime) {
-    HttpClient client(runtime);
-    
-    // 初始化和连接
-    if (auto res = client.init(); !res) {
-        std::cout << "Init failed: " << res.error().message() << std::endl;
-        co_return nil();
-    }
-    
-    if (auto res = co_await client.connect({"127.0.0.1", 8080}); !res) {
-        std::cout << "Connect failed: " << res.error().message() << std::endl;
-        co_return nil();
-    }
-    
+    // 创建并连接 Socket
+    TcpSocket socket(IPType::IPV4);
+    socket.option().handleNonBlock();
+
+    Host server_host(IPType::IPV4, "127.0.0.1", 8080);
+    co_await socket.connect(server_host);
+
+    // 创建 HttpClient
+    HttpClient client(std::move(socket));
+
+    // 使用 Builder 构造 POST 请求 - 简洁优雅！
+    auto request = Http1_1RequestBuilder::post("/api/users")
+        .host("127.0.0.1:8080")
+        .json(R"({"name": "John", "age": 30})")
+        .build();
+
     // 发送请求
-    auto reader = client.getReader();
     auto writer = client.getWriter();
-    
-    HttpRequest request = HttpUtils::defaultGet("/hello");
-    if (auto res = co_await writer.send(request); !res) {
-        std::cout << "Send failed: " << res.error().message() << std::endl;
-        co_return nil();
-    }
-    
-    // 获取响应
-    auto response = co_await reader.getResponse();
-    if (response) {
-        std::cout << "Response: " << response.value().getBodyStr() << std::endl;
-    }
-    
-    co_return nil();
+    co_await writer.sendRequest(request);
+
+    // 接收响应
+    auto reader = client.getReader();
+    HttpResponse response;
+    co_await reader.getResponse(response);
+
+    std::cout << "Response: " << response.getBodyStr() << std::endl;
+
+    co_await client.close();
+    co_return;
 }
 
 int main() {
-    RuntimeBuilder builder;
-    auto runtime = builder.build();
+    Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 1, 1);
     runtime.start();
-    
-    runtime.schedule(makeRequest(runtime));
-    
-    getchar();
+
+    auto* scheduler = runtime.getNextIOScheduler();
+    scheduler->spawn(makeRequest(runtime));
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
     runtime.stop();
+
     return 0;
 }
 ```
@@ -376,7 +396,107 @@ make
 
 ## API 工具类
 
-### HttpUtils
+### Http1_1ResponseBuilder（推荐使用）
+
+使用 Builder 模式构造 HTTP 响应，代码更简洁优雅：
+
+```cpp
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
+
+// 基本用法
+auto response = Http1_1ResponseBuilder::ok()
+    .header("Server", "Galay-HTTP/1.0")
+    .text("Hello, World!")
+    .build();
+
+// JSON 响应
+auto jsonResponse = Http1_1ResponseBuilder::ok()
+    .json(R"({"status": "ok", "data": [1, 2, 3]})")
+    .build();
+
+// HTML 响应
+auto htmlResponse = Http1_1ResponseBuilder::ok()
+    .html("<h1>Welcome</h1>")
+    .build();
+
+// 自定义状态码和多个头部
+auto customResponse = Http1_1ResponseBuilder()
+    .status(201)
+    .header("Location", "/users/123")
+    .header("X-Custom-Header", "value")
+    .json(R"({"id": 123, "created": true})")
+    .build();
+
+// 快捷方法
+auto notFound = Http1_1ResponseBuilder::notFound()
+    .text("Resource not found")
+    .build();
+
+auto serverError = Http1_1ResponseBuilder::internalServerError()
+    .json(R"({"error": "Internal server error"})")
+    .build();
+```
+
+**支持的快捷方法**：
+- `ok()` - 200 OK
+- `created()` - 201 Created
+- `noContent()` - 204 No Content
+- `badRequest()` - 400 Bad Request
+- `unauthorized()` - 401 Unauthorized
+- `forbidden()` - 403 Forbidden
+- `notFound()` - 404 Not Found
+- `internalServerError()` - 500 Internal Server Error
+
+### Http1_1RequestBuilder（推荐使用）
+
+使用 Builder 模式构造 HTTP 请求：
+
+```cpp
+#include "galay-http/utils/Http1_1RequestBuilder.h"
+
+// GET 请求
+auto getRequest = Http1_1RequestBuilder::get("/api/users")
+    .host("example.com")
+    .header("User-Agent", "Galay-HTTP-Client/1.0")
+    .build();
+
+// POST JSON 请求
+auto postRequest = Http1_1RequestBuilder::post("/api/users")
+    .host("example.com")
+    .json(R"({"name": "John", "age": 30})")
+    .build();
+
+// POST 表单请求
+auto formRequest = Http1_1RequestBuilder::post("/login")
+    .host("example.com")
+    .form({
+        {"username", "john"},
+        {"password", "secret"}
+    })
+    .build();
+
+// 自定义请求
+auto customRequest = Http1_1RequestBuilder()
+    .method(HttpMethod::PUT)
+    .uri("/api/users/123")
+    .host("example.com")
+    .contentType("application/json")
+    .userAgent("MyApp/1.0")
+    .connection("keep-alive")
+    .body(R"({"name": "John Updated"})")
+    .build();
+```
+
+**支持的快捷方法**：
+- `get(uri)` - GET 请求
+- `post(uri)` - POST 请求
+- `put(uri)` - PUT 请求
+- `del(uri)` - DELETE 请求
+- `patch(uri)` - PATCH 请求
+- `head(uri)` - HEAD 请求
+- `options(uri)` - OPTIONS 请求
+
+### HttpUtils（传统方式）
 
 ```cpp
 // 创建默认响应
