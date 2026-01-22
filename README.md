@@ -67,7 +67,7 @@ target_link_libraries(your_target
 using namespace galay;
 using namespace galay::http;
 
-Coroutine<nil> handleHello(HttpRequest& request, HttpReader& reader, 
+Coroutine handleHello(HttpRequest& request, HttpReader& reader, 
                            HttpWriter& writer, HttpParams params) {
     auto response = HttpUtils::defaultOk("txt", "Hello, World!");
     co_await writer.reply(response);
@@ -111,7 +111,7 @@ int main() {
 using namespace galay;
 using namespace galay::http;
 
-Coroutine<nil> makeRequest(Runtime& runtime) {
+Coroutine makeRequest(Runtime& runtime) {
     HttpClient client(runtime);
     
     // 初始化和连接
@@ -175,7 +175,7 @@ router.addRoute<GET>("/static/*", handleStatic);
 router.addRoute<GET>("/endpoint/*/app", handleApp);
 
 // 通配符匹配的内容会被放入 HttpParams 中，键名为 "*"
-Coroutine<nil> handleStatic(HttpRequest& request, HttpConnection& conn, 
+Coroutine handleStatic(HttpRequest& request, HttpConnection& conn, 
                             HttpParams params) {
     // 对于请求 /static/css/style.css，params["*"] = "css/style.css"
     std::string path = params["*"];
@@ -191,7 +191,7 @@ Coroutine<nil> handleStatic(HttpRequest& request, HttpConnection& conn,
 ### 参数化路由
 
 ```cpp
-Coroutine<nil> handleUser(HttpRequest& request, HttpReader& reader,
+Coroutine handleUser(HttpRequest& request, HttpReader& reader,
                           HttpWriter& writer, HttpParams params) {
     std::string userId = params["id"];  // 提取路径参数
     auto response = HttpUtils::defaultOk("txt", "User ID: " + userId);
@@ -302,7 +302,7 @@ co_await writer.sendChunk(empty, true);
 ### 客户端接收 Chunked 响应
 
 ```cpp
-Coroutine<nil> receiveChunked(HttpClient& client) {
+Coroutine receiveChunked(HttpClient& client) {
     auto reader = client.getReader();
     
     auto response = co_await reader.getResponse();

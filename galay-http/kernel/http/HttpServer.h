@@ -2,12 +2,14 @@
 #define GALAY_HTTP_SERVER_H
 
 #include "HttpConn.h"
+#include "HttpRouter.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <optional>
 
 namespace galay::http
 {
@@ -58,12 +60,17 @@ public:
     HttpServer& operator=(const HttpServer&) = delete;
 
     /**
-     * @brief 设置HTTP请求处理器
+     * @brief 设置HTTP请求处理器并启动服务器
      * @param handler 处理函数
      */
     void start(HttpConnHandler handler);
 
-
+    /**
+     * @brief 使用 HttpRouter 启动服务器
+     * @param router HttpRouter 对象（右值引用，会移动到服务器内部）
+     * @details 服务器会持有 Router 并自动处理路由匹配和请求分发
+     */
+    void start(HttpRouter&& router);
 
     /**
      * @brief 停止服务器
@@ -105,6 +112,7 @@ private:
     Runtime m_runtime;                  // 内置的 Runtime
     HttpServerConfig m_config;
     HttpConnHandler m_handler;
+    std::optional<HttpRouter> m_router; // 可选的内置 Router
     std::unique_ptr<TcpSocket> m_listener;
     std::atomic<bool> m_running;
 };

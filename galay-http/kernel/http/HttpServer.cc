@@ -1,5 +1,6 @@
 #include "HttpServer.h"
 #include "HttpLog.h"
+#include "galay-http/protoc/http/HttpResponse.h"
 
 namespace galay::http
 {
@@ -21,6 +22,51 @@ HttpServer::~HttpServer()
 void HttpServer::start(HttpConnHandler handler)
 {
     m_handler = handler;
+    start();
+}
+
+void HttpServer::start(HttpRouter&& router)
+{
+    // 移动 Router 到服务器内部
+    m_router = std::move(router);
+
+    // 创建一个处理器，使用内置的 Router 进行路由匹配
+    m_handler = [this](HttpConn conn) -> Coroutine {
+        // 读取请求
+        auto reader = conn.getReader();
+        HttpRequest request;
+        auto read_result = co_await reader.getRequest(request);
+
+        if (!read_result) {
+            HTTP_LOG_ERROR("failed to read request: {}", read_result.error().message());
+            co_return;
+        }
+
+        // 路由匹配
+        auto match = m_router->findHandler(request.header().method(), request.header().uri());
+
+        if (!match.handler) {
+            // 404 Not Found
+            HTTP_LOG_WARN("no handler found for {} {}",
+                         static_cast<int>(request.header().method()),
+                         request.header().uri());
+
+            HttpResponse response;
+            response.header().version() = HttpVersion::HttpVersion_1_1;
+            response.header().code() = HttpStatusCode::OK_200;
+            response.header().headerPairs().addHeaderPair("Content-Type", "text/plain");
+            response.setBodyStr("404 Not Found");
+
+            auto writer = conn.getWriter();
+            co_await writer.sendResponse(response);
+            co_return;
+        }
+
+        // 调用处理器
+        co_await (*match.handler)(conn, std::move(request)).wait();
+        co_return;
+    };
+
     start();
 }
 

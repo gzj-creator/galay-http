@@ -167,109 +167,6 @@ Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
 }
 
 // 使用路由器的请求处理器 - 测试 mount 和 mountHardly
-Coroutine handleRequest(HttpConn conn) {
-    // 获取 Reader 和 Writer
-    auto reader = conn.getReader();
-    auto writer = conn.getWriter();
-
-    // Keep-Alive 循环：在同一个连接上处理多个请求
-    while (true) {
-        g_request_count++;
-
-        // 读取HTTP请求
-        HttpRequest request;
-        bool requestComplete = false;
-
-        while (!requestComplete) {
-            auto result = co_await reader.getRequest(request);
-
-            if (!result) {
-                auto& error = result.error();
-                if (error.code() == kConnectionClose) {
-                    // 客户端正常关闭连接
-                    LogDebug("Client closed connection gracefully");
-                } else if (error.code() == kRecvError) {
-                    // 连接断开，这在 Keep-Alive 场景下是正常的
-                    LogDebug("Connection disconnected: {}", error.message());
-                } else {
-                    LogError("Request parse error: {}", error.message());
-                }
-                co_await conn.close();
-                co_return;
-            }
-
-            requestComplete = result.value();
-        }
-
-        LogInfo("Request #{} received: {} {}",
-                g_request_count.load(),
-                static_cast<int>(request.header().method()),
-                request.header().uri());
-
-        std::string uri = request.header().uri();
-        bool keepAlive = false;
-
-        // 检查是否支持 Keep-Alive
-        if (request.header().headerPairs().hasKey("Connection")) {
-            std::string connValue = request.header().headerPairs().getValue("Connection");
-            // 转换为小写进行比较
-            std::transform(connValue.begin(), connValue.end(), connValue.begin(), ::tolower);
-            keepAlive = (connValue.find("keep-alive") != std::string::npos);
-        }
-
-        // 对于 HTTP/1.1，默认是 Keep-Alive
-        if (request.header().version() == HttpVersion::HttpVersion_1_1 &&
-            !request.header().headerPairs().hasKey("Connection")) {
-            keepAlive = true;
-        }
-
-        // 使用路由器查找处理器（测试 mount 和 mountHardly）
-        auto match = g_router.findHandler(request.header().method(), uri);
-
-        LogDebug("findHandler result: handler={}, method={}, uri={}",
-                 (void*)match.handler,
-                 static_cast<int>(request.header().method()),
-                 uri);
-
-        if (match.handler && match.handler) {
-            // 找到处理器，调用它
-            LogInfo("Handler found for: {}", uri);
-
-            // 调用处理器并等待协程执行完成
-            co_await (*match.handler)(conn, std::move(request)).wait();
-            co_return;
-        } else {
-            // 未找到处理器，返回 404
-            HttpResponse response;
-            response.header().version() = HttpVersion::HttpVersion_1_1;
-            response.header().code() = HttpStatusCode::NotFound_404;
-            response.header().headerPairs().addHeaderPair("Content-Type", "text/html");
-            response.header().headerPairs().addHeaderPair("Server", GALAY_SERVER);
-
-            // 设置 Connection 头
-            if (keepAlive) {
-                response.header().headerPairs().addHeaderPair("Connection", "keep-alive");
-            } else {
-                response.header().headerPairs().addHeaderPair("Connection", "close");
-            }
-
-            response.setBodyStr("<h1>404 Not Found</h1>");
-            co_await writer.sendResponse(response);
-        }
-
-        // 如果不支持 Keep-Alive，关闭连接并退出循环
-        if (!keepAlive) {
-            co_await conn.close();
-            co_return;
-        }
-
-        // 否则继续循环，等待下一个请求
-        LogDebug("Waiting for next request on same connection...");
-    } // end while (true)
-
-    co_return;
-}
-
 int main(int argc, char* argv[]) {
     std::string static_dir = "./test/static_files";
     int port = 8080;
@@ -332,8 +229,8 @@ int main(int argc, char* argv[]) {
         LogInfo("Press Ctrl+C to stop the server");
         LogInfo("========================================\n");
 
-        // 运行服务器（阻塞）
-        server.start(handleRequest);
+        // 使用新的 API：将 Router 移动到 Server 内部，Server 自动处理路由
+        server.start(std::move(g_router));
 
         while (g_server_running.load()) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
