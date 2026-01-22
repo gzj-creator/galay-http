@@ -18,6 +18,7 @@ add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 add_subdirectory(galay-http)
 add_subdirectory(test)
 add_subdirectory(benchmark)
+add_subdirectory(example)
 
 # 配置并安装 CMake 配置文件
 include(CMakePackageConfigHelpers)
