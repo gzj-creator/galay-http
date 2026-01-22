@@ -390,8 +390,8 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
     }
     wildcardPath += "**";
 
-    // 为 GET 方法注册路由
-    addHandler<HttpMethod::GET>(wildcardPath, handler);
+    // 为 GET 和 HEAD 方法注册路由
+    addHandler<HttpMethod::GET, HttpMethod::HEAD>(wildcardPath, handler);
 
     HTTP_LOG_INFO("Mounted directory '{}' to route '{}'", dirPath, routePrefix);
 }
@@ -421,8 +421,12 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
     return [routePrefix, dirPath, config](HttpConn& conn, HttpRequest req) -> Coroutine {
         namespace fs = std::filesystem;
 
+        HTTP_LOG_DEBUG("=== Static file handler START ===");
+        HTTP_LOG_DEBUG("routePrefix={}, dirPath={}", routePrefix, dirPath);
+
         // 获取请求的路径参数（通配符匹配的部分）
         std::string requestPath = req.header().uri();
+        HTTP_LOG_DEBUG("requestPath={}", requestPath);
 
         // 从 URI 中提取相对路径
         // 例如：/static/css/style.css -> css/style.css
@@ -474,7 +478,9 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         }
 
         // 检查文件是否存在且是普通文件
+        HTTP_LOG_DEBUG("Checking if file exists: {}", canonicalFile.string());
         if (!fs::exists(canonicalFile) || !fs::is_regular_file(canonicalFile)) {
+            HTTP_LOG_WARN("File not found or not regular: {}", canonicalFile.string());
             HttpResponse response;
             response.header().code() = HttpStatusCode::NotFound_404;
             response.setBodyStr("404 Not Found");
@@ -483,16 +489,22 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
             co_return;
         }
 
+        HTTP_LOG_DEBUG("File exists, getting size");
         // 获取文件大小
         size_t fileSize = fs::file_size(canonicalFile);
+        HTTP_LOG_DEBUG("File size: {}", fileSize);
 
         // 设置 Content-Type
         std::string extension = canonicalFile.extension().string();
         std::string ext = extension.empty() ? "" : extension.substr(1);
         std::string mimeType = MimeType::convertToMimeType(ext);
+        HTTP_LOG_DEBUG("MIME type: {}", mimeType);
 
+        HTTP_LOG_DEBUG("About to call sendFileContent for: {}", canonicalFile.string());
         // 使用配置的传输方式发送文件
+        // 直接 co_await 协程，不需要 .wait()
         co_await sendFileContent(conn, req, canonicalFile.string(), fileSize, mimeType, config).wait();
+        HTTP_LOG_DEBUG("sendFileContent completed");
         co_return;
     };
 }
@@ -576,15 +588,30 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                                       const std::string& mimeType,
                                       const StaticFileConfig& config)
 {
-    // 生成 ETag
-    std::string etag = ETagGenerator::generate(filePath);
-    std::time_t lastModified = std::time(nullptr);  // 简化：使用当前时间
+    HTTP_LOG_DEBUG("sendFileContent: START, file={}, size={}", filePath, fileSize);
+
+    // 生成 ETag - 暂时使用简化版本
+    std::time_t lastModified = std::time(nullptr);
+
+    // 使用文件路径哈希 + 大小 + 时间生成 ETag
+    uint64_t pathHash = std::hash<std::string>{}(filePath);
+    char etagBuf[128];
+    snprintf(etagBuf, sizeof(etagBuf), "\"%lx-%zx-%lx\"",
+             static_cast<unsigned long>(pathHash),
+             fileSize,
+             static_cast<unsigned long>(lastModified));
+    std::string etag(etagBuf);
+    HTTP_LOG_DEBUG("sendFileContent: ETag generated: {}", etag);
+
     std::string lastModifiedStr = ETagGenerator::formatHttpDate(lastModified);
+    HTTP_LOG_DEBUG("sendFileContent: lastModified={}", lastModifiedStr);
 
     auto writer = conn.getWriter();
+    HTTP_LOG_DEBUG("sendFileContent: got writer");
 
     // 1. 处理 If-None-Match (ETag 条件请求)
     std::string ifNoneMatch = req.header().headerPairs().getValue("If-None-Match");
+    HTTP_LOG_DEBUG("sendFileContent: If-None-Match={}", ifNoneMatch);
     if (!ifNoneMatch.empty()) {
         // 检查 ETag 是否匹配
         if (ifNoneMatch == "*" || ETagGenerator::match(etag, ifNoneMatch)) {
@@ -646,6 +673,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     // 5. 发送完整文件（无 Range 请求或 Range 无效）
     // 根据配置决定传输模式
     FileTransferMode mode = config.decideTransferMode(fileSize);
+    HTTP_LOG_DEBUG("sendFileContent: transfer mode={}", static_cast<int>(mode));
 
     // 构建响应头
     HttpResponse response;
@@ -654,6 +682,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     response.header().headerPairs().addHeaderPair("ETag", etag);
     response.header().headerPairs().addHeaderPair("Last-Modified", lastModifiedStr);
     response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+    HTTP_LOG_DEBUG("sendFileContent: response headers set");
 
     switch (mode) {
         case FileTransferMode::MEMORY: {
@@ -662,19 +691,24 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
 
             std::ifstream file(filePath, std::ios::binary);
             if (!file) {
+                HTTP_LOG_ERROR("Failed to open file: {}", filePath);
                 response.header().code() = HttpStatusCode::InternalServerError_500;
                 response.setBodyStr("500 Internal Server Error");
                 co_await writer.send(response.toString());
                 co_return;
             }
 
+            HTTP_LOG_DEBUG("File opened, reading content");
             std::string content(fileSize, '\0');
             file.read(&content[0], fileSize);
             response.setBodyStr(std::move(content));
+            HTTP_LOG_DEBUG("Content read, sending response");
 
             auto result = co_await writer.send(response.toString());
             if (!result) {
                 HTTP_LOG_ERROR("Failed to send response: {}", result.error().message());
+            } else {
+                HTTP_LOG_DEBUG("Response sent successfully");
             }
             break;
         }

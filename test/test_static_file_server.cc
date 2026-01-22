@@ -226,13 +226,17 @@ Coroutine handleRequest(HttpConn conn) {
         // 使用路由器查找处理器（测试 mount 和 mountHardly）
         auto match = g_router.findHandler(request.header().method(), uri);
 
+        LogDebug("findHandler result: handler={}, method={}, uri={}",
+                 (void*)match.handler,
+                 static_cast<int>(request.header().method()),
+                 uri);
+
         if (match.handler && match.handler) {
             // 找到处理器，调用它
             LogInfo("Handler found for: {}", uri);
 
-            // 调用处理器并让协程执行（不需要 co_await，因为 Coroutine 会自动调度）
-            auto coro = (*match.handler)(conn, std::move(request));
-            // 协程已经被调度，直接返回
+            // 调用处理器并等待协程执行完成
+            co_await (*match.handler)(conn, std::move(request)).wait();
             co_return;
         } else {
             // 未找到处理器，返回 404
