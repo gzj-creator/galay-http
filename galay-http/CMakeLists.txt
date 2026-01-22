@@ -8,6 +8,8 @@ set(HTTP_SOURCES
     protoc/http/HttpResponse.cc
     protoc/http/HttpChunk.cc
     utils/HttpUtils.cc
+    utils/Http1_1ResponseBuilder.cc
+    utils/Http1_1RequestBuilder.cc
     kernel/http/HttpReader.cc
     kernel/http/HttpWriter.cc
     kernel/http/HttpConn.cc

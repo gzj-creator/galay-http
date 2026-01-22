@@ -8,6 +8,7 @@
 #include "galay-http/kernel/http/HttpRouter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/common/Log.h"
 #include <iostream>
 #include <string>
@@ -24,22 +25,11 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
     // 获取请求体
     std::string requestBody = req.getBodyStr();
 
-    // 构造响应
-    HttpResponse response;
-    response.header().version() = HttpVersion::HttpVersion_1_1;
-    response.header().code() = HttpStatusCode::OK_200;
-    response.header().headerPairs().addHeaderPair("Content-Type", "text/plain");
-    response.header().headerPairs().addHeaderPair("Server", "Galay-HTTP-Echo/1.0");
-
-    // Echo 回客户端发送的内容
-    std::string responseBody;
-    if (requestBody.empty()) {
-        responseBody = "Echo: (empty body)";
-    } else {
-        responseBody = "Echo: " + requestBody;
-    }
-
-    response.setBodyStr(std::move(responseBody));
+    // 使用 Builder 构造响应 - 简洁优雅！
+    auto response = Http1_1ResponseBuilder::ok()
+        .header("Server", "Galay-HTTP-Echo/1.0")
+        .text(requestBody.empty() ? "Echo: (empty body)" : "Echo: " + requestBody)
+        .build();
 
     // 发送响应
     auto writer = conn.getWriter();
@@ -59,12 +49,6 @@ Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
             static_cast<int>(req.header().method()),
             req.header().uri());
 
-    HttpResponse response;
-    response.header().version() = HttpVersion::HttpVersion_1_1;
-    response.header().code() = HttpStatusCode::OK_200;
-    response.header().headerPairs().addHeaderPair("Content-Type", "text/html; charset=utf-8");
-    response.header().headerPairs().addHeaderPair("Server", "Galay-HTTP-Echo/1.0");
-
     std::string body = R"(<!DOCTYPE html>
 <html>
 <head>
@@ -79,7 +63,11 @@ Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
 </body>
 </html>)";
 
-    response.setBodyStr(std::move(body));
+    // 使用 Builder 构造 HTML 响应
+    auto response = Http1_1ResponseBuilder::ok()
+        .header("Server", "Galay-HTTP-Echo/1.0")
+        .html(body)
+        .build();
 
     auto writer = conn.getWriter();
     co_await writer.sendResponse(response);

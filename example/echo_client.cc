@@ -7,6 +7,7 @@
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Log.h"
 #include "galay-kernel/kernel/Runtime.h"
@@ -44,17 +45,13 @@ Coroutine sendEchoRequest(Runtime& runtime, const std::string& host, int port, c
     // 创建 HttpClient
     HttpClient client(std::move(socket));
 
-    // 构造 POST 请求
-    HttpRequest request;
-    request.header().method() = HttpMethod::POST;
-    request.header().uri() = "/echo";
-    request.header().version() = HttpVersion::HttpVersion_1_1;
-    request.header().headerPairs().addHeaderPair("Host", host + ":" + std::to_string(port));
-    request.header().headerPairs().addHeaderPair("Content-Type", "text/plain");
-    request.header().headerPairs().addHeaderPair("Connection", "close");
-
-    std::string body = message;
-    request.setBodyStr(std::move(body));
+    // 使用 Builder 构造 POST 请求 - 简洁优雅！
+    auto request = Http1_1RequestBuilder::post("/echo")
+        .host(host + ":" + std::to_string(port))
+        .contentType("text/plain")
+        .connection("close")
+        .body(message)
+        .build();
 
     LogInfo("Sending request: POST /echo");
     LogInfo("Request body: {}", message);
