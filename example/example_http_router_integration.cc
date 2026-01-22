@@ -333,14 +333,14 @@ Coroutine handleRequest(HttpConn conn) {
             }
         }
 
-        // 调用处理器
-        co_await (*match.handler)(conn, std::move(request));
+        // 调用处理器（使用 co_await Coroutine.wait()）
+        co_await (*match.handler)(conn, std::move(request)).wait();
     } else {
         // 未找到匹配的路由，返回 404
         LogWarn("No route found for: {} {}",
                 httpMethodToString(request.header().method()),
                 request.header().uri());
-        co_await notFoundHandler(conn, std::move(request));
+        co_await notFoundHandler(conn, std::move(request)).wait();
     }
 
     co_await conn.close();

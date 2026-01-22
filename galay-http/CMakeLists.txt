@@ -23,6 +23,8 @@ set(WS_SOURCES
     protoc/websocket/WebSocketFrame.cc
     kernel/websocket/WsReader.cc
     kernel/websocket/WsWriter.cc
+    kernel/websocket/WsUpgrade.cc
+    kernel/websocket/WsHeartbeat.cc
 )
 
 # HTTP/2 暂时移除，后续单独重构

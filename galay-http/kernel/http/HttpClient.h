@@ -286,6 +286,12 @@ public:
      */
     TcpSocket& socket() { return m_socket; }
 
+    /**
+     * @brief 获取RingBuffer
+     * @return RingBuffer引用
+     */
+    RingBuffer& ringBuffer() { return m_ring_buffer; }
+
 private:
     TcpSocket m_socket;
     RingBuffer m_ring_buffer;

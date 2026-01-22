@@ -39,6 +39,7 @@ set(HTTP_TESTS
 set(WEBSOCKET_TESTS
     test_websocket_frame
     test_websocket_conn
+    test_websocket_client
     websocket_usage_example
 )
 

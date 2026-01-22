@@ -11,6 +11,7 @@ set(BENCHMARKS
     bench_http_parser
     bench_chunked
     bench_websocket
+    bench_websocket_client
     benchmark_http_router
 )
 

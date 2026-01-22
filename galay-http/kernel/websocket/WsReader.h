@@ -10,12 +10,20 @@
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
 #include <coroutine>
+#include <functional>
 
 namespace galay::websocket
 {
 
 using namespace galay::kernel;
 using namespace galay::async;
+
+/**
+ * @brief 控制帧回调函数类型
+ * @param opcode 控制帧类型（Ping/Pong/Close）
+ * @param payload 控制帧的负载数据
+ */
+using ControlFrameCallback = std::function<void(WsOpcode opcode, const std::string& payload)>;
 
 /**
  * @brief WebSocket帧读取等待体
@@ -89,7 +97,8 @@ public:
                        std::string& message,
                        WsOpcode& opcode,
                        ReadvAwaitable&& readv_awaitable,
-                       bool is_server)
+                       bool is_server,
+                       ControlFrameCallback control_frame_callback = nullptr)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_message(message)
@@ -98,6 +107,7 @@ public:
         , m_is_server(is_server)
         , m_total_received(0)
         , m_first_frame(true)
+        , m_control_frame_callback(control_frame_callback)
     {
     }
 
@@ -127,6 +137,7 @@ private:
     bool m_is_server;
     size_t m_total_received;
     bool m_first_frame;
+    ControlFrameCallback m_control_frame_callback;
 
 public:
     // TimeoutSupport 需要访问此成员来设置超时错误
@@ -145,7 +156,17 @@ public:
         , m_setting(setting)
         , m_socket(socket)
         , m_is_server(is_server)
+        , m_control_frame_callback(nullptr)
     {
+    }
+
+    /**
+     * @brief 设置控制帧回调函数
+     * @param callback 控制帧回调函数
+     * @details 当收到 Ping/Pong/Close 帧时会调用此回调
+     */
+    void setControlFrameCallback(ControlFrameCallback callback) {
+        m_control_frame_callback = callback;
     }
 
     /**
@@ -168,7 +189,7 @@ public:
     GetMessageAwaitable getMessage(std::string& message, WsOpcode& opcode) {
         return GetMessageAwaitable(m_ring_buffer, m_setting, message, opcode,
                                   m_socket.readv(m_ring_buffer.getWriteIovecs()),
-                                  m_is_server);
+                                  m_is_server, m_control_frame_callback);
     }
 
 private:
@@ -176,6 +197,7 @@ private:
     const WsReaderSetting& m_setting;
     TcpSocket& m_socket;
     bool m_is_server;
+    ControlFrameCallback m_control_frame_callback;
 };
 
 } // namespace galay::websocket

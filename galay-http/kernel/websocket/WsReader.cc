@@ -105,9 +105,12 @@ std::expected<bool, WsError> GetMessageAwaitable::await_resume()
                 return std::unexpected(WsError(kWsControlFrameFragmented));
             }
 
-            // 控制帧直接返回（不累积到消息中）
-            // 调用方需要单独处理控制帧
-            // 这里我们暂时跳过控制帧，继续读取数据帧
+            // 如果设置了控制帧回调，调用它
+            if (m_control_frame_callback) {
+                m_control_frame_callback(frame.header.opcode, frame.payload);
+            }
+
+            // 控制帧不累积到消息中，继续读取数据帧
             continue;
         }
 
