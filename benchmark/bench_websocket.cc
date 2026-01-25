@@ -30,7 +30,7 @@ void benchmark_frame_encoding_small() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 }
 
@@ -52,7 +52,7 @@ void benchmark_frame_encoding_medium() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 }
 
@@ -74,7 +74,7 @@ void benchmark_frame_encoding_large() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 
     // 计算吞吐量 (MB/s)
@@ -109,7 +109,7 @@ void benchmark_frame_decoding_small() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 }
 
@@ -138,7 +138,7 @@ void benchmark_frame_decoding_medium() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 }
 
@@ -167,7 +167,7 @@ void benchmark_frame_decoding_large() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 
     // 计算吞吐量 (MB/s)
@@ -203,7 +203,7 @@ void benchmark_frame_roundtrip() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 }
 
@@ -233,7 +233,7 @@ void benchmark_control_frames() {
 
     std::cout << "  Iterations: " << iterations << " (x3 frames)" << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 3 * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 3 * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / (iterations * 3)) << " μs/op" << std::endl;
 }
 
@@ -256,7 +256,7 @@ void benchmark_masking() {
 
     std::cout << "  Iterations: " << iterations << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
 
     // 计算吞吐量 (MB/s)
@@ -345,7 +345,7 @@ void benchmark_fragmented_frames() {
 
     std::cout << "  Iterations: " << iterations << " (x2 fragments)" << std::endl;
     std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (iterations * 2 * 1000 / duration) << " ops/sec" << std::endl;
+    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 2 * 1000 / duration) << " ops/sec" << std::endl;
     std::cout << "  Avg time: " << (duration * 1000.0 / (iterations * 2)) << " μs/op" << std::endl;
 }
 

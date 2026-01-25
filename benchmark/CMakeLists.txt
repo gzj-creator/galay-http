@@ -20,7 +20,6 @@ foreach(BENCH_NAME ${BENCHMARKS})
         add_executable(${BENCH_NAME} ${BENCH_NAME}.cc)
         target_link_libraries(${BENCH_NAME}
             galay-http
-            galay-kernel::galay-kernel
             pthread
         )
         target_include_directories(${BENCH_NAME} PRIVATE

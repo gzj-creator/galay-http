@@ -106,6 +106,26 @@ struct WsFrame
         header.opcode = opcode;
         header.payload_length = data.size();
     }
+
+    // 便捷的帧类型判断方法
+    bool isPing() const { return header.opcode == WsOpcode::Ping; }
+    bool isPong() const { return header.opcode == WsOpcode::Pong; }
+    bool isClose() const { return header.opcode == WsOpcode::Close; }
+    bool isText() const { return header.opcode == WsOpcode::Text; }
+    bool isBinary() const { return header.opcode == WsOpcode::Binary; }
+    bool isContinuation() const { return header.opcode == WsOpcode::Continuation; }
+
+    bool isControlFrame() const {
+        return header.opcode == WsOpcode::Close ||
+               header.opcode == WsOpcode::Ping ||
+               header.opcode == WsOpcode::Pong;
+    }
+
+    bool isDataFrame() const {
+        return header.opcode == WsOpcode::Text ||
+               header.opcode == WsOpcode::Binary ||
+               header.opcode == WsOpcode::Continuation;
+    }
 };
 
 /**

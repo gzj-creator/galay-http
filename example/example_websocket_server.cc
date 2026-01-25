@@ -1,18 +1,18 @@
 /**
  * @file example_websocket_server.cc
  * @brief WebSocket 服务器完整示例
- * @details 展示如何使用 WsUpgrade、WsHeartbeat 和控制帧回调
+ * @details 展示如何使用 WsUpgrade 和手动处理控制帧（Ping/Pong/Close）
  */
 
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
-#include "galay-http/kernel/websocket/WsHeartbeat.h"
 #include "galay-http/kernel/websocket/WsConn.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -32,75 +32,46 @@ using IOSchedulerType = galay::kernel::IOUringScheduler;
 using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
+using namespace std::chrono_literals;
 
 // ==================== WebSocket 处理器 ====================
 
 /**
  * @brief 处理 WebSocket 连接
- * @param ws_conn WebSocket 连接（通过引用传递，因为 WsConn 禁用了移动）
+ * @param ws_conn WebSocket 连接（通过移动语义传递）
  */
-Coroutine handleWebSocketConnection(WsConn& ws_conn) {
-    LogInfo("WebSocket connection established");
+Coroutine handleWebSocketConnection(WsConn ws_conn) {
+    HTTP_LOG_INFO("WebSocket connection established");
 
-    // 配置心跳
-    WsHeartbeatConfig heartbeat_config;
-    heartbeat_config.enabled = true;
-    heartbeat_config.ping_interval = std::chrono::seconds(30);
-    heartbeat_config.pong_timeout = std::chrono::seconds(10);
-    heartbeat_config.auto_close_on_timeout = true;
-
-    // 创建心跳管理器
-    WsHeartbeat heartbeat(ws_conn, heartbeat_config);
-
-    // 获取 Reader 并设置控制帧回调
-    auto reader = ws_conn.getReader();
-    reader.setControlFrameCallback([&heartbeat](WsOpcode opcode, const std::string& payload) {
-        if (opcode == WsOpcode::Pong) {
-            LogDebug("Received Pong frame");
-            heartbeat.onPongReceived();
-        } else if (opcode == WsOpcode::Ping) {
-            LogDebug("Received Ping frame");
-            // 服务器收到 Ping 时应该自动回复 Pong（这里简化处理）
-        } else if (opcode == WsOpcode::Close) {
-            LogInfo("Received Close frame");
-        }
-    });
-
-    // 启动心跳协程（在后台运行）
-    // 注意：这里需要使用 spawn 来启动后台协程
-    // heartbeat.start(); // 暂时注释，因为需要调度器支持
-
-    // 获取 Writer
-    auto writer = ws_conn.getWriter();
+    // 获取 Reader 和 Writer（必须在协程开始时获取，保证 ws_conn 生命周期）
+    auto& reader = ws_conn.getReader();
+    auto& writer = ws_conn.getWriter();
 
     // 发送欢迎消息
-    WsFrame welcome_frame;
-    welcome_frame.header.fin = true;
-    welcome_frame.header.opcode = WsOpcode::Text;
-    welcome_frame.payload = "Welcome to WebSocket server!";
-    welcome_frame.header.payload_length = welcome_frame.payload.size();
-
-    auto send_result = co_await writer.sendFrame(welcome_frame);
+    HTTP_LOG_INFO("Sending welcome message");
+    auto send_result = co_await writer.sendText("Welcome to WebSocket server!");
     if (!send_result) {
-        LogError("Failed to send welcome message: {}", send_result.error().message());
+        HTTP_LOG_ERROR("Failed to send welcome message: {}", send_result.error().message());
         co_return;
     }
+    HTTP_LOG_INFO("Welcome message sent");
 
     // 消息循环
+    HTTP_LOG_INFO("Entering message loop");
     while (true) {
         std::string message;
         WsOpcode opcode;
 
-        // 读取消息
-        auto result = co_await reader.getMessage(message, opcode);
+        // 读取消息（包括数据帧和控制帧）
+        auto result = co_await reader.getMessage(message, opcode).timeout(1000ms);
 
         if (!result.has_value()) {
             WsError error = result.error();
             if (error.code() == kWsConnectionClosed) {
-                LogInfo("WebSocket connection closed by peer");
+                HTTP_LOG_INFO("WebSocket connection closed by peer");
                 break;
             }
-            LogError("Failed to read message: {}", error.message());
+            HTTP_LOG_ERROR("Failed to read message: {}", error.message());
             break;
         }
 
@@ -109,27 +80,45 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
             continue;
         }
 
-        // 处理消息
-        LogInfo("Received message (opcode={}): {}",
-                static_cast<int>(opcode),
-                message.substr(0, std::min(message.size(), size_t(100))));
-
-        // 回显消息
-        WsFrame echo_frame;
-        echo_frame.header.fin = true;
-        echo_frame.header.opcode = opcode;
-        echo_frame.payload = "Echo: " + message;
-        echo_frame.header.payload_length = echo_frame.payload.size();
-
-        auto echo_result = co_await writer.sendFrame(echo_frame);
-        if (!echo_result) {
-            LogError("Failed to send echo message: {}", echo_result.error().message());
+        // 根据 opcode 判断消息类型并处理
+        if (opcode == WsOpcode::Ping) {
+            // 收到 Ping，发送 Pong 响应
+            HTTP_LOG_INFO("Received Ping frame, sending Pong response");
+            auto pong_result = co_await writer.sendPong(message);
+            if (!pong_result) {
+                HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
+                break;
+            }
+            HTTP_LOG_INFO("Pong sent successfully");
+        }
+        else if (opcode == WsOpcode::Pong) {
+            // 收到 Pong 响应
+            HTTP_LOG_INFO("Received Pong frame");
+        }
+        else if (opcode == WsOpcode::Close) {
+            // 收到关闭请求
+            HTTP_LOG_INFO("Received Close frame, closing connection");
+            co_await writer.sendClose();
             break;
+        }
+        else if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
+            // 处理数据消息
+            HTTP_LOG_INFO("Received {} message: {}",
+                    opcode == WsOpcode::Text ? "text" : "binary",
+                    message.substr(0, std::min(message.size(), size_t(100))));
+
+            // 回显消息
+            std::string echo_msg = "Echo: " + message;
+            auto echo_result = co_await writer.sendText(echo_msg);
+            if (!echo_result) {
+                HTTP_LOG_ERROR("Failed to send echo message: {}", echo_result.error().message());
+                break;
+            }
         }
     }
 
     // 关闭连接
-    LogInfo("Closing WebSocket connection");
+    HTTP_LOG_INFO("Closing WebSocket connection");
     co_await ws_conn.close();
     co_return;
 }
@@ -139,28 +128,33 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
  * @param conn HTTP 连接
  */
 Coroutine handleHttpRequest(HttpConn conn) {
+    HTTP_LOG_INFO("=== handleHttpRequest: START ===");
+
     // 读取 HTTP 请求
     auto reader = conn.getReader();
     HttpRequest request;
 
+    HTTP_LOG_INFO("=== Reading HTTP request ===");
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
-        LogError("Failed to read HTTP request: {}", read_result.error().message());
+        HTTP_LOG_ERROR("Failed to read HTTP request: {}", read_result.error().message());
         co_await conn.close();
         co_return;
     }
 
-    LogInfo("Received HTTP request: {} {}",
+    HTTP_LOG_INFO("Received HTTP request: {} {}",
             httpMethodToString(request.header().method()),
             request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
+    HTTP_LOG_INFO("=== Checking if WebSocket upgrade request, URI: {} ===", request.header().uri());
     if (request.header().uri() == "/ws") {
+        HTTP_LOG_INFO("=== Processing WebSocket upgrade request ===");
         // 处理 WebSocket 升级
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            LogError("WebSocket upgrade failed: {}", upgrade_result.error_message);
+            HTTP_LOG_ERROR("WebSocket upgrade failed: {}", upgrade_result.error_message);
 
             // 发送错误响应
             auto writer = conn.getWriter();
@@ -169,17 +163,19 @@ Coroutine handleHttpRequest(HttpConn conn) {
             co_return;
         }
 
-        LogInfo("WebSocket upgrade successful");
+        HTTP_LOG_INFO("WebSocket upgrade successful");
 
         // 发送 101 Switching Protocols 响应
         auto writer = conn.getWriter();
         auto send_result = co_await writer.sendResponse(upgrade_result.response);
 
         if (!send_result) {
-            LogError("Failed to send upgrade response: {}", send_result.error().message());
+            HTTP_LOG_ERROR("Failed to send upgrade response: {}", send_result.error().message());
             co_await conn.close();
             co_return;
         }
+
+        HTTP_LOG_INFO("=== Upgrade response sent, creating WsConn ===");
 
         // 升级到 WebSocket 连接
         WsReaderSetting reader_setting;
@@ -188,17 +184,20 @@ Coroutine handleHttpRequest(HttpConn conn) {
 
         WsWriterSetting writer_setting;
 
-        // 创建 WebSocket 连接（转移 socket 和 ring_buffer）
+        // 从 HttpConn 创建 WebSocket 连接（转移所有权）
         WsConn ws_conn(
-            std::move(conn.socket()),
-            std::move(conn.ringBuffer()),
+            std::move(conn),
             reader_setting,
             writer_setting,
             true  // is_server
         );
 
-        // 处理 WebSocket 连接（通过引用传递）
-        co_await handleWebSocketConnection(ws_conn).wait();
+        HTTP_LOG_INFO("=== WsConn created, calling handleWebSocketConnection ===");
+
+        // 处理 WebSocket 连接（通过移动语义传递，协程将拥有 ws_conn 的所有权）
+        co_await handleWebSocketConnection(std::move(ws_conn)).wait();
+
+        HTTP_LOG_INFO("=== handleWebSocketConnection returned ===");
         co_return;
     }
 
@@ -254,9 +253,9 @@ ws.onclose = () => {
 // ==================== 主函数 ====================
 
 int main() {
-    LogInfo("========================================");
-    LogInfo("WebSocket Server Example");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("WebSocket Server Example");
+    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     // 配置服务器
@@ -271,24 +270,24 @@ int main() {
     HttpServer server(config);
 
     // 启动服务器
-    LogInfo("Starting WebSocket server on {}:{}", config.host, config.port);
-    LogInfo("WebSocket endpoint: ws://localhost:8080/ws");
-    LogInfo("HTTP endpoint: http://localhost:8080/");
-    LogInfo("Press Ctrl+C to stop\n");
+    HTTP_LOG_INFO("Starting WebSocket server on {}:{}", config.host, config.port);
+    HTTP_LOG_INFO("WebSocket endpoint: ws://localhost:8080/ws");
+    HTTP_LOG_INFO("HTTP endpoint: http://localhost:8080/");
+    HTTP_LOG_INFO("Press Ctrl+C to stop\n");
 
     // 启动服务器并传入处理器
     server.start(handleHttpRequest);
 
     // 保持服务器运行
-    LogInfo("Server is running. Press Ctrl+C to stop.");
+    HTTP_LOG_INFO("Server is running. Press Ctrl+C to stop.");
     while (server.isRunning()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    LogInfo("Server stopped");
+    HTTP_LOG_INFO("Server stopped");
     return 0;
 #else
-    LogError("No scheduler defined. Please compile with -DUSE_KQUEUE, -DUSE_EPOLL, or -DUSE_IOURING");
+    HTTP_LOG_ERROR("No scheduler defined. Please compile with -DUSE_KQUEUE, -DUSE_EPOLL, or -DUSE_IOURING");
     return 1;
 #endif
 }

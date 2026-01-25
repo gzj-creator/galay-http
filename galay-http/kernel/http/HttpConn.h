@@ -8,6 +8,10 @@
 #include <memory>
 #include <optional>
 
+namespace galay::websocket {
+    class WsConn;  // 前向声明
+}
+
 namespace galay::http
 {
 
@@ -51,19 +55,6 @@ public:
     }
 
     /**
-     * @brief 获取底层socket
-     * @return TcpSocket引用
-     */
-    TcpSocket& socket() { return m_socket; }
-
-    /**
-     * @brief 获取RingBuffer
-     * @return RingBuffer引用
-     */
-    RingBuffer& ringBuffer() { return m_ring_buffer; }
-
-    
-    /**
      * @brief 获取HttpReader
      * @return HttpReader 临时构造的Reader对象
      */
@@ -79,32 +70,28 @@ public:
         return HttpWriter(m_writer_setting, m_socket);
     }
 
-    /**
-     * @brief 升级到 WebSocket 连接
-     * @tparam WsConnType WebSocket连接类型（通常是 galay::websocket::WsConn）
-     * @param ws_reader_setting WebSocket读取器配置
-     * @param ws_writer_setting WebSocket写入器配置
-     * @return std::unique_ptr<WsConnType> WebSocket连接的智能指针
-     * @details 此方法会转移 socket 和 ring_buffer 的所有权到新的 WebSocket 连接
-     *          调用此方法后，HttpConn 对象将处于无效状态，不应再使用
-     */
-    template<typename WsConnType, typename WsReaderSetting, typename WsWriterSetting>
-    std::unique_ptr<WsConnType> upgrade(const WsReaderSetting& ws_reader_setting,
-                                       const WsWriterSetting& ws_writer_setting,
-                                       bool is_server = true) {
-        return std::make_unique<WsConnType>(
-            std::move(m_socket),
-            std::move(m_ring_buffer),
-            ws_reader_setting,
-            ws_writer_setting,
-            is_server
-        );
-    }
-
     // 允许HttpServer访问私有成员
     friend class HttpServer;
 
+    // 允许HttpRouter访问私有成员
+    friend class HttpRouter;
+
+    // 允许WsConn访问私有成员（用于从HttpConn构造）
+    friend class galay::websocket::WsConn;
+
 private:
+    /**
+     * @brief 获取底层socket（私有方法，仅供友元类使用）
+     * @return TcpSocket引用
+     */
+    TcpSocket& socket() { return m_socket; }
+
+    /**
+     * @brief 获取RingBuffer（私有方法，仅供友元类使用）
+     * @return RingBuffer引用
+     */
+    RingBuffer& ringBuffer() { return m_ring_buffer; }
+
     TcpSocket m_socket;
     RingBuffer m_ring_buffer;
     HttpReaderSetting m_reader_setting;

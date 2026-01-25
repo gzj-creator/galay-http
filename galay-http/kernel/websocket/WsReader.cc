@@ -1,4 +1,5 @@
 #include "WsReader.h"
+#include "galay-kernel/common/Log.h"
 
 namespace galay::websocket
 {
@@ -105,13 +106,18 @@ std::expected<bool, WsError> GetMessageAwaitable::await_resume()
                 return std::unexpected(WsError(kWsControlFrameFragmented));
             }
 
+            // 将控制帧作为完整消息返回给用户处理
+            // 用户需要自己判断帧类型并决定如何响应（例如对 Ping 发送 Pong）
+            m_message = frame.payload;
+            m_opcode = frame.header.opcode;
+
             // 如果设置了控制帧回调，调用它
             if (m_control_frame_callback) {
                 m_control_frame_callback(frame.header.opcode, frame.payload);
             }
 
-            // 控制帧不累积到消息中，继续读取数据帧
-            continue;
+            // 返回 true 表示收到完整的控制帧
+            return true;
         }
 
         // 处理数据帧

@@ -6,6 +6,10 @@
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 
+namespace galay::http {
+    class HttpConn;   // 前向声明
+}
+
 namespace galay::websocket
 {
 
@@ -20,24 +24,51 @@ class WsConn
 {
 public:
     /**
-     * @brief 构造函数
-     * @param socket TcpSocket右值引用
-     * @param ring_buffer RingBuffer右值引用（从HttpConn转移）
+     * @brief 从 HttpConn 构造 WebSocket 连接
+     * @param http_conn HttpConn右值引用（将转移所有权）
      * @param reader_setting WsReaderSetting引用
      * @param writer_setting WsWriterSetting引用
      * @param is_server 是否是服务器端（默认true）
+     *
+     * @note 构造函数会自动设置 writer_setting.use_mask：
+     *       - 客户端（is_server=false）：use_mask = true（协议要求）
+     *       - 服务器端（is_server=true）：use_mask = false（协议要求）
+     * @note 调用此构造函数后，http_conn 将处于无效状态，不应再使用
+     */
+    WsConn(galay::http::HttpConn&& http_conn,
+           const WsReaderSetting& reader_setting,
+           WsWriterSetting writer_setting,
+           bool is_server = true);
+
+    /**
+     * @brief 构造函数（内部使用）
+     * @param socket TcpSocket右值引用
+     * @param ring_buffer RingBuffer右值引用
+     * @param reader_setting WsReaderSetting引用
+     * @param writer_setting WsWriterSetting引用
+     * @param is_server 是否是服务器端（默认true）
+     *
+     * @note 构造函数会自动设置 writer_setting.use_mask：
+     *       - 客户端（is_server=false）：use_mask = true（协议要求）
+     *       - 服务器端（is_server=true）：use_mask = false（协议要求）
      */
     WsConn(TcpSocket&& socket,
            RingBuffer&& ring_buffer,
            const WsReaderSetting& reader_setting,
-           const WsWriterSetting& writer_setting,
+           WsWriterSetting writer_setting,  // 改为值传递，以便修改
            bool is_server = true)
         : m_socket(std::move(socket))
         , m_ring_buffer(std::move(ring_buffer))
         , m_reader_setting(reader_setting)
         , m_writer_setting(writer_setting)
         , m_is_server(is_server)
+        , m_writer(m_writer_setting, m_socket)
+        , m_reader(m_ring_buffer, m_reader_setting, m_socket, is_server, writer_setting.use_mask)
     {
+        // 根据 WebSocket 协议自动设置 use_mask：
+        // - 客户端发送的帧必须使用掩码（RFC 6455 Section 5.1）
+        // - 服务器发送的帧不得使用掩码（RFC 6455 Section 5.1）
+        m_writer_setting.use_mask = !is_server;
     }
 
     /**
@@ -49,8 +80,8 @@ public:
     WsConn(const WsConn&) = delete;
     WsConn& operator=(const WsConn&) = delete;
 
-    // 禁用移动（因为WsReader/Writer包含引用成员）
-    WsConn(WsConn&&) = delete;
+    // 启用移动构造，禁用移动赋值（因为 WsReader/WsWriter 包含引用成员）
+    WsConn(WsConn&&) = default;
     WsConn& operator=(WsConn&&) = delete;
 
     /**
@@ -75,18 +106,18 @@ public:
 
     /**
      * @brief 获取WsReader
-     * @return WsReader 临时构造的Reader对象
+     * @return WsReader& Reader对象引用
      */
-    WsReader getReader() {
-        return WsReader(m_ring_buffer, m_reader_setting, m_socket, m_is_server);
+    WsReader& getReader() {
+        return m_reader;
     }
 
     /**
      * @brief 获取WsWriter
-     * @return WsWriter 临时构造的Writer对象
+     * @return WsWriter& Writer对象引用
      */
-    WsWriter getWriter() {
-        return WsWriter(m_writer_setting, m_socket);
+    WsWriter& getWriter() {
+        return m_writer;
     }
 
     /**
@@ -100,6 +131,8 @@ private:
     WsReaderSetting m_reader_setting;
     WsWriterSetting m_writer_setting;
     bool m_is_server;
+    WsWriter m_writer;
+    WsReader m_reader;
 };
 
 } // namespace galay::websocket

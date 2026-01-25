@@ -83,6 +83,8 @@ public:
 /**
  * @brief WebSocket消息读取等待体
  * @details 自动处理分片消息，返回完整的消息内容
+ *          控制帧（Ping/Pong/Close）会直接返回给用户，由用户决定如何处理
+ *          用户需要根据 opcode 判断帧类型并自行响应（例如收到 Ping 时发送 Pong）
  *
  * @note 支持超时设置：
  * @code
@@ -98,6 +100,8 @@ public:
                        WsOpcode& opcode,
                        ReadvAwaitable&& readv_awaitable,
                        bool is_server,
+                       TcpSocket& socket,
+                       bool use_mask,
                        ControlFrameCallback control_frame_callback = nullptr)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
@@ -105,6 +109,8 @@ public:
         , m_opcode(opcode)
         , m_readv_awaitable(std::move(readv_awaitable))
         , m_is_server(is_server)
+        , m_socket(socket)
+        , m_use_mask(use_mask)
         , m_total_received(0)
         , m_first_frame(true)
         , m_control_frame_callback(control_frame_callback)
@@ -135,6 +141,8 @@ private:
     WsOpcode& m_opcode;
     ReadvAwaitable m_readv_awaitable;
     bool m_is_server;
+    TcpSocket& m_socket;
+    bool m_use_mask;
     size_t m_total_received;
     bool m_first_frame;
     ControlFrameCallback m_control_frame_callback;
@@ -147,15 +155,17 @@ public:
 /**
  * @brief WebSocket读取器
  * @details 提供异步读取WebSocket帧和消息的接口
+ *          控制帧（Ping/Pong/Close）会返回给用户，由用户自行处理
  */
 class WsReader
 {
 public:
-    WsReader(RingBuffer& ring_buffer, const WsReaderSetting& setting, TcpSocket& socket, bool is_server = true)
+    WsReader(RingBuffer& ring_buffer, const WsReaderSetting& setting, TcpSocket& socket, bool is_server = true, bool use_mask = false)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_socket(socket)
         , m_is_server(is_server)
+        , m_use_mask(use_mask)
         , m_control_frame_callback(nullptr)
     {
     }
@@ -164,6 +174,7 @@ public:
      * @brief 设置控制帧回调函数
      * @param callback 控制帧回调函数
      * @details 当收到 Ping/Pong/Close 帧时会调用此回调
+     *          注意：控制帧不会自动响应，用户需要自行处理
      */
     void setControlFrameCallback(ControlFrameCallback callback) {
         m_control_frame_callback = callback;
@@ -183,13 +194,18 @@ public:
     /**
      * @brief 获取一个完整的WebSocket消息（自动处理分片）
      * @param message 用于存储消息内容的string引用
-     * @param opcode 用于存储消息类型的WsOpcode引用
+     * @param opcode 用于存储消息类型的WsOpcode引用（包括控制帧：Ping/Pong/Close）
      * @return GetMessageAwaitable 消息等待体
+     * @note 用户需要根据 opcode 判断消息类型：
+     *       - Text/Binary: 数据消息
+     *       - Ping: 需要用 writer.sendPong() 响应
+     *       - Pong: 心跳响应
+     *       - Close: 连接关闭请求
      */
     GetMessageAwaitable getMessage(std::string& message, WsOpcode& opcode) {
         return GetMessageAwaitable(m_ring_buffer, m_setting, message, opcode,
                                   m_socket.readv(m_ring_buffer.getWriteIovecs()),
-                                  m_is_server, m_control_frame_callback);
+                                  m_is_server, m_socket, m_use_mask, m_control_frame_callback);
     }
 
 private:
@@ -197,6 +213,7 @@ private:
     const WsReaderSetting& m_setting;
     TcpSocket& m_socket;
     bool m_is_server;
+    bool m_use_mask;
     ControlFrameCallback m_control_frame_callback;
 };
 

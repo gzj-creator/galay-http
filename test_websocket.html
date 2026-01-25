@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket 测试工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 14px;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .connection-panel {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+
+        button {
+            flex: 1;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-connect {
+            background: #28a745;
+            color: white;
+        }
+
+        .btn-connect:hover {
+            background: #218838;
+        }
+
+        .btn-disconnect {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-disconnect:hover {
+            background: #c82333;
+        }
+
+        .btn-disconnect:disabled,
+        .btn-connect:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .message-panel {
+            margin-top: 20px;
+        }
+
+        .message-panel h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .message-input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .message-input-group input {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .message-input-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn-send {
+            background: #667eea;
+            color: white;
+            padding: 10px 30px;
+        }
+
+        .btn-send:hover {
+            background: #5568d3;
+        }
+
+        .btn-send:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .btn-ping {
+            background: #17a2b8;
+            color: white;
+            padding: 10px 30px;
+        }
+
+        .btn-ping:hover {
+            background: #138496;
+        }
+
+        .btn-ping:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .log-panel {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            height: 400px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            margin-bottom: 8px;
+            padding: 5px;
+            border-left: 3px solid transparent;
+        }
+
+        .log-entry.info {
+            border-left-color: #4a9eff;
+        }
+
+        .log-entry.success {
+            border-left-color: #28a745;
+        }
+
+        .log-entry.error {
+            border-left-color: #dc3545;
+        }
+
+        .log-entry.warning {
+            border-left-color: #ffc107;
+        }
+
+        .log-timestamp {
+            color: #858585;
+            margin-right: 10px;
+        }
+
+        .log-type {
+            font-weight: 600;
+            margin-right: 10px;
+        }
+
+        .log-type.info {
+            color: #4a9eff;
+        }
+
+        .log-type.success {
+            color: #28a745;
+        }
+
+        .log-type.error {
+            color: #dc3545;
+        }
+
+        .log-type.warning {
+            color: #ffc107;
+        }
+
+        .btn-clear {
+            background: #6c757d;
+            color: white;
+            padding: 8px 20px;
+            margin-top: 10px;
+        }
+
+        .btn-clear:hover {
+            background: #5a6268;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>WebSocket 测试工具</h1>
+            <p>测试 galay-http WebSocket 服务器通信</p>
+        </div>
+
+        <div class="content">
+            <!-- 连接面板 -->
+            <div class="connection-panel">
+                <div class="input-group">
+                    <label for="wsUrl">WebSocket URL</label>
+                    <input type="text" id="wsUrl" value="ws://localhost:8080/ws" placeholder="ws://localhost:8080/ws">
+                </div>
+                <div class="button-group">
+                    <button class="btn-connect" id="btnConnect">连接</button>
+                    <button class="btn-disconnect" id="btnDisconnect" disabled>断开</button>
+                </div>
+                <div>
+                    <span class="status disconnected" id="status">未连接</span>
+                </div>
+            </div>
+
+            <!-- 统计信息 -->
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="statSent">0</div>
+                    <div class="stat-label">已发送</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statReceived">0</div>
+                    <div class="stat-label">已接收</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="statErrors">0</div>
+                    <div class="stat-label">错误</div>
+                </div>
+            </div>
+
+            <!-- 消息面板 -->
+            <div class="message-panel">
+                <h3>发送消息</h3>
+                <div class="message-input-group">
+                    <input type="text" id="messageInput" placeholder="输入消息..." disabled>
+                    <button class="btn-send" id="btnSend" disabled>发送</button>
+                    <button class="btn-ping" id="btnPing" disabled>Ping</button>
+                </div>
+            </div>
+
+            <!-- 日志面板 -->
+            <div class="message-panel">
+                <h3>消息日志</h3>
+                <div class="log-panel" id="logPanel"></div>
+                <button class="btn-clear" id="btnClear">清空日志</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let stats = {
+            sent: 0,
+            received: 0,
+            errors: 0
+        };
+
+        const elements = {
+            wsUrl: document.getElementById('wsUrl'),
+            btnConnect: document.getElementById('btnConnect'),
+            btnDisconnect: document.getElementById('btnDisconnect'),
+            status: document.getElementById('status'),
+            messageInput: document.getElementById('messageInput'),
+            btnSend: document.getElementById('btnSend'),
+            btnPing: document.getElementById('btnPing'),
+            logPanel: document.getElementById('logPanel'),
+            btnClear: document.getElementById('btnClear'),
+            statSent: document.getElementById('statSent'),
+            statReceived: document.getElementById('statReceived'),
+            statErrors: document.getElementById('statErrors')
+        };
+
+        function updateStats() {
+            elements.statSent.textContent = stats.sent;
+            elements.statReceived.textContent = stats.received;
+            elements.statErrors.textContent = stats.errors;
+        }
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.innerHTML = `
+                <span class="log-timestamp">[${timestamp}]</span>
+                <span class="log-type ${type}">[${type.toUpperCase()}]</span>
+                <span>${message}</span>
+            `;
+            elements.logPanel.appendChild(entry);
+            elements.logPanel.scrollTop = elements.logPanel.scrollHeight;
+        }
+
+        function updateStatus(text, className) {
+            elements.status.textContent = text;
+            elements.status.className = `status ${className}`;
+        }
+
+        function connect() {
+            const url = elements.wsUrl.value.trim();
+            if (!url) {
+                log('请输入 WebSocket URL', 'error');
+                return;
+            }
+
+            try {
+                log(`正在连接到 ${url}...`, 'info');
+                updateStatus('连接中...', 'connecting');
+
+                ws = new WebSocket(url);
+
+                ws.onopen = () => {
+                    log('WebSocket 连接成功！', 'success');
+                    updateStatus('已连接', 'connected');
+                    elements.btnConnect.disabled = true;
+                    elements.btnDisconnect.disabled = false;
+                    elements.messageInput.disabled = false;
+                    elements.btnSend.disabled = false;
+                    elements.btnPing.disabled = false;
+                };
+
+                ws.onmessage = (event) => {
+                    stats.received++;
+                    updateStats();
+                    log(`收到消息: ${event.data}`, 'success');
+                };
+
+                ws.onerror = (error) => {
+                    stats.errors++;
+                    updateStats();
+                    log(`WebSocket 错误: ${error.message || '未知错误'}`, 'error');
+                    console.error('WebSocket error:', error);
+                };
+
+                ws.onclose = (event) => {
+                    log(`WebSocket 连接关闭 (code: ${event.code}, reason: ${event.reason || '无'})`, 'warning');
+                    updateStatus('未连接', 'disconnected');
+                    elements.btnConnect.disabled = false;
+                    elements.btnDisconnect.disabled = true;
+                    elements.messageInput.disabled = true;
+                    elements.btnSend.disabled = true;
+                    elements.btnPing.disabled = true;
+                    ws = null;
+                };
+
+            } catch (error) {
+                stats.errors++;
+                updateStats();
+                log(`连接失败: ${error.message}`, 'error');
+                updateStatus('未连接', 'disconnected');
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                log('正在断开连接...', 'info');
+                ws.close();
+            }
+        }
+
+        function sendMessage() {
+            const message = elements.messageInput.value.trim();
+            if (!message) {
+                log('请输入消息内容', 'warning');
+                return;
+            }
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    ws.send(message);
+                    stats.sent++;
+                    updateStats();
+                    log(`发送消息: ${message}`, 'info');
+                    elements.messageInput.value = '';
+                } catch (error) {
+                    stats.errors++;
+                    updateStats();
+                    log(`发送失败: ${error.message}`, 'error');
+                }
+            } else {
+                log('WebSocket 未连接', 'error');
+            }
+        }
+
+        function sendPing() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                try {
+                    // 浏览器的 WebSocket API 不直接支持发送 Ping 帧
+                    // 我们发送一个特殊的文本消息来模拟
+                    ws.send('PING');
+                    stats.sent++;
+                    updateStats();
+                    log('发送 Ping 消息', 'info');
+                } catch (error) {
+                    stats.errors++;
+                    updateStats();
+                    log(`发送 Ping 失败: ${error.message}`, 'error');
+                }
+            } else {
+                log('WebSocket 未连接', 'error');
+            }
+        }
+
+        function clearLog() {
+            elements.logPanel.innerHTML = '';
+            log('日志已清空', 'info');
+        }
+
+        // 事件监听
+        elements.btnConnect.addEventListener('click', connect);
+        elements.btnDisconnect.addEventListener('click', disconnect);
+        elements.btnSend.addEventListener('click', sendMessage);
+        elements.btnPing.addEventListener('click', sendPing);
+        elements.btnClear.addEventListener('click', clearLog);
+
+        elements.messageInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // 初始化日志
+        log('WebSocket 测试工具已就绪', 'info');
+        log('请输入 WebSocket URL 并点击连接按钮', 'info');
+    </script>
+</body>
+</html>

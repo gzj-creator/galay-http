@@ -23,6 +23,8 @@ set(WS_SOURCES
     protoc/websocket/WebSocketFrame.cc
     kernel/websocket/WsReader.cc
     kernel/websocket/WsWriter.cc
+    kernel/websocket/WsConn.cc
+    kernel/websocket/WsClient.cc
     kernel/websocket/WsUpgrade.cc
     kernel/websocket/WsHeartbeat.cc
 )

@@ -50,7 +50,6 @@ foreach(TEST_NAME ${ALL_TESTS})
         add_executable(${TEST_NAME} ${TEST_NAME}.cc)
         target_link_libraries(${TEST_NAME}
             galay-http
-            galay-kernel::galay-kernel
             pthread
         )
         target_include_directories(${TEST_NAME} PRIVATE

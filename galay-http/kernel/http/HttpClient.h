@@ -13,6 +13,10 @@
 #include <coroutine>
 #include <map>
 
+namespace galay::websocket {
+    class WsConn;  // 前向声明
+}
+
 namespace galay::http
 {
 
