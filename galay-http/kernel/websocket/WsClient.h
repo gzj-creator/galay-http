@@ -100,6 +100,11 @@ private:
     // 发送缓冲区
     std::string m_send_buffer;
     size_t m_send_offset;
+
+    // 升级过程中的数据（从 WsClient 移动过来）
+    std::string m_ws_key;
+    HttpRequest m_upgrade_request;
+    HttpResponse m_upgrade_response;
 };
 
 /**
@@ -184,7 +189,7 @@ public:
      * @return WsClientUpgradeAwaitable 升级等待体
      * @note 需要在循环中调用，直到返回 true 表示升级成功
      */
-    WsClientUpgradeAwaitable upgrade();
+    WsClientUpgradeAwaitable& upgrade();
 
     /**
      * @brief 检查是否已连接
@@ -193,79 +198,6 @@ public:
     bool isConnected() const {
         return m_ws_conn != nullptr;
     }
-
-    /**
-     * @brief 发送文本消息
-     * @param text 文本内容
-     * @param fin 是否是最后一个分片（默认true）
-     * @return SendFrameAwaitable
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    SendFrameAwaitable sendText(const std::string& text, bool fin = true);
-
-    /**
-     * @brief 发送二进制消息
-     * @param data 二进制数据
-     * @param fin 是否是最后一个分片（默认true）
-     * @return SendFrameAwaitable
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    SendFrameAwaitable sendBinary(const std::string& data, bool fin = true);
-
-    /**
-     * @brief 发送Ping帧
-     * @param data Ping数据（可选）
-     * @return SendFrameAwaitable
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    SendFrameAwaitable sendPing(const std::string& data = "");
-
-    /**
-     * @brief 发送Pong帧
-     * @param data Pong数据（通常是Ping的数据）
-     * @return SendFrameAwaitable
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    SendFrameAwaitable sendPong(const std::string& data = "");
-
-    /**
-     * @brief 发送Close帧
-     * @param code 关闭状态码
-     * @param reason 关闭原因
-     * @return SendFrameAwaitable
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    SendFrameAwaitable sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "");
-
-    /**
-     * @brief 获取一个完整的WebSocket帧
-     * @param frame WsFrame引用，用于存储解析结果
-     * @return GetFrameAwaitable 帧等待体
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    GetFrameAwaitable getFrame(WsFrame& frame);
-
-    /**
-     * @brief 获取一个完整的WebSocket消息（自动处理分片）
-     * @param message 用于存储消息内容的string引用
-     * @param opcode 用于存储消息类型的WsOpcode引用（包括控制帧：Ping/Pong/Close）
-     * @return GetMessageAwaitable 消息等待体
-     * @note 必须在 upgrade() 成功后才能使用
-     * @note 用户需要根据 opcode 判断消息类型：
-     *       - Text/Binary: 数据消息
-     *       - Ping: 需要用 sendPong() 响应
-     *       - Pong: 心跳响应
-     *       - Close: 连接关闭请求
-     */
-    GetMessageAwaitable getMessage(std::string& message, WsOpcode& opcode);
-
-    /**
-     * @brief 设置控制帧回调函数
-     * @param callback 控制帧回调函数
-     * @details 当收到 Ping/Pong/Close 帧时会调用此回调
-     * @note 必须在 upgrade() 成功后才能使用
-     */
-    void setControlFrameCallback(ControlFrameCallback callback);
 
     /**
      * @brief 关闭连接
@@ -290,6 +222,34 @@ public:
     }
 
     /**
+     * @brief 获取 WebSocket 读取器
+     * @return WsReader& 读取器引用
+     * @note 必须在 upgrade() 成功后才能使用
+     * @note 使用示例：
+     * @code
+     * std::string message;
+     * WsOpcode opcode;
+     * co_await client.getWsReader().getMessage(message, opcode);
+     * @endcode
+     */
+    WsReader& getWsReader() {
+        return m_ws_conn->getReader();
+    }
+
+    /**
+     * @brief 获取 WebSocket 写入器
+     * @return WsWriter& 写入器引用
+     * @note 必须在 upgrade() 成功后才能使用
+     * @note 使用示例：
+     * @code
+     * co_await client.getWsWriter().sendText("Hello");
+     * @endcode
+     */
+    WsWriter& getWsWriter() {
+        return m_ws_conn->getWriter();
+    }
+
+    /**
      * @brief 获取底层 WsConn（高级用户使用）
      * @return WsConn* 连接指针，未连接时返回 nullptr
      */
@@ -305,16 +265,18 @@ private:
     WsWriterSetting m_writer_setting;
     size_t m_ring_buffer_size;
 
+    // 连接相关（升级前使用，升级后移动到 WsConn）
     std::unique_ptr<TcpSocket> m_socket;
     std::unique_ptr<RingBuffer> m_ring_buffer;
+
+    // WebSocket 连接（升级后使用）
     std::unique_ptr<WsConn> m_ws_conn;
 
+    // URL 信息
     WsUrl m_url;
-    std::string m_ws_key;
 
-    // 升级过程中的数据
-    HttpRequest m_upgrade_request;
-    HttpResponse m_upgrade_response;
+    // 升级等待体（只在升级过程中使用，完成后释放）
+    std::unique_ptr<WsClientUpgradeAwaitable> m_upgrade_awaitable;
 };
 
 } // namespace galay::websocket

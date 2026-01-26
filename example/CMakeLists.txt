@@ -49,3 +49,13 @@ set_target_properties(example_websocket_client PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
 )
+
+# WebSocket Client Simple Example (using WsClient)
+add_executable(example_wsclient_simple example_wsclient_simple.cc)
+target_link_libraries(example_wsclient_simple
+    PRIVATE galay-http
+)
+set_target_properties(example_wsclient_simple PROPERTIES
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)

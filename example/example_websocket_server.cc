@@ -38,9 +38,9 @@ using namespace std::chrono_literals;
 
 /**
  * @brief 处理 WebSocket 连接
- * @param ws_conn WebSocket 连接（通过移动语义传递）
+ * @param ws_conn WebSocket 连接（通过引用传递）
  */
-Coroutine handleWebSocketConnection(WsConn ws_conn) {
+Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     HTTP_LOG_INFO("WebSocket connection established");
 
     // 获取 Reader 和 Writer（必须在协程开始时获取，保证 ws_conn 生命周期）
@@ -128,13 +128,10 @@ Coroutine handleWebSocketConnection(WsConn ws_conn) {
  * @param conn HTTP 连接
  */
 Coroutine handleHttpRequest(HttpConn conn) {
-    HTTP_LOG_INFO("=== handleHttpRequest: START ===");
-
     // 读取 HTTP 请求
     auto reader = conn.getReader();
     HttpRequest request;
 
-    HTTP_LOG_INFO("=== Reading HTTP request ===");
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
         HTTP_LOG_ERROR("Failed to read HTTP request: {}", read_result.error().message());
@@ -142,14 +139,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
         co_return;
     }
 
-    HTTP_LOG_INFO("Received HTTP request: {} {}",
-            httpMethodToString(request.header().method()),
-            request.header().uri());
+    HTTP_LOG_INFO("Received {} {}", httpMethodToString(request.header().method()), request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
-    HTTP_LOG_INFO("=== Checking if WebSocket upgrade request, URI: {} ===", request.header().uri());
     if (request.header().uri() == "/ws") {
-        HTTP_LOG_INFO("=== Processing WebSocket upgrade request ===");
         // 处理 WebSocket 升级
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
@@ -175,8 +168,6 @@ Coroutine handleHttpRequest(HttpConn conn) {
             co_return;
         }
 
-        HTTP_LOG_INFO("=== Upgrade response sent, creating WsConn ===");
-
         // 升级到 WebSocket 连接
         WsReaderSetting reader_setting;
         reader_setting.max_frame_size = 1024 * 1024;  // 1MB
@@ -192,12 +183,8 @@ Coroutine handleHttpRequest(HttpConn conn) {
             true  // is_server
         );
 
-        HTTP_LOG_INFO("=== WsConn created, calling handleWebSocketConnection ===");
-
-        // 处理 WebSocket 连接（通过移动语义传递，协程将拥有 ws_conn 的所有权）
-        co_await handleWebSocketConnection(std::move(ws_conn)).wait();
-
-        HTTP_LOG_INFO("=== handleWebSocketConnection returned ===");
+        // 处理 WebSocket 连接（通过引用传递，避免移动导致引用失效）
+        co_await handleWebSocketConnection(ws_conn).wait();
         co_return;
     }
 

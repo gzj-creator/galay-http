@@ -33,9 +33,21 @@ Coroutine websocketClientExample(const std::string& url) {
 
     HTTP_LOG_INFO("Connected successfully!");
 
-    // 获取 Reader 和 Writer
-    auto reader = client.getReader();
-    auto writer = client.getWriter();
+    // WebSocket 握手升级
+    HTTP_LOG_INFO("Starting WebSocket upgrade...");
+    while (true) {
+        auto upgrade_result = co_await client.upgrade();
+        if (!upgrade_result.has_value()) {
+            HTTP_LOG_ERROR("Upgrade failed: {}", upgrade_result.error().message());
+            co_return;
+        }
+        if (upgrade_result.value()) {
+            // 升级成功
+            HTTP_LOG_INFO("WebSocket upgrade successful!");
+            break;
+        }
+        // 继续等待
+    }
 
     // 接收欢迎消息
     {
@@ -44,7 +56,7 @@ Coroutine websocketClientExample(const std::string& url) {
 
         bool message_complete = false;
         while (!message_complete) {
-            auto result = co_await reader.getMessage(message, opcode);
+            auto result = co_await client.getWsReader().getMessage(message, opcode);
             if (!result.has_value()) {
                 HTTP_LOG_ERROR("Failed to receive welcome message: {}", result.error().message());
                 co_await client.close();
@@ -67,7 +79,7 @@ Coroutine websocketClientExample(const std::string& url) {
     for (const auto& msg : test_messages) {
         // 发送消息
         HTTP_LOG_INFO("Sending: {}", msg);
-        auto send_result = co_await writer.sendText(msg);
+        auto send_result = co_await client.getWsWriter().sendText(msg);
         if (!send_result) {
             HTTP_LOG_ERROR("Failed to send: {}", send_result.error().message());
             break;
@@ -79,7 +91,7 @@ Coroutine websocketClientExample(const std::string& url) {
 
         bool echo_complete = false;
         while (!echo_complete) {
-            auto result = co_await reader.getMessage(echo_message, echo_opcode);
+            auto result = co_await client.getWsReader().getMessage(echo_message, echo_opcode);
             if (!result.has_value()) {
                 HTTP_LOG_ERROR("Failed to receive: {}", result.error().message());
                 co_await client.close();
@@ -93,11 +105,11 @@ Coroutine websocketClientExample(const std::string& url) {
             // 处理控制帧
             if (echo_opcode == WsOpcode::Ping) {
                 HTTP_LOG_INFO("Received Ping, sending Pong");
-                co_await writer.sendPong(echo_message);
+                co_await client.getWsWriter().sendPong(echo_message);
                 continue;
             } else if (echo_opcode == WsOpcode::Close) {
                 HTTP_LOG_INFO("Received Close");
-                co_await writer.sendClose();
+                co_await client.getWsWriter().sendClose();
                 co_await client.close();
                 co_return;
             } else if (echo_opcode == WsOpcode::Text || echo_opcode == WsOpcode::Binary) {
@@ -113,7 +125,7 @@ Coroutine websocketClientExample(const std::string& url) {
 
     // 发送 Ping 测试
     HTTP_LOG_INFO("Sending Ping");
-    auto ping_result = co_await writer.sendPing("ping");
+    auto ping_result = co_await client.getWsWriter().sendPing("ping");
     if (ping_result) {
         // 等待 Pong
         std::string pong_message;
@@ -121,7 +133,7 @@ Coroutine websocketClientExample(const std::string& url) {
 
         bool pong_received = false;
         while (!pong_received) {
-            auto result = co_await reader.getMessage(pong_message, pong_opcode);
+            auto result = co_await client.getWsReader().getMessage(pong_message, pong_opcode);
             if (!result.has_value() || !result.value()) {
                 continue;
             }
@@ -135,7 +147,7 @@ Coroutine websocketClientExample(const std::string& url) {
 
     // 关闭连接
     HTTP_LOG_INFO("Closing connection");
-    co_await writer.sendClose();
+    co_await client.getWsWriter().sendClose();
     co_await client.close();
 
     HTTP_LOG_INFO("=== WebSocket Client Example Completed ===");

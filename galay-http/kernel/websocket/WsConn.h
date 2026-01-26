@@ -80,8 +80,8 @@ public:
     WsConn(const WsConn&) = delete;
     WsConn& operator=(const WsConn&) = delete;
 
-    // 启用移动构造，禁用移动赋值（因为 WsReader/WsWriter 包含引用成员）
-    WsConn(WsConn&&) = default;
+    // 禁用移动（因为 WsReader/WsWriter 包含引用成员，移动会导致引用失效）
+    WsConn(WsConn&&) = delete;
     WsConn& operator=(WsConn&&) = delete;
 
     /**

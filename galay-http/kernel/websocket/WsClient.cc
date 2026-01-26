@@ -73,7 +73,7 @@ WsClient::WsClient(const WsReaderSetting& reader_setting,
     , m_socket(nullptr)
     , m_ring_buffer(nullptr)
     , m_ws_conn(nullptr)
-    , m_ws_key("")
+    , m_upgrade_awaitable(nullptr)
 {
 }
 
@@ -105,68 +105,20 @@ ConnectAwaitable WsClient::connect(const std::string& url) {
     return m_socket->connect(server_host);
 }
 
-WsClientUpgradeAwaitable WsClient::upgrade() {
+WsClientUpgradeAwaitable& WsClient::upgrade() {
     if (!m_socket) {
         throw std::runtime_error("WsClient not connected. Call connect() first.");
     }
-    return WsClientUpgradeAwaitable(this);
+
+    // 如果 awaitable 不存在或已完成（Invalid 状态），创建新的
+    if (!m_upgrade_awaitable || m_upgrade_awaitable->isInvalid()) {
+        m_upgrade_awaitable = std::make_unique<WsClientUpgradeAwaitable>(this);
+    }
+
+    return *m_upgrade_awaitable;
 }
 
-SendFrameAwaitable WsClient::sendText(const std::string& text, bool fin) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getWriter().sendText(text, fin);
-}
 
-SendFrameAwaitable WsClient::sendBinary(const std::string& data, bool fin) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getWriter().sendBinary(data, fin);
-}
-
-SendFrameAwaitable WsClient::sendPing(const std::string& data) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getWriter().sendPing(data);
-}
-
-SendFrameAwaitable WsClient::sendPong(const std::string& data) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getWriter().sendPong(data);
-}
-
-SendFrameAwaitable WsClient::sendClose(WsCloseCode code, const std::string& reason) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getWriter().sendClose(code, reason);
-}
-
-GetFrameAwaitable WsClient::getFrame(WsFrame& frame) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getReader().getFrame(frame);
-}
-
-GetMessageAwaitable WsClient::getMessage(std::string& message, WsOpcode& opcode) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    return m_ws_conn->getReader().getMessage(message, opcode);
-}
-
-void WsClient::setControlFrameCallback(ControlFrameCallback callback) {
-    if (!m_ws_conn) {
-        throw std::runtime_error("WsClient not upgraded. Call upgrade() first.");
-    }
-    m_ws_conn->getReader().setControlFrameCallback(callback);
-}
 
 CloseAwaitable WsClient::close() {
     if (!m_ws_conn) {
@@ -191,20 +143,20 @@ bool WsClientUpgradeAwaitable::await_suspend(std::coroutine_handle<> handle)
         m_state = State::Sending;
 
         // 生成 WebSocket Key
-        m_client->m_ws_key = generateWebSocketKey();
-        HTTP_LOG_DEBUG("Generated WebSocket-Key: {}", m_client->m_ws_key);
+        m_ws_key = generateWebSocketKey();
+        HTTP_LOG_DEBUG("Generated WebSocket-Key: {}", m_ws_key);
 
         // 构建升级请求
-        m_client->m_upgrade_request = Http1_1RequestBuilder::get(m_client->m_url.path)
+        m_upgrade_request = Http1_1RequestBuilder::get(m_client->m_url.path)
             .host(m_client->m_url.host + ":" + std::to_string(m_client->m_url.port))
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", m_client->m_ws_key)
+            .header("Sec-WebSocket-Key", m_ws_key)
             .build();
 
         // 序列化请求
-        m_send_buffer = m_client->m_upgrade_request.toString();
+        m_send_buffer = m_upgrade_request.toString();
         m_send_offset = 0;
 
         HTTP_LOG_INFO("Sending WebSocket upgrade request...");
@@ -274,7 +226,7 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
         HTTP_LOG_DEBUG("Received {} bytes", recv_result.value());
 
         // 尝试解析 HTTP 响应
-        auto parse_result = m_client->m_upgrade_response.fromIOVec(
+        auto parse_result = m_upgrade_response.fromIOVec(
             m_client->m_ring_buffer->getReadIovecs());
 
         if (parse_result.first != HttpErrorCode::kNoError) {
@@ -286,7 +238,7 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
                 "Failed to parse upgrade response"));
         }
 
-        if (!m_client->m_upgrade_response.isComplete()) {
+        if (!m_upgrade_response.isComplete()) {
             // 响应不完整，返回 false 继续接收
             HTTP_LOG_DEBUG("Response incomplete, continue receiving");
             return false;
@@ -295,26 +247,26 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
         // 响应完整，验证升级
         HTTP_LOG_INFO("Received complete upgrade response");
 
-        if (m_client->m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
+        if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
             HTTP_LOG_ERROR("WebSocket upgrade failed. Status: {} {}",
-                          static_cast<int>(m_client->m_upgrade_response.header().code()),
-                          httpStatusCodeToString(m_client->m_upgrade_response.header().code()));
+                          static_cast<int>(m_upgrade_response.header().code()),
+                          httpStatusCodeToString(m_upgrade_response.header().code()));
             reset();
             return std::unexpected(WsError(kWsUpgradeFailed,
                 "Upgrade failed with status " +
-                std::to_string(static_cast<int>(m_client->m_upgrade_response.header().code()))));
+                std::to_string(static_cast<int>(m_upgrade_response.header().code()))));
         }
 
-        if (!m_client->m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
+        if (!m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
             HTTP_LOG_ERROR("Missing Sec-WebSocket-Accept header in response");
             reset();
             return std::unexpected(WsError(kWsUpgradeFailed,
                 "Missing Sec-WebSocket-Accept header"));
         }
 
-        std::string accept_key = m_client->m_upgrade_response.header().headerPairs()
+        std::string accept_key = m_upgrade_response.header().headerPairs()
             .getValue("Sec-WebSocket-Accept");
-        std::string expected_accept = WsUpgrade::generateAcceptKey(m_client->m_ws_key);
+        std::string expected_accept = WsUpgrade::generateAcceptKey(m_ws_key);
 
         if (accept_key != expected_accept) {
             HTTP_LOG_ERROR("Invalid Sec-WebSocket-Accept value");
@@ -332,22 +284,16 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
         size_t consumed = parse_result.second;
         m_client->m_ring_buffer->consume(consumed);
 
-        // 创建 HttpConn（用于转换为 WsConn）
-        HttpConn http_conn(
-            std::move(*m_client->m_socket),
-            HttpReaderSetting(),
-            HttpWriterSetting()
-        );
-
-        // 检查是否有剩余数据
+        // 检查是否有剩余数据（可能是服务端提前发送的 WebSocket 帧）
         if (m_client->m_ring_buffer->readable() > 0) {
-            HTTP_LOG_WARN("Ring buffer has {} bytes remaining after upgrade",
+            HTTP_LOG_DEBUG("Ring buffer has {} bytes remaining after upgrade (may contain WebSocket frames)",
                          m_client->m_ring_buffer->readable());
         }
 
-        // 创建 WebSocket 连接
+        // 创建 WebSocket 连接（直接使用原始 socket 和 ring buffer，保留剩余数据）
         m_client->m_ws_conn = std::make_unique<WsConn>(
-            std::move(http_conn),
+            std::move(*m_client->m_socket),
+            std::move(*m_client->m_ring_buffer),
             m_client->m_reader_setting,
             m_client->m_writer_setting,
             false  // is_server = false (客户端)
@@ -355,10 +301,12 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
 
         HTTP_LOG_INFO("WsConn created successfully");
 
-        // 清理资源
+        // 清理资源（socket 和 ring_buffer 已经移动到 WsConn，这里只是清理 unique_ptr）
         m_client->m_socket.reset();
         m_client->m_ring_buffer.reset();
-        reset();
+
+        // 升级完成，释放 awaitable（节省内存）
+        m_client->m_upgrade_awaitable.reset();
 
         return true;  // 升级成功
 

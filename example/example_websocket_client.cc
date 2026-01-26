@@ -43,14 +43,14 @@ std::string generateWebSocketKey() {
 
 /**
  * @brief 处理 WebSocket 连接
- * @param ws_conn WebSocket 连接
+ * @param ws_conn WebSocket 连接（通过引用传递）
  */
-Coroutine handleWebSocketClient(WsConn ws_conn) {
+Coroutine handleWebSocketClient(WsConn& ws_conn) {
     LogInfo("WebSocket connection established");
 
     // 获取 Reader 和 Writer
-    auto reader = ws_conn.getReader();
-    auto writer = ws_conn.getWriter();
+    auto& reader = ws_conn.getReader();
+    auto& writer = ws_conn.getWriter();
 
     // 读取欢迎消息
     LogInfo("Waiting for welcome message");
@@ -306,7 +306,7 @@ Coroutine connectToWebSocket(Runtime& runtime, const std::string& host, int port
 
     // 处理 WebSocket 通信
     try {
-        co_await handleWebSocketClient(std::move(ws_conn)).wait();
+        co_await handleWebSocketClient(ws_conn).wait();
         LogInfo("=== WebSocket client communication completed successfully ===");
     } catch (const std::exception& e) {
         LogError("Exception in WebSocket communication: {}", e.what());

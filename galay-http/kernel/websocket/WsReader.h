@@ -2,7 +2,6 @@
 #define GALAY_WS_READER_H
 
 #include "WsReaderSetting.h"
-#include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/websocket/WebSocketError.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
@@ -166,18 +165,7 @@ public:
         , m_socket(socket)
         , m_is_server(is_server)
         , m_use_mask(use_mask)
-        , m_control_frame_callback(nullptr)
     {
-    }
-
-    /**
-     * @brief 设置控制帧回调函数
-     * @param callback 控制帧回调函数
-     * @details 当收到 Ping/Pong/Close 帧时会调用此回调
-     *          注意：控制帧不会自动响应，用户需要自行处理
-     */
-    void setControlFrameCallback(ControlFrameCallback callback) {
-        m_control_frame_callback = callback;
     }
 
     /**
@@ -205,7 +193,7 @@ public:
     GetMessageAwaitable getMessage(std::string& message, WsOpcode& opcode) {
         return GetMessageAwaitable(m_ring_buffer, m_setting, message, opcode,
                                   m_socket.readv(m_ring_buffer.getWriteIovecs()),
-                                  m_is_server, m_socket, m_use_mask, m_control_frame_callback);
+                                  m_is_server, m_socket, m_use_mask);
     }
 
 private:
@@ -214,7 +202,6 @@ private:
     TcpSocket& m_socket;
     bool m_is_server;
     bool m_use_mask;
-    ControlFrameCallback m_control_frame_callback;
 };
 
 } // namespace galay::websocket
