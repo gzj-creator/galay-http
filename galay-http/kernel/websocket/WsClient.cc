@@ -3,6 +3,7 @@
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-http/kernel/http/HttpConn.h"
 #include <galay-utils/algorithm/Base64.hpp>
+#include "WsUpgrade.h"
 #include <random>
 #include <regex>
 

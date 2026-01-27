@@ -4,7 +4,6 @@
 #include "WsConn.h"
 #include "WsReader.h"
 #include "WsWriter.h"
-#include "WsUpgrade.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-kernel/async/TcpSocket.h"
