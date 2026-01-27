@@ -1,61 +1,20 @@
 # Example programs
 
-# Echo Server
-add_executable(echo_server echo_server.cc)
-target_link_libraries(echo_server
-    PRIVATE galay-http
-)
-set_target_properties(echo_server PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
+# Automatically collect all .cc files in the example directory
+file(GLOB EXAMPLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
 
-# Echo Client
-add_executable(echo_client echo_client.cc)
-target_link_libraries(echo_client
-    PRIVATE galay-http
-)
-set_target_properties(echo_client PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
+# Create an executable for each .cc file
+foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
+    # Extract the filename without path and extension
+    get_filename_component(EXAMPLE_FULL_NAME ${EXAMPLE_SOURCE} NAME)
+    string(REPLACE ".cc" "" EXAMPLE_NAME ${EXAMPLE_FULL_NAME})
 
-# HTTP Router Integration Example
-add_executable(example_http_router_integration example_http_router_integration.cc)
-target_link_libraries(example_http_router_integration
-    PRIVATE galay-http
-)
-set_target_properties(example_http_router_integration PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
-
-# WebSocket Server Example
-add_executable(example_websocket_server example_websocket_server.cc)
-target_link_libraries(example_websocket_server
-    PRIVATE galay-http
-)
-set_target_properties(example_websocket_server PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
-
-# WebSocket Client Example
-add_executable(example_websocket_client example_websocket_client.cc)
-target_link_libraries(example_websocket_client
-    PRIVATE galay-http
-)
-set_target_properties(example_websocket_client PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
-
-# WebSocket Client Simple Example (using WsClient)
-add_executable(example_wsclient_simple example_wsclient_simple.cc)
-target_link_libraries(example_wsclient_simple
-    PRIVATE galay-http
-)
-set_target_properties(example_wsclient_simple PROPERTIES
-    CXX_STANDARD 23
-    CXX_STANDARD_REQUIRED ON
-)
+    add_executable(${EXAMPLE_NAME} ${EXAMPLE_SOURCE})
+    target_link_libraries(${EXAMPLE_NAME}
+        PRIVATE galay-http
+    )
+    set_target_properties(${EXAMPLE_NAME} PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+    )
+endforeach()
