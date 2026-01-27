@@ -7,7 +7,6 @@
 #define GALAY_WS_HEARTBEAT_H
 
 #include "WsConn.h"
-#include "galay-http/protoc/websocket/WebSocketBase.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include <chrono>
 #include <atomic>

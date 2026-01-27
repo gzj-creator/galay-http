@@ -5,12 +5,10 @@
  */
 
 #include <iostream>
-#include <memory>
 #include <random>
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
 #include "galay-http/kernel/websocket/WsConn.h"
-#include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"

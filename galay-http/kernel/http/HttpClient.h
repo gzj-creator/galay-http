@@ -23,6 +23,24 @@ namespace galay::http
 using namespace galay::async;
 using namespace galay::kernel;
 
+/**
+ * @brief HTTP URL 解析结果
+ */
+struct HttpUrl {
+    std::string scheme;      // http 或 https
+    std::string host;        // 主机名或IP
+    int port;                // 端口号
+    std::string path;        // 路径（包含查询参数）
+    bool is_secure;          // 是否是 HTTPS
+
+    /**
+     * @brief 解析 HTTP URL
+     * @param url 完整的 HTTP URL（如 http://example.com:8080/path）
+     * @return std::optional<HttpUrl> 解析成功返回 HttpUrl，失败返回 nullopt
+     */
+    static std::optional<HttpUrl> parse(const std::string& url);
+};
+
 // 前向声明
 class HttpClient;
 
@@ -120,7 +138,13 @@ class HttpClient
 {
 public:
     /**
-     * @brief 构造函数
+     * @brief 默认构造函数
+     * @param config 客户端配置
+     */
+    HttpClient(const HttpClientConfig& config = HttpClientConfig());
+
+    /**
+     * @brief 构造函数（从已有socket）
      * @param socket TcpSocket右值引用
      * @param config 客户端配置
      */
@@ -138,6 +162,14 @@ public:
     // 禁用移动
     HttpClient(HttpClient&&) = delete;
     HttpClient& operator=(HttpClient&&) = delete;
+
+    /**
+     * @brief 连接到 HTTP 服务器
+     * @param url 完整的 HTTP URL（如 http://example.com:8080/path）
+     * @return ConnectAwaitable 连接等待体
+     * @throws std::runtime_error 如果 URL 格式无效或不支持 HTTPS
+     */
+    ConnectAwaitable connect(const std::string& url);
 
     /**
      * @brief 发送GET请求
@@ -224,13 +256,14 @@ public:
                                const std::map<std::string, std::string>& headers = {});
 
     /**
-     * @brief 发送CONNECT请求
-     * @param uri 请求URI（通常是 host:port 格式）
+     * @brief 发送 HTTP CONNECT 请求（用于建立隧道）
+     * @param target_uri 目标主机（格式：host:port，如 "example.com:443"）
      * @param headers 可选的额外请求头
      * @return HttpClientAwaitable& 客户端等待体引用
+     * @note CONNECT 方法通常用于 HTTP 代理场景，建立到目标服务器的隧道
      */
-    HttpClientAwaitable& connect(const std::string& uri,
-                                 const std::map<std::string, std::string>& headers = {});
+    HttpClientAwaitable& tunnel(const std::string& target_host,
+                                const std::map<std::string, std::string>& headers = {});
 
     /**
      * @brief 发送HTTP请求
@@ -238,7 +271,7 @@ public:
      * @return SendResponseAwaitable 发送等待体
      */
     SendResponseAwaitable sendRequest(HttpRequest& request) {
-        return m_writer.sendRequest(request);
+        return m_writer->sendRequest(request);
     }
 
     /**
@@ -247,7 +280,7 @@ public:
      * @return GetResponseAwaitable 接收等待体
      */
     GetResponseAwaitable getResponse(HttpResponse& response) {
-        return m_reader.getResponse(response);
+        return m_reader->getResponse(response);
     }
 
     /**
@@ -257,7 +290,7 @@ public:
      * @return SendResponseAwaitable
      */
     SendResponseAwaitable sendChunk(const std::string& data, bool is_last = false) {
-        return m_writer.sendChunk(data, is_last);
+        return m_writer->sendChunk(data, is_last);
     }
 
     /**
@@ -265,7 +298,7 @@ public:
      * @return HttpReader引用
      */
     HttpReader& getReader() {
-        return m_reader;
+        return *m_reader;
     }
 
     /**
@@ -273,7 +306,7 @@ public:
      * @return HttpWriter引用
      */
     HttpWriter& getWriter() {
-        return m_writer;
+        return *m_writer;
     }
 
     /**
@@ -281,28 +314,35 @@ public:
      * @return CloseAwaitable 关闭等待体
      */
     CloseAwaitable close() {
-        return m_socket.close();
+        return m_socket->close();
     }
 
     /**
      * @brief 获取底层socket
      * @return TcpSocket引用
      */
-    TcpSocket& socket() { return m_socket; }
+    TcpSocket& socket() { return *m_socket; }
 
     /**
      * @brief 获取RingBuffer
      * @return RingBuffer引用
      */
-    RingBuffer& ringBuffer() { return m_ring_buffer; }
+    RingBuffer& ringBuffer() { return *m_ring_buffer; }
+
+    /**
+     * @brief 获取解析后的 URL
+     * @return HttpUrl 引用
+     */
+    const HttpUrl& url() const { return m_url; }
 
 private:
-    TcpSocket m_socket;
-    RingBuffer m_ring_buffer;
+    std::unique_ptr<TcpSocket> m_socket;
+    std::unique_ptr<RingBuffer> m_ring_buffer;
     HttpClientConfig m_config;
-    HttpWriter m_writer;
-    HttpReader m_reader;
+    std::unique_ptr<HttpWriter> m_writer;
+    std::unique_ptr<HttpReader> m_reader;
     std::optional<HttpClientAwaitable> m_awaitable;  // 存储 awaitable 对象
+    HttpUrl m_url;  // 存储解析后的 URL
 };
 
 } // namespace galay::http

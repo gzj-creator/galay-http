@@ -4,7 +4,6 @@
  * @details 展示如何将 HttpRouter 与 HttpServer 集成，并使用路由参数
  */
 
-#include <iostream>
 #include <memory>
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/http/HttpRouter.h"

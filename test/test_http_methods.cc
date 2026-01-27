@@ -459,7 +459,7 @@ Coroutine testConnectMethod(IOScheduler* scheduler)
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.connect("example.com:443");
+        auto result = co_await client.tunnel("example.com:443");
 
         if (!result) {
             std::cout << "❌ CONNECT request failed: " << result.error().message() << std::endl;

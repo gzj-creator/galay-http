@@ -7,7 +7,6 @@
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/http/HttpRouter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/common/Log.h"
 #include <iostream>
@@ -33,7 +32,7 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
     auto result = co_await writer.sendResponse(response).timeout(10ms);
 
     if (!result) {
-        LogError("Failed to send response: {}", result.error().message());
+        std::cerr << "Failed to send response: " << result.error().message() << "\n";
     }
 
     co_await conn.close();
@@ -117,7 +116,7 @@ int main(int argc, char* argv[]) {
         }
 
     } catch (const std::exception& e) {
-        LogError("Server error: {}", e.what());
+        std::cerr << "Server error: " << e.what() << "\n";
         return 1;
     }
 
