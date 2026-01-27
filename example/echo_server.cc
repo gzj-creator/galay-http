@@ -18,10 +18,6 @@ using namespace galay::kernel;
 
 // Echo 处理器：返回客户端发送的内容
 Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("Echo request: {} {}",
-            static_cast<int>(req.header().method()),
-            req.header().uri());
-
     // 获取请求体
     std::string requestBody = req.getBodyStr();
 
@@ -33,7 +29,8 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
 
     // 发送响应
     auto writer = conn.getWriter();
-    auto result = co_await writer.sendResponse(response);
+    using namespace std::chrono_literals;
+    auto result = co_await writer.sendResponse(response).timeout(10ms);
 
     if (!result) {
         LogError("Failed to send response: {}", result.error().message());
@@ -45,10 +42,6 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
 
 // 主页处理器
 Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
-    LogInfo("Index request: {} {}",
-            static_cast<int>(req.header().method()),
-            req.header().uri());
-
     std::string body = R"(<!DOCTYPE html>
 <html>
 <head>

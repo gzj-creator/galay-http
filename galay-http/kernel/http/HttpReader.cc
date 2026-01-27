@@ -27,9 +27,6 @@ std::expected<bool, HttpError> GetRequestAwaitable::await_resume()
     m_ring_buffer.produce(bytes_read);
     m_total_received += bytes_read;
 
-    HTTP_LOG_DEBUG("received {} bytes, total: {}, readable: {}",
-                 bytes_read, m_total_received, m_ring_buffer.readable());
-
     // 3. 获取RingBuffer的可读iovec
     auto read_iovecs = m_ring_buffer.getReadIovecs();
     if (read_iovecs.empty()) {
@@ -43,7 +40,6 @@ std::expected<bool, HttpError> GetRequestAwaitable::await_resume()
     // 5. 根据fromIOVec返回值判断消费RingBuffer多少数据
     if (consumed > 0) {
         m_ring_buffer.consume(consumed);
-        HTTP_LOG_DEBUG("consumed {} bytes from ring buffer", consumed);
     }
 
     // 6. 检查是否达到最大header长度但头部仍未完整
@@ -65,7 +61,6 @@ std::expected<bool, HttpError> GetRequestAwaitable::await_resume()
 
     // 8. 检查是否完整解析
     if (m_request.isComplete()) {
-        HTTP_LOG_DEBUG("request parsing completed");
         return true;
     }
 
@@ -95,9 +90,6 @@ std::expected<bool, HttpError> GetResponseAwaitable::await_resume()
     m_ring_buffer.produce(bytes_read);
     m_total_received += bytes_read;
 
-    HTTP_LOG_DEBUG("received {} bytes, total: {}, readable: {}",
-                 bytes_read, m_total_received, m_ring_buffer.readable());
-
     // 3. 获取RingBuffer的可读iovec
     auto read_iovecs = m_ring_buffer.getReadIovecs();
     if (read_iovecs.empty()) {
@@ -111,7 +103,6 @@ std::expected<bool, HttpError> GetResponseAwaitable::await_resume()
     // 5. 根据fromIOVec返回值判断消费RingBuffer多少数据
     if (consumed > 0) {
         m_ring_buffer.consume(consumed);
-        HTTP_LOG_DEBUG("consumed {} bytes from ring buffer", consumed);
     }
 
     // 6. 检查是否达到最大header长度但头部仍未完整
@@ -133,7 +124,6 @@ std::expected<bool, HttpError> GetResponseAwaitable::await_resume()
 
     // 8. 检查是否完整解析
     if (m_response.isComplete()) {
-        HTTP_LOG_DEBUG("response parsing completed");
         return true;
     }
 
@@ -161,7 +151,6 @@ std::expected<bool, HttpError> GetChunkAwaitable::await_resume()
 
     // 2. 将读取的数据produce到RingBuffer
     m_ring_buffer.produce(bytes_read);
-    HTTP_LOG_DEBUG("received {} bytes, readable: {}", bytes_read, m_ring_buffer.readable());
 
     // 3. 获取RingBuffer的可读iovec
     auto read_iovecs = m_ring_buffer.getReadIovecs();
@@ -178,7 +167,6 @@ std::expected<bool, HttpError> GetChunkAwaitable::await_resume()
         auto& error = result.error();
         if (error.code() == kIncomplete) {
             // 数据不完整，需要继续调用
-            HTTP_LOG_DEBUG("chunk data incomplete, need more data");
             return false;
         }
         // 其他错误
@@ -189,11 +177,9 @@ std::expected<bool, HttpError> GetChunkAwaitable::await_resume()
     // 5. 解析成功，消费RingBuffer
     auto [is_last, consumed] = result.value();
     m_ring_buffer.consume(consumed);
-    HTTP_LOG_DEBUG("consumed {} bytes from ring buffer, is_last: {}", consumed, is_last);
 
     // 6. 返回结果
     if (is_last) {
-        HTTP_LOG_DEBUG("chunk transfer complete");
         return true;
     }
 

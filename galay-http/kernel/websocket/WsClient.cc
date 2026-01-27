@@ -145,7 +145,6 @@ bool WsClientUpgradeAwaitable::await_suspend(std::coroutine_handle<> handle)
 
         // 生成 WebSocket Key
         m_ws_key = generateWebSocketKey();
-        HTTP_LOG_DEBUG("Generated WebSocket-Key: {}", m_ws_key);
 
         // 构建升级请求
         m_upgrade_request = Http1_1RequestBuilder::get(m_client->m_url.path)
@@ -200,7 +199,6 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
 
         if (m_send_offset < m_send_buffer.size()) {
             // 发送未完成，返回 false 继续发送
-            HTTP_LOG_DEBUG("Sent {} / {} bytes", m_send_offset, m_send_buffer.size());
             return false;
         }
 
@@ -224,7 +222,6 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
 
         // 更新 ring buffer
         m_client->m_ring_buffer->produce(recv_result.value());
-        HTTP_LOG_DEBUG("Received {} bytes", recv_result.value());
 
         // 尝试解析 HTTP 响应
         auto parse_result = m_upgrade_response.fromIOVec(
@@ -241,7 +238,6 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
 
         if (!m_upgrade_response.isComplete()) {
             // 响应不完整，返回 false 继续接收
-            HTTP_LOG_DEBUG("Response incomplete, continue receiving");
             return false;
         }
 
@@ -279,17 +275,10 @@ std::expected<bool, WsError> WsClientUpgradeAwaitable::await_resume()
         }
 
         HTTP_LOG_INFO("WebSocket upgrade successful!");
-        HTTP_LOG_DEBUG("Sec-WebSocket-Accept verified");
 
         // 消费已解析的数据
         size_t consumed = parse_result.second;
         m_client->m_ring_buffer->consume(consumed);
-
-        // 检查是否有剩余数据（可能是服务端提前发送的 WebSocket 帧）
-        if (m_client->m_ring_buffer->readable() > 0) {
-            HTTP_LOG_DEBUG("Ring buffer has {} bytes remaining after upgrade (may contain WebSocket frames)",
-                         m_client->m_ring_buffer->readable());
-        }
 
         // 创建 WebSocket 连接（直接使用原始 socket 和 ring buffer，保留剩余数据）
         m_client->m_ws_conn = std::make_unique<WsConn>(

@@ -77,7 +77,6 @@ Coroutine WsHeartbeat::start()
         }
 
         m_last_ping_time = std::chrono::steady_clock::now();
-        LogDebug("Ping frame sent");
     }
 
     LogInfo("WebSocket heartbeat stopped");
@@ -93,7 +92,6 @@ void WsHeartbeat::onPongReceived()
 {
     m_last_pong_time = std::chrono::steady_clock::now();
     m_alive.store(true);
-    LogDebug("Pong frame received, connection is alive");
 }
 
 bool WsHeartbeat::isAlive() const

@@ -69,12 +69,10 @@ std::expected<std::optional<HttpResponse>, HttpError> HttpClientAwaitable::await
 
         if (!sendResult.value()) {
             // 发送未完成，保持 Sending 状态
-            HTTP_LOG_DEBUG("send request incomplete, continue sending");
             return std::nullopt;
         }
 
         // 发送完成，立刻切换到 Receiving 状态
-        HTTP_LOG_DEBUG("send request completed, start receiving response");
         m_state = State::Receiving;
         m_send_awaitable.reset();  // 清理发送 awaitable
         return std::nullopt;
@@ -91,12 +89,10 @@ std::expected<std::optional<HttpResponse>, HttpError> HttpClientAwaitable::await
 
         if (!recvResult.value()) {
             // 接收未完成，保持 Receiving 状态
-            HTTP_LOG_DEBUG("receive response incomplete, continue receiving");
             return std::nullopt;
         }
 
         // 接收完成，立刻重置为 Invalid 状态
-        HTTP_LOG_DEBUG("receive response completed, reset to Invalid state");
         auto response = std::move(m_response);
         reset();  // 清理所有资源
         return response;

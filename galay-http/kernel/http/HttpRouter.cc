@@ -40,7 +40,6 @@ void HttpRouter::addHandlerInternal(HttpMethod method, const std::string& path, 
 
         auto segments = splitPath(path);
         insertRoute(root.get(), segments, handler);
-        HTTP_LOG_DEBUG("Added fuzzy route: {} {}", static_cast<int>(method), path);
         m_routeCount++;
     } else {
         // 精确匹配路由 - 使用unordered_map
@@ -54,7 +53,6 @@ void HttpRouter::addHandlerInternal(HttpMethod method, const std::string& path, 
         }
 
         methodRoutes[path] = handler;
-        HTTP_LOG_DEBUG("Added exact route: {} {}", static_cast<int>(method), path);
 
         // 只有新路由才增加计数
         if (isNewRoute) {
@@ -67,15 +65,11 @@ RouteMatch HttpRouter::findHandler(HttpMethod method, const std::string& path)
 {
     RouteMatch result;
 
-    HTTP_LOG_DEBUG("Finding handler for: {} {}", static_cast<int>(method), path);
-
     // 1. 先尝试精确匹配（O(1)）
     auto methodIt = m_exactRoutes.find(method);
     if (methodIt != m_exactRoutes.end()) {
-        HTTP_LOG_DEBUG("Exact routes for method {}: {}", static_cast<int>(method), methodIt->second.size());
         auto pathIt = methodIt->second.find(path);
         if (pathIt != methodIt->second.end()) {
-            HTTP_LOG_DEBUG("Found exact match for: {}", path);
             result.handler = &pathIt->second;
             return result;
         }
@@ -85,18 +79,7 @@ RouteMatch HttpRouter::findHandler(HttpMethod method, const std::string& path)
     auto fuzzyIt = m_fuzzyRoutes.find(method);
     if (fuzzyIt != m_fuzzyRoutes.end() && fuzzyIt->second) {
         auto segments = splitPath(path);
-        HTTP_LOG_DEBUG("Trying fuzzy match with {} segments", segments.size());
-        for (size_t i = 0; i < segments.size(); i++) {
-            HTTP_LOG_DEBUG("  Segment[{}]: {}", i, segments[i]);
-        }
         result.handler = searchRoute(fuzzyIt->second.get(), segments, result.params);
-        if (result.handler) {
-            HTTP_LOG_DEBUG("Found fuzzy match for: {}", path);
-        } else {
-            HTTP_LOG_DEBUG("No fuzzy match found for: {}", path);
-        }
-    } else {
-        HTTP_LOG_DEBUG("No fuzzy routes for method {}", static_cast<int>(method));
     }
 
     return result;  // 未找到，handler为nullptr
