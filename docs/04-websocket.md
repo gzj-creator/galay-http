@@ -342,4 +342,51 @@ WebSocket 实现已经完成，包括：
 6. ✅ 性能测试和优化
 7. ✅ 使用示例和文档
 
+## ⚠️ 重要注意事项
+
+### WsConn 移动语义
+
+**`WsConn` 禁用了移动构造函数**，因为 `WsReader` 和 `WsWriter` 包含对 `m_socket` 和 `m_ring_buffer` 的引用。
+
+**错误用法：**
+```cpp
+// ❌ 错误：不能移动 WsConn
+Coroutine handleConnection(WsConn ws_conn) {
+    // ...
+}
+co_await handleConnection(std::move(ws_conn)).wait();
+```
+
+**正确用法：**
+```cpp
+// ✅ 正确：通过引用传递 WsConn
+Coroutine handleConnection(WsConn& ws_conn) {
+    // ...
+}
+co_await handleConnection(ws_conn).wait();
+```
+
+**原因：**
+- 默认移动构造函数会移动 `m_socket` 和 `m_ring_buffer`
+- 但 `WsReader` 和 `WsWriter` 中的引用仍指向旧对象的成员
+- 导致引用失效，RingBuffer 状态异常
+- 最终导致 `readv` 失败（EINVAL 错误）
+
+### WsClient 使用注意
+
+`WsClient` 在升级完成后会直接创建 `WsConn`，保留原始 RingBuffer 中的数据：
+
+```cpp
+// WsClient 内部实现
+m_ws_conn = std::make_unique<WsConn>(
+    std::move(*m_socket),
+    std::move(*m_ring_buffer),  // 保留原始 RingBuffer
+    m_reader_setting,
+    m_writer_setting,
+    false  // is_server = false
+);
+```
+
+这确保了服务端在升级响应后立即发送的数据（如欢迎消息）不会丢失。
+
 所有功能已实现并测试通过！🚀
