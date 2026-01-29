@@ -32,8 +32,11 @@ namespace galay::http
         template<HttpBodyType T>
         T getBody();
 
-        //移交所有权
+        //移交所有权（破坏性操作，会清空 body）
         std::string getBodyStr();
+
+        // 获取 body 的常量引用（非破坏性，推荐用于读取）
+        const std::string& bodyStr() const;
 
         void setHeader(HttpRequestHeader&& header);
         void setHeader(HttpRequestHeader& header);

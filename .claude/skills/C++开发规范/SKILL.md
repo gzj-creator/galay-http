@@ -19,7 +19,7 @@
 - **脚本更新**: 更新`scripts`下的`run.sh`和`check.sh`脚本，以适配新功能。`run.sh`用于运行代码和测试，`check.sh`用于验证结果和压测指标。
 - **完成标准**: 测试和压测都通过后，更新待办事项为`true`（例如：`- [true] 实现核心功能`）。
 - **文档生成**: 生成对应文档到`docs`中，格式如下：
-  - `数字-测试功能.md`（例如：`1-核心功能.md`），包含功能描述、用法、测试结果、压测数据和结论。
+  - `数字-测试功能.md`（例如：`1-核心功能.md`），文档名是中文的，包含功能描述、用法、测试结果、压测数据和结论。
   - 压测结果需包含详细指标（如QPS、延迟、吞吐量）和机器配置信息（例如：CPU型号、内存大小、操作系统版本）。
 - **提交流程**: 完整以上流程之后才能提交git，commit消息包含本次修改内容（例如：`git commit -m "Implemented high-performance feature with tests and benchmarks"`）。
 
@@ -29,17 +29,17 @@
   - 测试代码避免使用`std::this_thread::sleep`直接等待；允许在以结果为条件的循环内使用短暂休眠（例如：`while (!condition) { std::this_thread::sleep_for(10ms); }`）。
   - CS架构测试需创建`client`和`server`两个文件。
 - **结果保存与验证**: 使用`test`下的`test_result_writer`将结果写入文件。通过脚本批量启动测试并检验结果（更新`scripts`下的脚本来自动化）。
-- **文件命名**: 测试文件从`T1-`开始递增（例如：`T1-MyFunctionTest.cpp`）。对应文档为`T1-xxx.md`，包含测试结果和结论。
+- **文件命名**: 测试文件从`T1-`开始递增（例如：`T1-MyFunctionTest.cpp`）。对应文档为`T1-xxx.md`，文档名是中文的，包含测试结果和结论。
 
 ### 5. **压测**:
 - **执行时机**: 仅在所有单元测试通过后进行。
 - **压测规则**: 每个高性能代码部分在`benchmark`目录下创建压测代码（从`B1-`开始递增，例如：`B1-MyFunctionBenchmark.cpp`）。使用ComputeScheduler处理计算相关压测。
-- **结果文档**: 生成文档到`docs`（例如：`B1-xxx.md`），包含详细数据（如QPS等指标）、机器配置和优化建议。
+- **结果文档**: 生成文档到`docs`（例如：`B1-xxx.md`），文档名是中文的，包含详细数据（如QPS等指标）、机器配置和优化建议。
 - **Example文件**: 如需示例，从`E1-`开始递增（例如：`E1-MyFunctionExample.cpp`）。
 
 ### 6. **脚本管理**:
-- 所有脚本放在`scripts`下（例如：`run_tests.sh`运行测试，`check_results.sh`验证结果，`run_benchmarks.sh`运行压测）。
-
+- **生成规则**: 所有脚本放在`scripts`下（例如：`run_tests.sh`运行测试，`check_results.sh`验证结果，`run_benchmarks.sh`运行压测）。
+- **文件命名**: 脚本文件从`S1-`开始递增（例如：`S1-MyScripts.sh`）。对应文档为`S1-xxx.md`，文档名是中文的。
 ## 整体流程指导
 1. **需求接收**: 分析需求，创建待办列表（所有事项`false`）。
 2. **代码编写**: 遵守风格，实现功能，使用工具排查问题。
