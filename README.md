@@ -622,7 +622,8 @@ ctest --verbose
 - `04-websocket.md` - WebSocket 协议实现
 - `05-timeout_support.md` - 超时机制
 - `07-static_file_transfer_modes.md` - 文件传输模式详解
-- `HttpRouter.md` - 路由系统文档
+- `11-HttpRouter.md` - 路由系统文档
+- `12-HttpRouterCompleteness.md` - 路由系统完整性文档
 
 ## 安全特性
 
