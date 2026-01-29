@@ -389,11 +389,10 @@ namespace galay::http
 
     bool HttpRequestHeader::isKeepAlive() const
     {
-        // 使用 hasKey 避免不必要的查找，然后只查找一次
+        // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
         if (!m_headerPairs.hasKey("Connection")) {
-            return false;
+            return m_version == HttpVersion::HttpVersion_1_1;
         }
-        // 只调用一次 getValue，避免重复查找
         const std::string& conn = m_headerPairs.getValue("Connection");
         return conn == "keep-alive";
     }
@@ -698,6 +697,10 @@ namespace galay::http
 
     bool HttpResponseHeader::isKeepAlive() const
     {
+        // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
+        if (!m_headerPairs.hasKey("Connection")) {
+            return m_version == HttpVersion::HttpVersion_1_1;
+        }
         return m_headerPairs.getValue("Connection") == "keep-alive";
     }
 
