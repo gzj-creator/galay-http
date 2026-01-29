@@ -119,24 +119,24 @@ router.mount("/docs", "./public/docs");
 ### 单元测试
 ```bash
 cd build
-./test/test_mount_functions
+./test/T13-MountFunctions
 ```
 
 ### 集成测试（需要启动服务器）
 ```bash
 # 终端1：启动服务器
 cd build
-./test/test_static_file_server
+./test/T14-StaticFileTransferModes
 
 # 终端2：运行基准测试
 cd /path/to/galay-http
-./test/benchmark_static_files.sh
+./scripts/BenchmarkStaticFiles.sh
 ```
 
 ## 测试文件
-- `test/test_mount_functions.cc` - 单元测试
-- `test/test_static_file_server.cc` - 集成测试服务器
-- `test/benchmark_static_files.sh` - 性能基准测试脚本
+- `test/T13-MountFunctions.cc` - 单元测试
+- `test/T14-StaticFileTransferModes.cc` - 集成测试服务器
+- `scripts/BenchmarkStaticFiles.sh` - 性能基准测试脚本
 
 ## 结论
 

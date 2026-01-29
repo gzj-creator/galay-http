@@ -61,7 +61,7 @@ namespace galay::http
         if(static_cast<uint32_t>(m_code) >= message_count) {
             return "Unknown Http error";
         }
-        return g_http_error_messages[m_code];
+        return std::string(g_http_error_messages[m_code]) + m_extra_msg;
     }
 
     HttpStatusCode HttpError::toHttpStatusCode() const

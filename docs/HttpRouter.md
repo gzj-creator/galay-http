@@ -413,7 +413,7 @@ int main() {
 
 运行性能测试：
 ```bash
-./build/benchmark/benchmark_http_router
+./build/benchmark/B6-HttpRouter
 ```
 
 ## 参考资料

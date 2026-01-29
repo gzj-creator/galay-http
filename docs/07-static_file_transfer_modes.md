@@ -293,17 +293,17 @@ router.mountHardly("/files", "./files", defaultConfig);
 
 ```bash
 cd build
-./test/test_static_file_transfer_modes
+./test/T14-StaticFileTransferModes
 ```
 
 运行完整的静态文件服务测试：
 
 ```bash
 # 终端1: 启动服务器
-./test/test_static_file_server
+./test/T14-StaticFileTransferModes
 
 # 终端2: 运行基准测试
-../test/benchmark_static_files.sh
+../scripts/BenchmarkStaticFiles.sh
 ```
 
 ## 相关文件
@@ -311,9 +311,9 @@ cd build
 - `galay-http/kernel/http/StaticFileConfig.h` - 配置类定义
 - `galay-http/kernel/http/HttpRouter.h` - 路由器接口
 - `galay-http/kernel/http/HttpRouter.cc` - 传输逻辑实现
-- `test/test_static_file_transfer_modes.cc` - 传输模式测试
-- `test/test_mount_functions.cc` - mount 功能测试
-- `test/test_static_file_server.cc` - 集成测试服务器
+- `test/T14-StaticFileTransferModes.cc` - 传输模式测试
+- `test/T13-MountFunctions.cc` - mount 功能测试
+- `test/T15-RangeEtagServer.cc` - 集成测试服务器
 
 ---
 

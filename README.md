@@ -1,64 +1,64 @@
 # Galay-HTTP
 
-一个基于 C++23 协程的现代化异步 HTTP 服务器和客户端库，构建于 [Galay](https://github.com/galay) 异步运行时之上。
+一个基于 C++20/23 协程的现代化高性能异步 HTTP/WebSocket 库，构建于 [Galay](https://github.com/galay) 异步运行时之上。
 
-## 特性
+## 核心特性
 
-- **协程驱动**: 完全基于 C++20/23 协程的异步 I/O 操作
-- **高性能**: 零拷贝路由匹配，高效的请求/响应处理
-- **易用的 API**: 简洁直观的服务器和客户端接口
-- **Builder 模式**: 链式调用构造 HTTP 请求和响应，代码更简洁优雅
-- **自动路由**: HttpServer 内置 Router 支持，自动处理路由匹配
-- **灵活的路由系统**: 支持精确匹配、通配符和参数化路由
-  - 精确匹配: `/api/users`
+### 协程驱动的异步架构
+- **完全异步**: 基于 C++20/23 协程的非阻塞 I/O 操作
+- **高性能调度**: 内置 Runtime 管理，支持多 IO 调度器和计算调度器
+- **超时支持**: 所有异步操作均支持超时设置
+
+### HTTP 服务器
+- **内置 Runtime**: 服务器自带运行时管理，无需手动配置调度器
+- **灵活的路由系统**: 混合策略（精确匹配 O(1) + Trie 树模糊匹配 O(k)）
+  - 精确路径: `/api/users`
+  - 路径参数: `/user/{id}`
   - 通配符: `/static/*`
-  - 参数捕获: `/user/{id}/profile`
-- **静态文件服务**: 支持 Range 请求、ETag、多种传输模式（内存/分块/sendfile）
-- **Chunked 编码**: 完整支持 HTTP Chunked Transfer-Encoding
+  - 贪婪通配符: `/files/**`
+- **静态文件服务**: 支持多种传输模式、Range 请求、ETag 缓存验证
+- **安全特性**: 路径遍历攻击防护、启动时路径验证
 
-## 依赖项
+### HTTP 客户端
+- **URL 连接支持**: 直接使用 URL 字符串连接服务器
+- **HttpClientAwaitable**: 自动处理请求发送和响应接收的完整流程
+- **循环等待机制**: 自动处理不完整的数据传输
+- **超时控制**: 支持请求级别的超时设置
 
-- **C++23** 编译器 (GCC 11+, Clang 14+)
-- **CMake** 3.22+
-- **Galay**: 核心异步运行时库
-- **OpenSSL**: SSL/TLS 支持
-- **pthread**: 多线程支持
+### 文件传输和断点续传
+- **四种传输模式**:
+  - MEMORY: 内存模式（小文件 <64KB）
+  - CHUNK: 分块模式（中等文件 64KB-1MB）
+  - SENDFILE: 零拷贝模式（大文件 >1MB）
+  - AUTO: 自动选择最优模式
+- **Range 请求**: 完整支持 HTTP Range 协议
+  - 单范围: `bytes=0-499`
+  - 多范围: `bytes=0-99,200-299`
+  - 后缀范围: `bytes=500-`
+  - 前缀范围: `bytes=-500`
+- **ETag 支持**: 强/弱 ETag 生成和验证，支持 If-None-Match、If-Match、If-Range
+- **断点续传**: 基于 Range 和 ETag 的可靠断点续传机制
 
-## 安装
+### WebSocket 支持
+- **完整的 WebSocket 协议**: RFC 6455 标准实现
+- **帧类型支持**: Text、Binary、Ping、Pong、Close
+- **心跳机制**: 自动心跳保活
+- **协议升级**: 从 HTTP 无缝升级到 WebSocket
 
-### 从源码构建
+### 高性能特性
+- **零拷贝路由匹配**: 直接在原字符串上进行路径匹配
+- **SIMD 优化**: 路由匹配支持 SIMD 加速
+- **高效内存管理**: 移动语义和右值引用减少拷贝
+- **Chunked 编码**: 高性能实现（编码 400万 ops/sec，解析 217万 ops/sec）
 
-```bash
-# 克隆仓库
-git clone https://github.com/your-org/galay-http.git
-cd galay-http
-
-# 创建构建目录
-mkdir build && cd build
-
-# 配置和编译
-cmake ..
-make -j$(nproc)
-
-# 安装 (可选)
-sudo make install
-```
-
-### CMake 集成
-
-在你的项目的 `CMakeLists.txt` 中:
-
-```cmake
-find_package(galay-http REQUIRED)
-
-target_link_libraries(your_target 
-    PRIVATE galay-http
-)
-```
+### 易用的 API
+- **Builder 模式**: 链式调用构造 HTTP 请求和响应
+- **自动路由分发**: HttpServer 内置 Router 支持
+- **简洁的协程接口**: 使用 `co_await` 进行异步操作
 
 ## 快速开始
 
-### HTTP 服务器（使用 Builder 模式）
+### HTTP 服务器示例
 
 ```cpp
 #include "galay-http/kernel/http/HttpServer.h"
@@ -68,24 +68,14 @@ target_link_libraries(your_target
 using namespace galay::http;
 using namespace galay::kernel;
 
-// 定义处理器
-Coroutine helloHandler(HttpConn& conn, HttpRequest req) {
-    // 使用 Builder 构造响应 - 简洁优雅！
+// Echo 处理器
+Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
+    std::string body = req.getBodyStr();
+
+    // 使用 Builder 构造响应
     auto response = Http1_1ResponseBuilder::ok()
         .header("Server", "Galay-HTTP/1.0")
-        .text("Hello, World!")
-        .build();
-
-    auto writer = conn.getWriter();
-    co_await writer.sendResponse(response);
-    co_await conn.close();
-    co_return;
-}
-
-Coroutine apiHandler(HttpConn& conn, HttpRequest req) {
-    // JSON 响应
-    auto response = Http1_1ResponseBuilder::ok()
-        .json(R"({"status": "ok", "message": "API is working"})")
+        .text("Echo: " + body)
         .build();
 
     auto writer = conn.getWriter();
@@ -97,8 +87,7 @@ Coroutine apiHandler(HttpConn& conn, HttpRequest req) {
 int main() {
     // 创建路由器
     HttpRouter router;
-    router.addHandler<HttpMethod::GET>("/hello", helloHandler);
-    router.addHandler<HttpMethod::GET>("/api", apiHandler);
+    router.addHandler<HttpMethod::POST>("/echo", echoHandler);
 
     // 配置并启动服务器
     HttpServerConfig config;
@@ -106,11 +95,9 @@ int main() {
     config.port = 8080;
 
     HttpServer server(config);
+    server.start(std::move(router));  // 服务器内置 Runtime
 
-    // 使用新 API：将 Router 移动到 Server，自动处理路由
-    server.start(std::move(router));
-
-    // 保持服务器运行
+    // 保持运行
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
@@ -119,45 +106,48 @@ int main() {
 }
 ```
 
-### HTTP 客户端（使用 Builder 模式）
+### HTTP 客户端示例
 
 ```cpp
 #include "galay-http/kernel/http/HttpClient.h"
-#include "galay-http/utils/Http1_1RequestBuilder.h"
-#include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
 
 using namespace galay::http;
 using namespace galay::kernel;
-using namespace galay::async;
 
-Coroutine makeRequest(Runtime& runtime) {
-    // 创建并连接 Socket
-    TcpSocket socket(IPType::IPV4);
-    socket.option().handleNonBlock();
+Coroutine sendRequest(Runtime& runtime) {
+    // 创建客户端并连接
+    HttpClient client;
+    auto connect_result = co_await client.connect("http://127.0.0.1:8080/echo");
 
-    Host server_host(IPType::IPV4, "127.0.0.1", 8080);
-    co_await socket.connect(server_host);
+    if (!connect_result) {
+        std::cerr << "Connection failed\n";
+        co_return;
+    }
 
-    // 创建 HttpClient
-    HttpClient client(std::move(socket));
+    // 发送 POST 请求并接收响应（自动循环等待）
+    while (true) {
+        auto result = co_await client.post(
+            client.url().path,
+            "Hello, Server!",
+            "text/plain"
+        );
 
-    // 使用 Builder 构造 POST 请求 - 简洁优雅！
-    auto request = Http1_1RequestBuilder::post("/api/users")
-        .host("127.0.0.1:8080")
-        .json(R"({"name": "John", "age": 30})")
-        .build();
+        if (!result) {
+            std::cerr << "Request failed\n";
+            co_return;
+        }
 
-    // 发送请求
-    auto writer = client.getWriter();
-    co_await writer.sendRequest(request);
+        // 检查是否完成
+        if (!result.value()) {
+            continue;  // 继续等待
+        }
 
-    // 接收响应
-    auto reader = client.getReader();
-    HttpResponse response;
-    co_await reader.getResponse(response);
-
-    std::cout << "Response: " << response.getBodyStr() << std::endl;
+        // 获取响应
+        auto response = result.value().value();
+        std::cout << "Response: " << response.getBodyStr() << "\n";
+        break;
+    }
 
     co_await client.close();
     co_return;
@@ -168,7 +158,7 @@ int main() {
     runtime.start();
 
     auto* scheduler = runtime.getNextIOScheduler();
-    scheduler->spawn(makeRequest(runtime));
+    scheduler->spawn(sendRequest(runtime));
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
     runtime.stop();
@@ -177,232 +167,198 @@ int main() {
 }
 ```
 
-## 路由系统
+## 核心组件
 
-### 精确匹配
+### HttpServer
 
+HttpServer 是一个功能完整的 HTTP 服务器，内置 Runtime 管理调度器。
+
+**特性**:
+- 内置 Runtime，自动管理 IO 和计算调度器
+- 支持两种启动方式：直接处理器或 HttpRouter
+- 自动处理连接接受和请求分发
+- 可配置的主机、端口、调度器数量等
+
+**配置选项**:
 ```cpp
-router.addRoute<GET>("/api/users", handleUsers);
+HttpServerConfig config;
+config.host = "0.0.0.0";
+config.port = 8080;
+config.backlog = 128;
+config.io_scheduler_count = 0;      // 0 = 自动（2 * CPU 核心数）
+config.compute_scheduler_count = 0; // 0 = 自动（CPU 核心数）
 ```
 
-### 通配符路由
+### HttpClient
 
+HttpClient 提供异步 HTTP 客户端功能，支持 URL 连接和自动请求/响应流程。
+
+**特性**:
+- URL 解析和连接：`client.connect("http://example.com:8080/path")`
+- HttpClientAwaitable 等待体：自动处理请求发送和响应接收
+- 支持所有 HTTP 方法：GET、POST、PUT、DELETE、PATCH、HEAD、OPTIONS、TRACE、CONNECT
+- 超时支持：`co_await client.get("/api").timeout(std::chrono::seconds(5))`
+
+**示例**:
 ```cpp
-// 匹配 /static/css/style.css, /static/js/app.js 等
-router.addRoute<GET>("/static/*", handleStatic);
+HttpClient client;
+co_await client.connect("http://example.com/api");
 
-// 匹配 /endpoint/v1/app, /endpoint/v2/app 等
-router.addRoute<GET>("/endpoint/*/app", handleApp);
+// 发送 GET 请求
+while (true) {
+    auto result = co_await client.get("/users");
+    if (!result) break;
+    if (!result.value()) continue;  // 继续等待
 
-// 通配符匹配的内容会被放入 HttpParams 中，键名为 "*"
-Coroutine handleStatic(HttpRequest& request, HttpConnection& conn, 
-                            HttpParams params) {
-    // 对于请求 /static/css/style.css，params["*"] = "css/style.css"
-    std::string path = params["*"];
-    
-    auto writer = conn.getResponseWriter({});
-    auto response = HttpUtils::defaultOk("txt", "File: " + path);
-    co_await writer.reply(response);
-    co_await conn.close();
-    co_return nil();
+    auto response = result.value().value();
+    // 处理响应
+    break;
 }
 ```
 
-### 参数化路由
+### HttpRouter
 
+HttpRouter 是一个高性能的路由系统，采用混合策略实现快速路由匹配。
+
+**路由模式**:
 ```cpp
-Coroutine handleUser(HttpRequest& request, HttpReader& reader,
-                          HttpWriter& writer, HttpParams params) {
-    std::string userId = params["id"];  // 提取路径参数
-    auto response = HttpUtils::defaultOk("txt", "User ID: " + userId);
-    co_await writer.reply(response);
-    co_return nil();
-}
+HttpRouter router;
 
-// 匹配 /user/123/profile, /user/456/profile 等
-router.addRoute<GET>("/user/{id}/profile", handleUser);
+// 精确路径
+router.addHandler<HttpMethod::GET>("/api/users", handleUsers);
+
+// 路径参数
+router.addHandler<HttpMethod::GET>("/user/{id}", handleUser);
+
+// 通配符
+router.addHandler<HttpMethod::GET>("/static/*", handleStatic);
+
+// 贪婪通配符
+router.addHandler<HttpMethod::GET>("/files/**", handleFiles);
+
+// 多方法支持
+router.addHandler<HttpMethod::GET, HttpMethod::POST>("/api/resource", handleResource);
 ```
 
-### 批量注册路由
-
+**静态文件挂载**:
 ```cpp
-HttpRouteMap routes = {
-    {"/echo", handleEcho},
-    {"/static/*", handleStatic},
-    {"/user/{id}", handleUser},
-    {"/api/{version}/data", handleData}
-};
+// mount() - 启动时验证路径
+router.mount("/static", "./public");
 
-router.addRoute<GET>(routes);
+// mountHardly() - 预加载文件到内存（适合小文件）
+router.mountHardly("/assets", "./assets");
 ```
 
-### 多方法路由
+## 文件上传下载和断点续传
+
+### 静态文件传输模式
+
+Galay-HTTP 支持四种文件传输模式，可根据文件大小自动选择最优方式：
 
 ```cpp
-// 同一路径支持多个 HTTP 方法
-router.addRoute<GET, POST, PUT>("/api/resource", handleResource);
+StaticFileConfig config;
+
+// 设置传输模式
+config.setTransferMode(FileTransferMode::AUTO);  // 自动选择
+
+// 自定义阈值
+config.setSmallFileThreshold(64 * 1024);    // 64KB
+config.setLargeFileThreshold(1024 * 1024);  // 1MB
+
+// 挂载时使用配置
+router.mount("/files", "./files", config);
 ```
 
-## Chunked Transfer-Encoding
+**传输模式说明**:
+- **MEMORY**: 小文件完整读入内存（<64KB），简单高效
+- **CHUNK**: HTTP chunked 编码分块传输（64KB-1MB），内存占用可控
+- **SENDFILE**: 零拷贝 sendfile 系统调用（>1MB），性能最优
+- **AUTO**: 根据文件大小自动选择（推荐）
 
-galay-http 完整支持 HTTP Chunked Transfer Encoding (RFC 7230)。详细文档请参考 [docs/03-http_chunked.md](docs/03-http_chunked.md)。
+### Range 请求和断点续传
 
-### 服务器端接收 Chunked 请求
+**服务端支持 Range 请求**:
 
+Range 请求由 HttpRouter 的静态文件挂载自动处理，无需额外代码。
+
+**客户端发送 Range 请求**:
 ```cpp
-// 1. 读取请求头
-HttpRequest request;
-auto result = co_await reader.getRequest(request);
+HttpClient client;
+co_await client.connect("http://example.com/large-file.zip");
 
-// 2. 检查是否是 chunked 编码
-if (result.value() == false && request.header().isChunked()) {
-    std::string allData;
-    bool isLast = false;
+// 请求文件的一部分（断点续传）
+while (true) {
+    auto result = co_await client.get("/large-file.zip", {
+        {"Range", "bytes=1024000-"},  // 从 1MB 处继续下载
+        {"If-Range", etag}            // 验证文件未改变
+    });
 
-    // 3. 循环读取所有 chunk
-    while (!isLast) {
-        auto chunkResult = co_await reader.getChunk(allData);
-        if (!chunkResult) {
-            // 错误处理
-            break;
-        }
-        isLast = chunkResult.value();
-        // allData 包含所有已接收的 chunk 数据（追加方式）
+    if (!result || !result.value()) continue;
+
+    auto response = result.value().value();
+
+    // 检查是否是 206 Partial Content
+    if (response.header().code() == HttpStatusCode::PARTIAL_CONTENT_206) {
+        // 获取 Content-Range 头
+        auto contentRange = response.header().headerPairs().getHeaderPair("Content-Range");
+        std::cout << "Received: " << contentRange << "\n";
+
+        // 保存数据
+        std::string data = response.getBodyStr();
+        // ... 追加到文件
     }
-
-    LogInfo("Received all chunks: {} bytes", allData.size());
+    break;
 }
 ```
 
-### 服务器端发送 Chunked 响应
+**支持的 Range 格式**:
+- `bytes=0-499` - 单范围（前 500 字节）
+- `bytes=0-99,200-299` - 多范围
+- `bytes=500-` - 后缀范围（从 500 字节到文件末尾）
+- `bytes=-500` - 前缀范围（最后 500 字节）
 
+### ETag 缓存验证
+
+ETag 用于验证文件是否被修改，支持断点续传的可靠性。
+
+**服务端自动生成 ETag**:
+
+静态文件挂载会自动为每个文件生成 ETag（基于 inode + mtime + size）。
+
+**客户端使用 ETag**:
 ```cpp
-// 1. 发送响应头
-HttpResponseHeader header;
-header.version() = HttpVersion::HttpVersion_1_1;
-header.code() = HttpStatusCode::OK_200;
-header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-co_await writer.sendHeader(std::move(header));
+// 首次请求，获取 ETag
+auto response1 = co_await client.get("/file.zip");
+std::string etag = response1.value().value()
+    .header().headerPairs().getHeaderPair("ETag");
 
-// 2. 发送多个 chunk
-co_await writer.sendChunk("First chunk\n", false);
-co_await writer.sendChunk("Second chunk\n", false);
-co_await writer.sendChunk("Third chunk\n", false);
+// 后续请求，使用 If-None-Match 检查是否修改
+auto response2 = co_await client.get("/file.zip", {
+    {"If-None-Match", etag}
+});
 
-// 3. 发送最后一个 chunk
-std::string empty;
-co_await writer.sendChunk(empty, true);
-```
-
-### 客户端发送 Chunked 请求
-
-```cpp
-// 1. 发送请求头
-HttpRequestHeader header;
-header.method() = HttpMethod::HttpMethod_Post;
-header.uri() = "/upload";
-header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-co_await writer.sendHeader(std::move(header));
-
-// 2. 发送数据块
-co_await writer.sendChunk("chunk1", false);
-co_await writer.sendChunk("chunk2", false);
-
-// 3. 发送最后一个 chunk
-std::string empty;
-co_await writer.sendChunk(empty, true);
-```
-
-### 性能数据
-
-- **编码性能**: 400万 ops/sec (0.25 μs/op)
-- **解析性能**: 217万 ops/sec (0.46 μs/op)
-- **RingBuffer 集成**: 96万 ops/sec (1.04 μs/op)
-
-### 客户端接收 Chunked 响应
-
-```cpp
-Coroutine receiveChunked(HttpClient& client) {
-    auto reader = client.getReader();
-    
-    auto response = co_await reader.getResponse();
-    if (response && response.value().header().isChunked()) {
-        co_await reader.getChunkData([](std::string chunk) {
-            std::cout << "Received chunk: " << chunk << std::endl;
-        });
-    }
-    
-    co_return nil();
+// 如果返回 304 Not Modified，说明文件未改变
+if (response2.value().value().header().code() == HttpStatusCode::NOT_MODIFIED_304) {
+    std::cout << "File not modified, use cached version\n";
 }
 ```
 
-## HttpSettings 配置
+**断点续传中使用 If-Range**:
+```cpp
+// If-Range 确保文件未改变才使用 Range 请求
+auto result = co_await client.get("/file.zip", {
+    {"Range", "bytes=1024000-"},
+    {"If-Range", etag}  // 如果 ETag 不匹配，服务器返回完整文件
+});
+```
+
+## Builder 模式 API
+
+### Http1_1ResponseBuilder
+
+使用 Builder 模式构造 HTTP 响应：
 
 ```cpp
-HttpSettings settings {
-    .maxHeaderSize = 8192,              // 最大请求头大小
-    .maxBodySize = 10 * 1024 * 1024,    // 最大请求体大小 (10MB)
-    .timeout = std::chrono::seconds(30)  // 超时时间
-};
-
-HttpClient client(runtime, settings);
-// 或
-server.run(runtime, router, settings);
-```
-
-## 项目结构
-
-```
-galay-http/
-├── galay-http/
-│   ├── client/          # HTTP 客户端实现
-│   ├── server/          # HTTP 服务器实现
-│   ├── kernel/          # 核心组件
-│   │   ├── HttpConnection.h/cc   # 连接管理
-│   │   ├── HttpRouter.h/cc       # 路由系统
-│   │   ├── HttpReader.h/cc       # 请求读取
-│   │   └── HttpWriter.h/cc       # 响应写入
-│   ├── protoc/          # HTTP 协议
-│   │   ├── HttpRequest.h/cc      # HTTP 请求
-│   │   ├── HttpResponse.h/cc     # HTTP 响应
-│   │   ├── HttpHeader.h/cc       # HTTP 头部
-│   │   └── HttpBody.h/cc         # HTTP 主体
-│   └── utils/           # 工具类
-│       ├── HttpLogger.h/cc       # 日志
-│       └── HttpUtils.h/cc        # 实用函数
-└── test/                # 测试用例
-    ├── test_http_server.cc
-    ├── test_http_client.cc
-    ├── test_chunk_server.cc
-    └── test_chunk_client.cc
-```
-
-## 编译测试
-
-```bash
-cd build
-make
-
-# 运行服务器测试
-./test/test_http_server
-
-# 在另一个终端运行客户端测试
-./test/test_http_client
-
-# 测试 chunked 编码
-./test/test_chunk_server
-./test/test_chunk_client
-```
-
-## API 工具类
-
-### Http1_1ResponseBuilder（推荐使用）
-
-使用 Builder 模式构造 HTTP 响应，代码更简洁优雅：
-
-```cpp
-#include "galay-http/utils/Http1_1ResponseBuilder.h"
-
 // 基本用法
 auto response = Http1_1ResponseBuilder::ok()
     .header("Server", "Galay-HTTP/1.0")
@@ -419,25 +375,15 @@ auto htmlResponse = Http1_1ResponseBuilder::ok()
     .html("<h1>Welcome</h1>")
     .build();
 
-// 自定义状态码和多个头部
+// 自定义状态码
 auto customResponse = Http1_1ResponseBuilder()
     .status(201)
     .header("Location", "/users/123")
-    .header("X-Custom-Header", "value")
-    .json(R"({"id": 123, "created": true})")
-    .build();
-
-// 快捷方法
-auto notFound = Http1_1ResponseBuilder::notFound()
-    .text("Resource not found")
-    .build();
-
-auto serverError = Http1_1ResponseBuilder::internalServerError()
-    .json(R"({"error": "Internal server error"})")
+    .json(R"({"id": 123})")
     .build();
 ```
 
-**支持的快捷方法**：
+**快捷方法**:
 - `ok()` - 200 OK
 - `created()` - 201 Created
 - `noContent()` - 204 No Content
@@ -447,13 +393,11 @@ auto serverError = Http1_1ResponseBuilder::internalServerError()
 - `notFound()` - 404 Not Found
 - `internalServerError()` - 500 Internal Server Error
 
-### Http1_1RequestBuilder（推荐使用）
+### Http1_1RequestBuilder
 
 使用 Builder 模式构造 HTTP 请求：
 
 ```cpp
-#include "galay-http/utils/Http1_1RequestBuilder.h"
-
 // GET 请求
 auto getRequest = Http1_1RequestBuilder::get("/api/users")
     .host("example.com")
@@ -474,144 +418,218 @@ auto formRequest = Http1_1RequestBuilder::post("/login")
         {"password", "secret"}
     })
     .build();
-
-// 自定义请求
-auto customRequest = Http1_1RequestBuilder()
-    .method(HttpMethod::PUT)
-    .uri("/api/users/123")
-    .host("example.com")
-    .contentType("application/json")
-    .userAgent("MyApp/1.0")
-    .connection("keep-alive")
-    .body(R"({"name": "John Updated"})")
-    .build();
 ```
 
-**支持的快捷方法**：
-- `get(uri)` - GET 请求
-- `post(uri)` - POST 请求
-- `put(uri)` - PUT 请求
-- `del(uri)` - DELETE 请求
-- `patch(uri)` - PATCH 请求
-- `head(uri)` - HEAD 请求
-- `options(uri)` - OPTIONS 请求
+## Chunked Transfer-Encoding
 
-### HttpUtils（传统方式）
+Galay-HTTP 完整支持 HTTP Chunked Transfer Encoding (RFC 7230)。
+
+### 服务器端发送 Chunked 响应
 
 ```cpp
-// 创建默认响应
-auto response = HttpUtils::defaultOk("txt", "Response body");
-auto jsonResponse = HttpUtils::defaultOk("json", jsonString);
+Coroutine handleChunked(HttpConn& conn, HttpRequest req) {
+    auto writer = conn.getWriter();
 
-// 创建默认请求
-auto request = HttpUtils::defaultGet("/path");
-auto postRequest = HttpUtils::defaultPost("/api", "request body");
-```
+    // 1. 发送响应头
+    HttpResponseHeader header;
+    header.version() = HttpVersion::HttpVersion_1_1;
+    header.code() = HttpStatusCode::OK_200;
+    header.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+    co_await writer.sendHeader(std::move(header));
 
-### HttpLogger
+    // 2. 发送多个 chunk
+    co_await writer.sendChunk("First chunk\n", false);
+    co_await writer.sendChunk("Second chunk\n", false);
+    co_await writer.sendChunk("Third chunk\n", false);
 
-```cpp
-// 获取日志实例并设置日志级别
-HttpLogger::getInstance()
-    ->getLogger()
-    ->getSpdlogger()
-    ->set_level(spdlog::level::debug);
-```
+    // 3. 发送最后一个 chunk
+    co_await writer.sendChunk("", true);
 
-## 性能特性
-
-- **零拷贝路由匹配**: 直接在原字符串上进行路径匹配，避免创建临时字符串
-- **高效内存管理**: 使用移动语义和右值引用减少不必要的拷贝
-- **协程调度**: 基于 Galay 运行时的高效协程调度器
-- **多线程支持**: 可配置的工作线程数
-
-## 示例场景
-
-### RESTful API 服务器
-
-```cpp
-HttpRouteMap apiRoutes = {
-    {"/api/users", handleListUsers},
-    {"/api/user/{id}", handleGetUser},
-    {"/api/user/{id}/posts", handleUserPosts}
-};
-
-router.addRoute<GET>(apiRoutes);
-
-HttpRouteMap postRoutes = {
-    {"/api/user", handleCreateUser}
-};
-router.addRoute<POST>(postRoutes);
-```
-
-### 静态文件服务器
-
-使用 `mount()` 方法可以轻松挂载静态文件目录：
-
-```cpp
-HttpRouter router;
-
-// 挂载静态文件目录
-// 注意：mount() 会立即验证路径，不存在会抛出异常
-try {
-    // GET /static/css/style.css -> 读取 ./public/css/style.css
-    router.mount("/static", "./public");
-    
-    // 挂载多个目录
-    router.mount("/assets", "./assets");
-    router.mount("/images", "./images");
-} catch (const std::runtime_error& e) {
-    std::cerr << "Mount failed: " << e.what() << std::endl;
-    return 1;
-}
-
-server.run(runtime, router);
-```
-
-**安全特性：**
-- ✅ 启动时验证路径（早期发现配置错误）
-- ✅ 自动防止路径遍历攻击（例如 `../../../etc/passwd`）
-- ✅ 只允许访问指定目录下的文件
-- ✅ 自动处理路径规范化
-- ✅ 根据文件扩展名自动设置正确的 Content-Type
-
-**支持的文件类型：**
-- HTML/CSS/JavaScript
-- 图片（PNG, JPEG, GIF, SVG）
-- JSON/XML
-- PDF
-- 纯文本
-- 其他（默认为 application/octet-stream）
-
-**完整示例：**
-
-```cpp
-#include "galay/kernel/runtime/Runtime.h"
-#include "galay-http/server/HttpServer.h"
-#include "galay-http/kernel/HttpRouter.h"
-
-using namespace galay;
-using namespace galay::http;
-
-int main() {
-    RuntimeBuilder runtimeBuilder;
-    auto runtime = runtimeBuilder.build();
-    runtime.start();
-    
-    HttpServerBuilder builder;
-    HttpServer server = builder.build();
-    server.listen(Host("0.0.0.0", 8080));
-    
-    HttpRouter router;
-    router.mount("/static", "./public");
-    
-    server.run(runtime, router);
-    server.wait();
-    server.stop();
-    
-    return 0;
+    co_await conn.close();
+    co_return;
 }
 ```
+
+### 客户端接收 Chunked 响应
+
+```cpp
+auto reader = client.getReader();
+HttpResponse response;
+co_await reader.getResponse(response);
+
+if (response.header().isChunked()) {
+    std::string allData;
+    bool isLast = false;
+
+    while (!isLast) {
+        auto chunkResult = co_await reader.getChunk(allData);
+        if (!chunkResult) break;
+        isLast = chunkResult.value();
+        // allData 包含所有已接收的数据
+    }
+}
+```
+
+## WebSocket 支持
+
+### WebSocket 服务器
+
+```cpp
+#include "galay-http/kernel/websocket/WsConn.h"
+
+Coroutine wsHandler(HttpConn& conn, HttpRequest req) {
+    // 升级到 WebSocket
+    auto wsConn = co_await galay::websocket::upgradeToWebSocket(conn, req);
+
+    if (!wsConn) {
+        co_return;
+    }
+
+    // 接收和发送消息
+    while (true) {
+        WebSocketFrame frame;
+        auto result = co_await wsConn->receive(frame);
+
+        if (!result || frame.opcode == WebSocketOpcode::CLOSE) {
+            break;
+        }
+
+        // Echo 消息
+        co_await wsConn->send(frame.payload, WebSocketOpcode::TEXT);
+    }
+
+    co_await wsConn->close();
+    co_return;
+}
+```
+
+### WebSocket 客户端
+
+```cpp
+#include "galay-http/kernel/websocket/WsClient.h"
+
+Coroutine wsClient() {
+    WsClient client;
+    co_await client.connect("ws://127.0.0.1:8080/ws");
+
+    // 发送消息
+    co_await client.send("Hello, WebSocket!", WebSocketOpcode::TEXT);
+
+    // 接收消息
+    WebSocketFrame frame;
+    co_await client.receive(frame);
+
+    std::cout << "Received: " << frame.payload << "\n";
+
+    co_await client.close();
+    co_return;
+}
+```
+
+## 性能数据
+
+- **HTTP 解析**: ~0.5 μs/op
+- **Chunk 编码**: 0.25 μs/op (400万 ops/sec)
+- **Chunk 解析**: 0.46 μs/op (217万 ops/sec)
+- **路由匹配**: O(1) 精确匹配，O(k) 模糊匹配
+- **零拷贝传输**: sendfile 系统调用，CPU 占用低
+
+## 依赖项
+
+- **C++20/23** 编译器 (GCC 11+, Clang 14+)
+- **CMake** 3.22+
+- **Galay**: 核心异步运行时库
+- **OpenSSL**: SSL/TLS 支持（可选）
+- **pthread**: 多线程支持
+
+## 构建和安装
+
+### 从源码构建
+
+```bash
+# 克隆仓库
+git clone https://github.com/your-org/galay-http.git
+cd galay-http
+
+# 创建构建目录
+mkdir build && cd build
+
+# 配置和编译
+cmake ..
+make -j$(nproc)
+
+# 运行测试
+ctest
+
+# 安装（可选）
+sudo make install
+```
+
+### CMake 集成
+
+在你的项目的 `CMakeLists.txt` 中:
+
+```cmake
+find_package(galay-http REQUIRED)
+
+target_link_libraries(your_target
+    PRIVATE galay-http
+)
+```
+
+## 示例程序
+
+项目包含多个示例程序，位于 `example/` 目录：
+
+- `1.echo_server.cc` - Echo 服务器示例
+- `2.echo_client.cc` - Echo 客户端示例
+- `3.websocket_server.cc` - WebSocket 服务器示例
+- `4.websocket_client.cc` - WebSocket 客户端示例
+
+运行示例：
+```bash
+cd build
+./example/1.echo_server 8080
+# 在另一个终端
+./example/2.echo_client http://127.0.0.1:8080/echo "Hello"
+```
+
+## 测试
+
+项目包含 20+ 个测试用例，覆盖所有核心功能：
+
+```bash
+cd build
+ctest --verbose
+```
+
+测试包括：
+- HTTP 解析和协议测试
+- Chunked 编码/解码测试
+- 路由系统测试
+- Range 和 ETag 测试
+- 静态文件传输模式测试
+- WebSocket 协议测试
+- 超时机制测试
+
+## 文档
+
+详细文档位于 `docs/` 目录：
+
+- `01-http_parser.md` - HTTP 解析器实现
+- `02-http_reader_writer.md` - Reader/Writer 异步 I/O
+- `03-http_chunked.md` - Chunked 编码完整指南
+- `04-websocket.md` - WebSocket 协议实现
+- `05-timeout_support.md` - 超时机制
+- `07-static_file_transfer_modes.md` - 文件传输模式详解
+- `HttpRouter.md` - 路由系统文档
+
+## 安全特性
+
+- **路径遍历防护**: 自动检测和阻止 `../` 攻击
+- **启动时验证**: mount() 在启动时验证路径，早期发现配置错误
+- **路径规范化**: 自动处理路径规范化
+- **Content-Type 自动设置**: 根据文件扩展名自动设置正确的 MIME 类型
 
 ## 许可证
 
@@ -629,4 +647,3 @@ int main() {
 ## 致谢
 
 本项目基于 [Galay](https://github.com/galay) 异步运行时框架开发。
-

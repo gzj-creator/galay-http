@@ -116,7 +116,7 @@ co_await writer.sendChunk(empty, true);
 
 ## 性能数据
 
-基于 benchmark/bench_chunked.cc 的测试结果：
+基于 benchmark/B1-Chunked.cc 的测试结果：
 
 | 操作 | 吞吐量 | 平均延迟 |
 |------|--------|----------|
@@ -285,7 +285,7 @@ static std::string toChunk(const char* data, size_t length, bool is_last = false
 - `test/test_chunk_integration.cc`: Chunk 集成测试
 - `test/test_chunked_server.cc`: Chunked 服务器示例
 - `test/test_chunked_client.cc`: Chunked 客户端示例
-- `benchmark/bench_chunked.cc`: 性能测试
+- `benchmark/B1-Chunked.cc`: 性能测试
 
 运行测试：
 ```bash
@@ -302,5 +302,5 @@ static std::string toChunk(const char* data, size_t length, bool is_last = false
 ./test/test_chunked_client
 
 # 性能测试
-./benchmark/bench_chunked
+./benchmark/B1-Chunked
 ```

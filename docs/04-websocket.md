@@ -108,7 +108,7 @@ std::unique_ptr<WsConnType> upgrade(
 - ✅ 错误处理示例
 - ✅ 配置示例
 
-### 5. **性能测试** (bench_websocket.cc)
+### 5. **性能测试** (B5-Websocket.cc)
 
 #### 最新性能测试结果
 
@@ -286,7 +286,7 @@ test/
 └── websocket_usage_example.cc # 使用示例
 
 benchmark/
-└── bench_websocket.cc         # 性能测试
+└── B5-Websocket.cc            # 性能测试
 ```
 
 ## 🚀 编译和运行
@@ -302,7 +302,7 @@ make test_websocket_frame && ./test/test_websocket_frame
 make test_websocket_conn && ./test/test_websocket_conn
 
 # 运行性能测试
-make bench_websocket && ./benchmark/bench_websocket
+make B5-Websocket && ./benchmark/B5-Websocket
 
 # 查看使用示例
 make websocket_usage_example && ./test/websocket_usage_example

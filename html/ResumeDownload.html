@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>断点续传下载测试</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 30px;
+        }
+
+        .card h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.8em;
+        }
+
+        .file-list {
+            list-style: none;
+        }
+
+        .file-item {
+            padding: 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            transition: all 0.3s ease;
+        }
+
+        .file-item:hover {
+            border-color: #667eea;
+            background: #f8f9ff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+        }
+
+        .file-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .file-info {
+            flex: 1;
+        }
+
+        .file-name {
+            font-size: 1.2em;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .file-size {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-success:hover:not(:disabled) {
+            background: #38a169;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(72, 187, 120, 0.4);
+        }
+
+        .btn-danger {
+            background: #f56565;
+            color: white;
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background: #e53e3e;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(245, 101, 101, 0.4);
+        }
+
+        .btn-warning {
+            background: #ed8936;
+            color: white;
+        }
+
+        .btn-warning:hover:not(:disabled) {
+            background: #dd6b20;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(237, 137, 54, 0.4);
+        }
+
+        .progress-container {
+            margin-top: 15px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #e0e0e0;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .status {
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        .status-info {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .status-success {
+            background: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .status-error {
+            background: #ffebee;
+            color: #d32f2f;
+        }
+
+        .status-warning {
+            background: #fff3e0;
+            color: #f57c00;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .feature {
+            padding: 20px;
+            background: #f8f9ff;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+
+        .feature h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 1.2em;
+        }
+
+        .feature p {
+            color: #666;
+            line-height: 1.6;
+        }
+
+        .log-container {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+            margin-top: 15px;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 5px;
+            border-left: 3px solid transparent;
+        }
+
+        .log-info {
+            border-left-color: #4fc3f7;
+        }
+
+        .log-success {
+            border-left-color: #66bb6a;
+        }
+
+        .log-error {
+            border-left-color: #ef5350;
+        }
+
+        .log-warning {
+            border-left-color: #ffa726;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 断点续传下载测试</h1>
+            <p>支持 Range 请求、ETag 验证、断点续传</p>
+        </div>
+
+        <div class="card">
+            <h2>📁 测试文件列表</h2>
+            <ul class="file-list">
+                <li class="file-item">
+                    <div class="file-header">
+                        <div class="file-info">
+                            <div class="file-name">📄 test_small.bin</div>
+                            <div class="file-size">大小: 1 MB</div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="btn btn-success" onclick="startDownload('test_small.bin', 1048576)">开始下载</button>
+                            <button class="btn btn-warning" onclick="pauseDownload('test_small.bin')" disabled>暂停</button>
+                            <button class="btn btn-primary" onclick="resumeDownload('test_small.bin', 1048576)" disabled>继续</button>
+                            <button class="btn btn-danger" onclick="cancelDownload('test_small.bin')">取消</button>
+                        </div>
+                    </div>
+                    <div class="progress-container" id="progress-test_small.bin" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                        <div class="progress-info">
+                            <span class="progress-text">准备下载...</span>
+                            <span class="progress-speed">0 KB/s</span>
+                        </div>
+                    </div>
+                </li>
+
+                <li class="file-item">
+                    <div class="file-header">
+                        <div class="file-info">
+                            <div class="file-name">📄 test_medium.bin</div>
+                            <div class="file-size">大小: 5 MB</div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="btn btn-success" onclick="startDownload('test_medium.bin', 5242880)">开始下载</button>
+                            <button class="btn btn-warning" onclick="pauseDownload('test_medium.bin')" disabled>暂停</button>
+                            <button class="btn btn-primary" onclick="resumeDownload('test_medium.bin', 5242880)" disabled>继续</button>
+                            <button class="btn btn-danger" onclick="cancelDownload('test_medium.bin')">取消</button>
+                        </div>
+                    </div>
+                    <div class="progress-container" id="progress-test_medium.bin" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                        <div class="progress-info">
+                            <span class="progress-text">准备下载...</span>
+                            <span class="progress-speed">0 KB/s</span>
+                        </div>
+                    </div>
+                </li>
+
+                <li class="file-item">
+                    <div class="file-header">
+                        <div class="file-info">
+                            <div class="file-name">📄 test_large.bin</div>
+                            <div class="file-size">大小: 10 MB</div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="btn btn-success" onclick="startDownload('test_large.bin', 10485760)">开始下载</button>
+                            <button class="btn btn-warning" onclick="pauseDownload('test_large.bin')" disabled>暂停</button>
+                            <button class="btn btn-primary" onclick="resumeDownload('test_large.bin', 10485760)" disabled>继续</button>
+                            <button class="btn btn-danger" onclick="cancelDownload('test_large.bin')">取消</button>
+                        </div>
+                    </div>
+                    <div class="progress-container" id="progress-test_large.bin" style="display: none;">
+                        <div class="progress-bar">
+                            <div class="progress-fill"></div>
+                        </div>
+                        <div class="progress-info">
+                            <span class="progress-text">准备下载...</span>
+                            <span class="progress-speed">0 KB/s</span>
+                        </div>
+                    </div>
+                </li>
+            </ul>
+        </div>
+
+        <div class="card">
+            <h2>📊 下载日志</h2>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry log-info">等待开始下载...</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>✨ 功能特性</h2>
+            <div class="features">
+                <div class="feature">
+                    <h3>📦 Range 请求</h3>
+                    <p>使用 HTTP Range 头请求文件的特定部分，支持分段下载。</p>
+                </div>
+                <div class="feature">
+                    <h3>🔖 ETag 验证</h3>
+                    <p>使用 If-Range 头验证文件完整性，确保断点续传时文件未被修改。</p>
+                </div>
+                <div class="feature">
+                    <h3>⏸️ 暂停/继续</h3>
+                    <p>可以随时暂停下载，稍后从断点处继续，节省时间和带宽。</p>
+                </div>
+                <div class="feature">
+                    <h3>💾 本地存储</h3>
+                    <p>下载进度保存在浏览器本地存储，刷新页面后可以继续下载。</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>📖 使用说明</h2>
+            <div class="status status-info">
+                <strong>开始下载：</strong>点击"开始下载"按钮开始下载文件。
+            </div>
+            <div class="status status-warning">
+                <strong>暂停下载：</strong>点击"暂停"按钮暂停当前下载，进度会被保存。
+            </div>
+            <div class="status status-success">
+                <strong>继续下载：</strong>点击"继续"按钮从上次暂停的位置继续下载。
+            </div>
+            <div class="status status-error">
+                <strong>取消下载：</strong>点击"取消"按钮取消下载并清除进度。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 服务器地址配置
+        const SERVER_URL = 'http://localhost:8080';
+
+        // 下载状态管理
+        const downloads = {};
+
+        // 添加日志
+        function addLog(message, type = 'info') {
+            const logContainer = document.getElementById('logContainer');
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry log-${type}`;
+            const timestamp = new Date().toLocaleTimeString();
+            logEntry.textContent = `[${timestamp}] ${message}`;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        // 更新按钮状态
+        function updateButtons(filename, state) {
+            const item = document.querySelector(`[onclick*="${filename}"]`).closest('.file-item');
+            const buttons = item.querySelectorAll('button');
+
+            buttons[0].disabled = state === 'downloading'; // 开始
+            buttons[1].disabled = state !== 'downloading'; // 暂停
+            buttons[2].disabled = state !== 'paused';      // 继续
+            buttons[3].disabled = state === 'downloading'; // 取消
+        }
+
+        // 格式化文件大小
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+            return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+        }
+
+        // 格式化速度
+        function formatSpeed(bytesPerSecond) {
+            if (bytesPerSecond < 1024) return bytesPerSecond.toFixed(0) + ' B/s';
+            if (bytesPerSecond < 1024 * 1024) return (bytesPerSecond / 1024).toFixed(2) + ' KB/s';
+            return (bytesPerSecond / 1024 / 1024).toFixed(2) + ' MB/s';
+        }
+
+        // 开始下载
+        async function startDownload(filename, totalSize) {
+            if (downloads[filename]?.active) {
+                addLog(`${filename} 已在下载中`, 'warning');
+                return;
+            }
+
+            addLog(`开始下载 ${filename}`, 'info');
+
+            const progressContainer = document.getElementById(`progress-${filename}`);
+            progressContainer.style.display = 'block';
+
+            updateButtons(filename, 'downloading');
+
+            downloads[filename] = {
+                active: true,
+                paused: false,
+                downloadedSize: 0,
+                totalSize: totalSize,
+                chunks: [],
+                etag: null,
+                startTime: Date.now()
+            };
+
+            await performDownload(filename, totalSize);
+        }
+
+        // 执行下载
+        async function performDownload(filename, totalSize) {
+            const download = downloads[filename];
+            const progressContainer = document.getElementById(`progress-${filename}`);
+            const progressFill = progressContainer.querySelector('.progress-fill');
+            const progressText = progressContainer.querySelector('.progress-text');
+            const progressSpeed = progressContainer.querySelector('.progress-speed');
+
+            const chunkSize = 256 * 1024; // 256KB per chunk
+
+            try {
+                while (download.downloadedSize < totalSize && download.active && !download.paused) {
+                    const start = download.downloadedSize;
+                    const end = Math.min(start + chunkSize - 1, totalSize - 1);
+
+                    const headers = {
+                        'Range': `bytes=${start}-${end}`
+                    };
+
+                    if (download.etag) {
+                        headers['If-Range'] = download.etag;
+                    }
+
+                    addLog(`请求 ${filename}: bytes=${start}-${end}`, 'info');
+
+                    const response = await fetch(`${SERVER_URL}/files/${filename}`, { headers });
+
+                    if (response.status === 206) {
+                        const chunk = await response.arrayBuffer();
+                        download.chunks.push(chunk);
+                        download.downloadedSize += chunk.byteLength;
+
+                        if (!download.etag) {
+                            download.etag = response.headers.get('ETag');
+                            addLog(`获取 ETag: ${download.etag}`, 'success');
+                        }
+
+                        // 更新进度
+                        const progress = (download.downloadedSize / totalSize * 100).toFixed(1);
+                        progressFill.style.width = progress + '%';
+
+                        // 计算速度
+                        const elapsed = (Date.now() - download.startTime) / 1000;
+                        const speed = download.downloadedSize / elapsed;
+
+                        progressText.textContent = `${progress}% (${formatSize(download.downloadedSize)} / ${formatSize(totalSize)})`;
+                        progressSpeed.textContent = formatSpeed(speed);
+
+                        addLog(`下载进度: ${progress}% - ${formatSize(download.downloadedSize)}`, 'success');
+
+                    } else if (response.status === 200) {
+                        addLog(`文件已改变，重新下载 ${filename}`, 'warning');
+                        download.downloadedSize = 0;
+                        download.chunks = [];
+                        download.etag = null;
+                        const blob = await response.blob();
+                        downloadBlob(blob, filename);
+                        break;
+                    } else {
+                        throw new Error(`下载失败: ${response.status}`);
+                    }
+
+                    // 模拟网络延迟
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+
+                if (download.downloadedSize >= totalSize && download.active) {
+                    // 下载完成
+                    const blob = new Blob(download.chunks);
+                    downloadBlob(blob, filename);
+                    addLog(`${filename} 下载完成！`, 'success');
+
+                    setTimeout(() => {
+                        progressContainer.style.display = 'none';
+                        progressFill.style.width = '0%';
+                        delete downloads[filename];
+                        updateButtons(filename, 'idle');
+                    }, 2000);
+                }
+
+            } catch (error) {
+                addLog(`下载失败: ${error.message}`, 'error');
+                updateButtons(filename, 'idle');
+            }
+        }
+
+        // 暂停下载
+        function pauseDownload(filename) {
+            if (downloads[filename]) {
+                downloads[filename].paused = true;
+                addLog(`暂停下载 ${filename}`, 'warning');
+                updateButtons(filename, 'paused');
+            }
+        }
+
+        // 继续下载
+        async function resumeDownload(filename, totalSize) {
+            if (downloads[filename]) {
+                downloads[filename].paused = false;
+                addLog(`继续下载 ${filename} (从 ${formatSize(downloads[filename].downloadedSize)} 处)`, 'info');
+                updateButtons(filename, 'downloading');
+                await performDownload(filename, totalSize);
+            }
+        }
+
+        // 取消下载
+        function cancelDownload(filename) {
+            if (downloads[filename]) {
+                downloads[filename].active = false;
+                delete downloads[filename];
+                addLog(`取消下载 ${filename}`, 'error');
+
+                const progressContainer = document.getElementById(`progress-${filename}`);
+                progressContainer.style.display = 'none';
+                const progressFill = progressContainer.querySelector('.progress-fill');
+                progressFill.style.width = '0%';
+
+                updateButtons(filename, 'idle');
+            }
+        }
+
+        // 下载 Blob
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+    </script>
+</body>
+</html>

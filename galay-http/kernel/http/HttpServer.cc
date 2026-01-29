@@ -32,38 +32,58 @@ void HttpServer::start(HttpRouter&& router)
 
     // 创建一个处理器，使用内置的 Router 进行路由匹配
     m_handler = [this](HttpConn conn) -> Coroutine {
-        // 读取请求
-        auto reader = conn.getReader();
-        HttpRequest request;
-        auto read_result = co_await reader.getRequest(request);
+        bool keep_alive = true;
 
-        if (!read_result) {
-            HTTP_LOG_ERROR("failed to read request: {}", read_result.error().message());
-            co_return;
+        while (keep_alive) {
+            // 读取请求
+            auto reader = conn.getReader();
+            HttpRequest request;
+            auto read_result = co_await reader.getRequest(request);
+
+            if (!read_result) {
+                HTTP_LOG_ERROR("failed to read request: {}", read_result.error().message());
+                break;
+            }
+
+            // 检查是否为 Keep-Alive 连接
+            keep_alive = request.header().isKeepAlive() && !request.header().isConnectionClose();
+
+            // 路由匹配
+            auto match = m_router->findHandler(request.header().method(), request.header().uri());
+
+            if (!match.handler) {
+                // 404 Not Found
+                HTTP_LOG_WARN("no handler found for {} {}",
+                             static_cast<int>(request.header().method()),
+                             request.header().uri());
+
+                HttpResponse response;
+                response.header().version() = HttpVersion::HttpVersion_1_1;
+                response.header().code() = HttpStatusCode::OK_200;
+                response.header().headerPairs().addHeaderPair("Content-Type", "text/plain");
+                response.setBodyStr("404 Not Found");
+
+                auto writer = conn.getWriter();
+                co_await writer.sendResponse(response);
+
+                // 404 响应后根据 keep_alive 决定是否继续
+                if (!keep_alive) {
+                    break;
+                }
+                continue;
+            }
+
+            // 调用处理器
+            co_await (*match.handler)(conn, std::move(request)).wait();
+
+            // 如果不是 Keep-Alive，退出循环
+            if (!keep_alive) {
+                break;
+            }
         }
 
-        // 路由匹配
-        auto match = m_router->findHandler(request.header().method(), request.header().uri());
-
-        if (!match.handler) {
-            // 404 Not Found
-            HTTP_LOG_WARN("no handler found for {} {}",
-                         static_cast<int>(request.header().method()),
-                         request.header().uri());
-
-            HttpResponse response;
-            response.header().version() = HttpVersion::HttpVersion_1_1;
-            response.header().code() = HttpStatusCode::OK_200;
-            response.header().headerPairs().addHeaderPair("Content-Type", "text/plain");
-            response.setBodyStr("404 Not Found");
-
-            auto writer = conn.getWriter();
-            co_await writer.sendResponse(response);
-            co_return;
-        }
-
-        // 调用处理器
-        co_await (*match.handler)(conn, std::move(request)).wait();
+        // 关闭连接（支持多次调用，内部有保护）
+        co_await conn.close();
         co_return;
     };
 
