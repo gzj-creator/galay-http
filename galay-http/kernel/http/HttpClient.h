@@ -399,12 +399,14 @@ private:
 using HttpClientAwaitable = HttpClientAwaitableImpl<TcpSocket>;
 using HttpClient = HttpClientImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-socket/async/SslSocket.h"
-using HttpsClientAwaitable = HttpClientAwaitableImpl<galay::async::SslSocket>;
-using HttpsClient = HttpClientImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::http
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::http {
+using HttpsClientAwaitable = HttpClientAwaitableImpl<galay::ssl::SslSocket>;
+using HttpsClient = HttpClientImpl<galay::ssl::SslSocket>;
+} // namespace galay::http
+#endif
 
 #endif // GALAY_HTTP_CLIENT_H

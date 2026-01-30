@@ -284,13 +284,15 @@ using GetFrameAwaitable = GetFrameAwaitableImpl<TcpSocket>;
 using GetMessageAwaitable = GetMessageAwaitableImpl<TcpSocket>;
 using WsReader = WsReaderImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-socket/async/SslSocket.h"
-using GetFrameAwaitableSsl = GetFrameAwaitableImpl<galay::async::SslSocket>;
-using GetMessageAwaitableSsl = GetMessageAwaitableImpl<galay::async::SslSocket>;
-using WssReader = WsReaderImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::websocket
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::websocket {
+using GetFrameAwaitableSsl = GetFrameAwaitableImpl<galay::ssl::SslSocket>;
+using GetMessageAwaitableSsl = GetMessageAwaitableImpl<galay::ssl::SslSocket>;
+using WssReader = WsReaderImpl<galay::ssl::SslSocket>;
+} // namespace galay::websocket
+#endif
 
 #endif // GALAY_WS_READER_H

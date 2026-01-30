@@ -339,15 +339,16 @@ using GetResponseAwaitable = GetResponseAwaitableImpl<TcpSocket>;
 using GetChunkAwaitable = GetChunkAwaitableImpl<TcpSocket>;
 using HttpReader = HttpReaderImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-// 类型别名 - HTTPS (SslSocket)
-#include "galay-socket/async/SslSocket.h"
-using GetRequestAwaitableSsl = GetRequestAwaitableImpl<galay::async::SslSocket>;
-using GetResponseAwaitableSsl = GetResponseAwaitableImpl<galay::async::SslSocket>;
-using GetChunkAwaitableSsl = GetChunkAwaitableImpl<galay::async::SslSocket>;
-using HttpsReader = HttpReaderImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::http
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::http {
+using GetRequestAwaitableSsl = GetRequestAwaitableImpl<galay::ssl::SslSocket>;
+using GetResponseAwaitableSsl = GetResponseAwaitableImpl<galay::ssl::SslSocket>;
+using GetChunkAwaitableSsl = GetChunkAwaitableImpl<galay::ssl::SslSocket>;
+using HttpsReader = HttpReaderImpl<galay::ssl::SslSocket>;
+} // namespace galay::http
+#endif
 
 #endif // GALAY_HTTP_READER_H

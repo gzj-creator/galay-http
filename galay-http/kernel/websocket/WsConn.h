@@ -88,11 +88,13 @@ private:
 // 类型别名 - WebSocket over TCP
 using WsConn = WsConnImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-socket/async/SslSocket.h"
-using WssConn = WsConnImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::websocket
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::websocket {
+using WssConn = WsConnImpl<galay::ssl::SslSocket>;
+} // namespace galay::websocket
+#endif
 
 #endif // GALAY_WS_CONN_H

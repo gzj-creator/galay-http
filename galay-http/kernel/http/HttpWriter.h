@@ -188,13 +188,14 @@ private:
 using SendResponseAwaitable = SendResponseAwaitableImpl<TcpSocket>;
 using HttpWriter = HttpWriterImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-// 类型别名 - HTTPS (SslSocket)
-#include "galay-socket/async/SslSocket.h"
-using SendResponseAwaitableSsl = SendResponseAwaitableImpl<galay::async::SslSocket>;
-using HttpsWriter = HttpWriterImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::http
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::http {
+using SendResponseAwaitableSsl = SendResponseAwaitableImpl<galay::ssl::SslSocket>;
+using HttpsWriter = HttpWriterImpl<galay::ssl::SslSocket>;
+} // namespace galay::http
+#endif
 
 #endif // GALAY_HTTP_WRITER_H

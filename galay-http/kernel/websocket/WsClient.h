@@ -405,12 +405,14 @@ private:
 using WsClientUpgradeAwaitable = WsClientUpgradeAwaitableImpl<TcpSocket>;
 using WsClient = WsClientImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-socket/async/SslSocket.h"
-using WssClientUpgradeAwaitable = WsClientUpgradeAwaitableImpl<galay::async::SslSocket>;
-using WssClient = WsClientImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::websocket
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::websocket {
+using WssClientUpgradeAwaitable = WsClientUpgradeAwaitableImpl<galay::ssl::SslSocket>;
+using WssClient = WsClientImpl<galay::ssl::SslSocket>;
+} // namespace galay::websocket
+#endif
 
 #endif // GALAY_WS_CLIENT_H

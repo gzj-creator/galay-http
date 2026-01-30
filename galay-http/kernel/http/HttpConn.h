@@ -107,12 +107,13 @@ private:
 // 类型别名 - HTTP (TcpSocket)
 using HttpConn = HttpConnImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-// 类型别名 - HTTPS (SslSocket)
-#include "galay-socket/async/SslSocket.h"
-using HttpsConn = HttpConnImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::http
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::http {
+using HttpsConn = HttpConnImpl<galay::ssl::SslSocket>;
+} // namespace galay::http
+#endif
 
 #endif // GALAY_HTTP_CONN_H

@@ -268,7 +268,12 @@ protected:
     }
 
     virtual std::optional<SocketType> createClientSocket(GHandle fd) {
-        return SocketType(fd);
+        if constexpr (std::is_same_v<SocketType, TcpSocket>) {
+            return SocketType(fd);
+        } else {
+            // SslSocket 需要在派生类中实现
+            return std::nullopt;
+        }
     }
 
 protected:
@@ -285,30 +290,46 @@ using HttpConnHandler = HttpConnHandlerImpl<TcpSocket>;
 using HttpServer = HttpServerImpl<TcpSocket>;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-socket/async/SslSocket.h"
-#include "galay-http/ssl/SslConfig.h"
+#include "galay-ssl/SslSocket.h"
+#include "galay-ssl/SslContext.h"
 
-using HttpsConnHandler = HttpConnHandlerImpl<galay::async::SslSocket>;
+/**
+ * @brief HTTPS 服务器配置
+ */
+struct HttpsServerConfig
+{
+    std::string host = "0.0.0.0";
+    uint16_t port = 443;
+    int backlog = 128;
+    size_t io_scheduler_count = 0;
+    size_t compute_scheduler_count = 0;
+    HttpReaderSetting reader_setting;
+    HttpWriterSetting writer_setting;
+
+    // SSL 配置
+    std::string cert_path;          // 证书文件路径 (PEM 格式)
+    std::string key_path;           // 私钥文件路径 (PEM 格式)
+    std::string ca_path;            // CA 证书路径（可选）
+    bool verify_peer = false;       // 是否验证客户端证书
+    int verify_depth = 4;           // 证书链验证深度
+};
+
+using HttpsConnHandler = HttpConnHandlerImpl<galay::ssl::SslSocket>;
 
 /**
  * @brief HTTPS服务器类
  */
-class HttpsServer : public HttpServerImpl<galay::async::SslSocket>
+class HttpsServer : public HttpServerImpl<galay::ssl::SslSocket>
 {
 public:
-    explicit HttpsServer(const galay::ssl::HttpsServerConfig& config)
-        : HttpServerImpl<galay::async::SslSocket>(convertConfig(config))
-        , m_ssl_config(config.ssl)
-        , m_ssl_ctx(nullptr)
+    explicit HttpsServer(const HttpsServerConfig& config)
+        : HttpServerImpl<galay::ssl::SslSocket>(convertConfig(config))
+        , m_https_config(config)
+        , m_ssl_ctx(galay::ssl::SslMethod::TLS_Server)
     {
     }
 
-    ~HttpsServer() override {
-        if (m_ssl_ctx) {
-            SSL_CTX_free(static_cast<SSL_CTX*>(m_ssl_ctx));
-            m_ssl_ctx = nullptr;
-        }
-    }
+    ~HttpsServer() override = default;
 
 protected:
     bool startInternal() override {
@@ -318,120 +339,150 @@ protected:
             return false;
         }
 
-        return HttpServerImpl<galay::async::SslSocket>::startInternal();
+        return HttpServerImpl<galay::ssl::SslSocket>::startInternal();
     }
 
-    std::optional<galay::async::SslSocket> createClientSocket(int fd) override {
-        if (!m_ssl_ctx) {
+    std::optional<galay::ssl::SslSocket> createClientSocket(GHandle fd) override {
+        if (!m_ssl_ctx.isValid()) {
             HTTP_LOG_ERROR("SSL context not initialized");
             return std::nullopt;
         }
 
-        // 创建 SSL 对象
-        SSL* ssl = SSL_new(static_cast<SSL_CTX*>(m_ssl_ctx));
-        if (!ssl) {
-            HTTP_LOG_ERROR("Failed to create SSL object");
-            return std::nullopt;
+        return galay::ssl::SslSocket(&m_ssl_ctx, fd);
+    }
+
+    Coroutine serverLoop() override {
+        while (m_running.load()) {
+            Host client_host;
+            auto accept_result = co_await m_listener->accept(&client_host);
+
+            if (!accept_result) {
+                if (m_running.load()) {
+                    HTTP_LOG_ERROR("accept failed: {}", accept_result.error().message());
+                }
+                continue;
+            }
+
+            HTTP_LOG_INFO("HTTPS client connected from {}:{}", client_host.ip(), client_host.port());
+
+            auto* scheduler = m_runtime.getNextIOScheduler();
+            if (!scheduler) {
+                HTTP_LOG_ERROR("no IO scheduler available");
+                continue;
+            }
+
+            auto client_socket_opt = createClientSocket(accept_result.value());
+            if (!client_socket_opt) {
+                HTTP_LOG_ERROR("failed to create client SSL socket");
+                continue;
+            }
+
+            galay::ssl::SslSocket client_socket = std::move(*client_socket_opt);
+            auto nonblock_result = client_socket.option().handleNonBlock();
+            if (!nonblock_result) {
+                HTTP_LOG_ERROR("failed to set client socket non-block: {}", nonblock_result.error().message());
+                continue;
+            }
+
+            // 在新协程中执行 SSL 握手和处理
+            scheduler->spawn(handleSslConnection(std::move(client_socket)));
         }
 
-        // 设置 fd
-        SSL_set_fd(ssl, fd);
-
-        // 执行 SSL 握手（服务器端）
-        // 注意：实际的握手应该在异步环境中进行
-        // 这里简化处理，实际实现需要使用 SslSocket 的异步握手
-
-        return galay::async::SslSocket(fd, ssl);
+        co_return;
     }
 
 private:
-    static HttpServerConfig convertConfig(const galay::ssl::HttpsServerConfig& config) {
+    Coroutine handleSslConnection(galay::ssl::SslSocket socket) {
+        // 执行 SSL 握手
+        while (!socket.isHandshakeCompleted()) {
+            auto handshake_result = co_await socket.handshake();
+            if (!handshake_result) {
+                auto& err = handshake_result.error();
+                // WantRead/WantWrite 表示需要继续握手
+                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
+                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
+                    continue;
+                }
+                // 其他错误则退出
+                HTTP_LOG_ERROR("SSL handshake failed: {}", err.message());
+                co_await socket.close();
+                co_return;
+            }
+            break;  // 握手成功
+        }
+
+        HTTP_LOG_DEBUG("SSL handshake completed");
+
+        // 创建连接并调用处理器
+        HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket), m_config.reader_setting, m_config.writer_setting);
+        co_await m_handler(std::move(conn)).wait();
+    }
+
+    static HttpServerConfig convertConfig(const HttpsServerConfig& config) {
         HttpServerConfig base_config;
         base_config.host = config.host;
         base_config.port = config.port;
         base_config.backlog = config.backlog;
         base_config.io_scheduler_count = config.io_scheduler_count;
         base_config.compute_scheduler_count = config.compute_scheduler_count;
+        base_config.reader_setting = config.reader_setting;
+        base_config.writer_setting = config.writer_setting;
         return base_config;
     }
 
     bool initSslContext() {
-        // 创建 SSL 上下文
-        const SSL_METHOD* method = TLS_server_method();
-        m_ssl_ctx = SSL_CTX_new(method);
-        if (!m_ssl_ctx) {
-            HTTP_LOG_ERROR("Failed to create SSL_CTX");
+        if (!m_ssl_ctx.isValid()) {
+            HTTP_LOG_ERROR("Failed to create SSL context");
             return false;
         }
 
-        SSL_CTX* ctx = static_cast<SSL_CTX*>(m_ssl_ctx);
-
-        // 设置选项
-        SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3);
-
-        if (m_ssl_config.prefer_server_ciphers) {
-            SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
-        }
-
         // 加载证书
-        if (!m_ssl_config.cert_path.empty()) {
-            if (SSL_CTX_use_certificate_file(ctx, m_ssl_config.cert_path.c_str(), SSL_FILETYPE_PEM) <= 0) {
-                HTTP_LOG_ERROR("Failed to load certificate: {}", m_ssl_config.cert_path);
+        if (!m_https_config.cert_path.empty()) {
+            auto result = m_ssl_ctx.loadCertificate(m_https_config.cert_path);
+            if (!result) {
+                HTTP_LOG_ERROR("Failed to load certificate: {} - {}",
+                              m_https_config.cert_path, result.error().message());
                 return false;
             }
-            HTTP_LOG_INFO("Loaded certificate: {}", m_ssl_config.cert_path);
+            HTTP_LOG_INFO("Loaded certificate: {}", m_https_config.cert_path);
         }
 
         // 加载私钥
-        if (!m_ssl_config.key_path.empty()) {
-            if (SSL_CTX_use_PrivateKey_file(ctx, m_ssl_config.key_path.c_str(), SSL_FILETYPE_PEM) <= 0) {
-                HTTP_LOG_ERROR("Failed to load private key: {}", m_ssl_config.key_path);
+        if (!m_https_config.key_path.empty()) {
+            auto result = m_ssl_ctx.loadPrivateKey(m_https_config.key_path);
+            if (!result) {
+                HTTP_LOG_ERROR("Failed to load private key: {} - {}",
+                              m_https_config.key_path, result.error().message());
                 return false;
             }
-            HTTP_LOG_INFO("Loaded private key: {}", m_ssl_config.key_path);
-
-            // 验证私钥与证书匹配
-            if (!SSL_CTX_check_private_key(ctx)) {
-                HTTP_LOG_ERROR("Private key does not match certificate");
-                return false;
-            }
+            HTTP_LOG_INFO("Loaded private key: {}", m_https_config.key_path);
         }
 
-        // 加载 CA 证书（用于验证客户端证书）
-        if (!m_ssl_config.ca_path.empty() || !m_ssl_config.ca_dir.empty()) {
-            const char* ca_file = m_ssl_config.ca_path.empty() ? nullptr : m_ssl_config.ca_path.c_str();
-            const char* ca_dir = m_ssl_config.ca_dir.empty() ? nullptr : m_ssl_config.ca_dir.c_str();
-
-            if (SSL_CTX_load_verify_locations(ctx, ca_file, ca_dir) <= 0) {
-                HTTP_LOG_ERROR("Failed to load CA certificates");
+        // 加载 CA 证书
+        if (!m_https_config.ca_path.empty()) {
+            auto result = m_ssl_ctx.loadCACertificate(m_https_config.ca_path);
+            if (!result) {
+                HTTP_LOG_ERROR("Failed to load CA certificate: {}", m_https_config.ca_path);
                 return false;
             }
-            HTTP_LOG_INFO("Loaded CA certificates");
+            HTTP_LOG_INFO("Loaded CA certificate: {}", m_https_config.ca_path);
         }
 
         // 设置验证模式
-        if (m_ssl_config.verify_peer) {
-            SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, nullptr);
-            SSL_CTX_set_verify_depth(ctx, m_ssl_config.verify_depth);
+        if (m_https_config.verify_peer) {
+            m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::Peer);
+            m_ssl_ctx.setVerifyDepth(m_https_config.verify_depth);
             HTTP_LOG_INFO("Client certificate verification enabled");
         } else {
-            SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, nullptr);
-        }
-
-        // 设置加密套件
-        if (!m_ssl_config.ciphers.empty()) {
-            if (SSL_CTX_set_cipher_list(ctx, m_ssl_config.ciphers.c_str()) <= 0) {
-                HTTP_LOG_ERROR("Failed to set cipher list: {}", m_ssl_config.ciphers);
-                return false;
-            }
+            m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);
         }
 
         HTTP_LOG_INFO("SSL context initialized successfully");
         return true;
     }
 
-    galay::ssl::SslConfig m_ssl_config;
-    void* m_ssl_ctx;  // SSL_CTX*
+    HttpsServerConfig m_https_config;
+    galay::ssl::SslContext m_ssl_ctx;
 };
 #endif
 

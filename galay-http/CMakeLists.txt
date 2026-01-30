@@ -54,10 +54,10 @@ target_link_libraries(${PROJECT_NAME}
     PUBLIC pthread
 )
 
-# 如果启用 SSL，链接 galay-socket 库
+# 如果启用 SSL，链接 galay-ssl 库
 if(GALAY_HTTP_ENABLE_SSL)
     target_link_libraries(${PROJECT_NAME}
-        PUBLIC galay-socket::galay-socket
+        PUBLIC galay-ssl::galay-ssl
     )
 endif()
 

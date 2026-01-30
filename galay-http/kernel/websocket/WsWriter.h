@@ -179,12 +179,14 @@ private:
 using SendFrameAwaitable = SendFrameAwaitableImpl<TcpSocket>;
 using WsWriter = WsWriterImpl<TcpSocket>;
 
-#ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-socket/async/SslSocket.h"
-using SendFrameAwaitableSsl = SendFrameAwaitableImpl<galay::async::SslSocket>;
-using WssWriter = WsWriterImpl<galay::async::SslSocket>;
-#endif
-
 } // namespace galay::websocket
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+namespace galay::websocket {
+using SendFrameAwaitableSsl = SendFrameAwaitableImpl<galay::ssl::SslSocket>;
+using WssWriter = WsWriterImpl<galay::ssl::SslSocket>;
+} // namespace galay::websocket
+#endif
 
 #endif // GALAY_WS_WRITER_H
