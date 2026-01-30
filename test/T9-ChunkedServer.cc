@@ -177,11 +177,16 @@ Coroutine handleClient(TcpSocket client, Host clientHost) {
         response.setHeader(std::move(respHeader));
         response.setBodyStr(std::move(body));
 
-        auto sendResult = co_await writer.sendResponse(response);
-        if (sendResult) {
-            LogInfo("Response sent: complete");
-        } else {
-            LogError("Failed to send response: {}", sendResult.error().message());
+        while (true) {
+            auto sendResult = co_await writer.sendResponse(response);
+            if (!sendResult) {
+                LogError("Failed to send response: {}", sendResult.error().message());
+                break;
+            }
+            if (sendResult.value()) {
+                LogInfo("Response sent: complete");
+                break;
+            }
         }
     }
 
@@ -384,11 +389,16 @@ Coroutine chunkedTestServer() {
             response.setHeader(std::move(respHeader));
             response.setBodyStr(std::move(body));
 
-            auto sendResult = co_await writer.sendResponse(response);
-            if (sendResult) {
-                LogInfo("Response sent: {} bytes", sendResult.value());
-            } else {
-                LogError("Failed to send response: {}", sendResult.error().message());
+            while (true) {
+                auto sendResult = co_await writer.sendResponse(response);
+                if (!sendResult) {
+                    LogError("Failed to send response: {}", sendResult.error().message());
+                    break;
+                }
+                if (sendResult.value()) {
+                    LogInfo("Response sent: complete");
+                    break;
+                }
             }
         }
 

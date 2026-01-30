@@ -18,20 +18,19 @@ using namespace galay::kernel;
 using namespace galay::async;
 
 // 前向声明
-class WsWriter;
+template<typename SocketType>
+class WsWriterImpl;
 
 /**
- * @brief WebSocket帧发送等待体
- *
- * @note 支持超时设置：
- * @code
- * auto result = co_await writer.sendText("hello").timeout(std::chrono::seconds(5));
- * @endcode
+ * @brief WebSocket帧发送等待体模板类
  */
-class SendFrameAwaitable : public galay::kernel::TimeoutSupport<SendFrameAwaitable>
+template<typename SocketType>
+class SendFrameAwaitableImpl : public galay::kernel::TimeoutSupport<SendFrameAwaitableImpl<SocketType>>
 {
 public:
-    SendFrameAwaitable(WsWriter& writer, SendAwaitable&& send_awaitable)
+    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
+
+    SendFrameAwaitableImpl(WsWriterImpl<SocketType>& writer, SendAwaitableType&& send_awaitable)
         : m_writer(writer)
         , m_send_awaitable(std::move(send_awaitable))
     {
@@ -45,38 +44,41 @@ public:
         return m_send_awaitable.await_suspend(handle);
     }
 
-    std::expected<size_t, WsError> await_resume();
+    std::expected<size_t, WsError> await_resume() {
+        auto send_result = m_send_awaitable.await_resume();
+        if (!send_result) {
+            return std::unexpected(WsError(kWsSendError, send_result.error().message()));
+        }
+
+        size_t bytes_written = send_result.value();
+        m_writer.updateRemaining(bytes_written);
+
+        return bytes_written;
+    }
 
 private:
-    WsWriter& m_writer;
-    SendAwaitable m_send_awaitable;
+    WsWriterImpl<SocketType>& m_writer;
+    SendAwaitableType m_send_awaitable;
 
 public:
-    // TimeoutSupport 需要访问此成员来设置超时错误
     std::expected<size_t, galay::kernel::IOError> m_result;
 };
 
 /**
- * @brief WebSocket写入器
- * @details 提供异步写入WebSocket帧的接口
+ * @brief WebSocket写入器模板类
  */
-class WsWriter
+template<typename SocketType>
+class WsWriterImpl
 {
 public:
-    WsWriter(const WsWriterSetting& setting, TcpSocket& socket)
+    WsWriterImpl(const WsWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(socket)
         , m_remaining_bytes(0)
     {
     }
 
-    /**
-     * @brief 发送文本消息
-     * @param text 文本内容
-     * @param fin 是否是最后一个分片（默认true）
-     * @return SendFrameAwaitable
-     */
-    SendFrameAwaitable sendText(const std::string& text, bool fin = true) {
+    SendFrameAwaitableImpl<SocketType> sendText(const std::string& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createTextFrame(text, fin);
             m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
@@ -86,16 +88,10 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送二进制消息
-     * @param data 二进制数据
-     * @param fin 是否是最后一个分片（默认true）
-     * @return SendFrameAwaitable
-     */
-    SendFrameAwaitable sendBinary(const std::string& data, bool fin = true) {
+    SendFrameAwaitableImpl<SocketType> sendBinary(const std::string& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createBinaryFrame(data, fin);
             m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
@@ -105,15 +101,10 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送Ping帧
-     * @param data Ping数据（可选）
-     * @return SendFrameAwaitable
-     */
-    SendFrameAwaitable sendPing(const std::string& data = "") {
+    SendFrameAwaitableImpl<SocketType> sendPing(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPingFrame(data);
             m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
@@ -123,15 +114,10 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送Pong帧
-     * @param data Pong数据（通常是Ping的数据）
-     * @return SendFrameAwaitable
-     */
-    SendFrameAwaitable sendPong(const std::string& data = "") {
+    SendFrameAwaitableImpl<SocketType> sendPong(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPongFrame(data);
             m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
@@ -141,16 +127,10 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送Close帧
-     * @param code 关闭状态码
-     * @param reason 关闭原因
-     * @return SendFrameAwaitable
-     */
-    SendFrameAwaitable sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "") {
+    SendFrameAwaitableImpl<SocketType> sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createCloseFrame(code, reason);
             m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
@@ -160,15 +140,10 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送自定义帧
-     * @param frame WebSocket帧
-     * @return SendFrameAwaitable
-     */
-    SendFrameAwaitable sendFrame(const WsFrame& frame) {
+    SendFrameAwaitableImpl<SocketType> sendFrame(const WsFrame& frame) {
         if (m_remaining_bytes == 0) {
             m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
@@ -177,12 +152,9 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 更新剩余发送字节数
-     */
     void updateRemaining(size_t bytes_sent) {
         if (bytes_sent >= m_remaining_bytes) {
             m_remaining_bytes = 0;
@@ -192,19 +164,26 @@ public:
         }
     }
 
-    /**
-     * @brief 获取剩余发送字节数
-     */
     size_t getRemainingBytes() const {
         return m_remaining_bytes;
     }
 
 private:
     const WsWriterSetting& m_setting;
-    TcpSocket& m_socket;
+    SocketType& m_socket;
     std::string m_buffer;
     size_t m_remaining_bytes;
 };
+
+// 类型别名 - WebSocket over TCP
+using SendFrameAwaitable = SendFrameAwaitableImpl<TcpSocket>;
+using WsWriter = WsWriterImpl<TcpSocket>;
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-socket/async/SslSocket.h"
+using SendFrameAwaitableSsl = SendFrameAwaitableImpl<galay::async::SslSocket>;
+using WssWriter = WsWriterImpl<galay::async::SslSocket>;
+#endif
 
 } // namespace galay::websocket
 

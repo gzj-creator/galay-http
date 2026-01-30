@@ -26,13 +26,16 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
         .text(requestBody.empty() ? "Echo: (empty body)" : "Echo: " + requestBody)
         .build();
 
-    // 发送响应
+    // 发送响应（循环发送直到完成）
     auto writer = conn.getWriter();
     using namespace std::chrono_literals;
-    auto result = co_await writer.sendResponse(response).timeout(10ms);
-
-    if (!result) {
-        std::cerr << "Failed to send response: " << result.error().message() << "\n";
+    while (true) {
+        auto result = co_await writer.sendResponse(response).timeout(10ms);
+        if (!result) {
+            std::cerr << "Failed to send response: " << result.error().message() << "\n";
+            break;
+        }
+        if (result.value()) break;
     }
 
     co_await conn.close();
@@ -62,7 +65,10 @@ Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
         .build();
 
     auto writer = conn.getWriter();
-    co_await writer.sendResponse(response);
+    while (true) {
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result || send_result.value()) break;
+    }
     co_await conn.close();
     co_return;
 }

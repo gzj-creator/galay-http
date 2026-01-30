@@ -3,6 +3,7 @@
 
 #include "HttpWriter.h"
 #include "HttpReader.h"
+#include "HttpLog.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Timeout.hpp"
@@ -12,9 +13,11 @@
 #include <optional>
 #include <coroutine>
 #include <map>
+#include <regex>
 
 namespace galay::websocket {
-    class WsConn;  // 前向声明
+    template<typename SocketType>
+    class WsConnImpl;
 }
 
 namespace galay::http
@@ -27,98 +30,173 @@ using namespace galay::kernel;
  * @brief HTTP URL 解析结果
  */
 struct HttpUrl {
-    std::string scheme;      // http 或 https
-    std::string host;        // 主机名或IP
-    int port;                // 端口号
-    std::string path;        // 路径（包含查询参数）
-    bool is_secure;          // 是否是 HTTPS
+    std::string scheme;
+    std::string host;
+    int port;
+    std::string path;
+    bool is_secure;
 
-    /**
-     * @brief 解析 HTTP URL
-     * @param url 完整的 HTTP URL（如 http://example.com:8080/path）
-     * @return std::optional<HttpUrl> 解析成功返回 HttpUrl，失败返回 nullopt
-     */
-    static std::optional<HttpUrl> parse(const std::string& url);
+    static std::optional<HttpUrl> parse(const std::string& url) {
+        std::regex url_regex(R"(^(http|https)://([^:/]+)(?::(\d+))?(/.*)?$)", std::regex::icase);
+        std::smatch matches;
+
+        if (!std::regex_match(url, matches, url_regex)) {
+            HTTP_LOG_ERROR("Invalid HTTP URL format: {}", url);
+            return std::nullopt;
+        }
+
+        HttpUrl result;
+        result.scheme = matches[1].str();
+        result.host = matches[2].str();
+        result.is_secure = (result.scheme == "https" || result.scheme == "HTTPS");
+
+        if (matches[3].matched) {
+            try {
+                result.port = std::stoi(matches[3].str());
+            } catch (...) {
+                HTTP_LOG_ERROR("Invalid port number in URL: {}", url);
+                return std::nullopt;
+            }
+        } else {
+            result.port = result.is_secure ? 443 : 80;
+        }
+
+        if (matches[4].matched) {
+            result.path = matches[4].str();
+        } else {
+            result.path = "/";
+        }
+
+        return result;
+    }
 };
 
 // 前向声明
-class HttpClient;
+template<typename SocketType>
+class HttpClientImpl;
 
 /**
- * @brief HTTP客户端等待体
- * @details 自动处理完整的请求发送和响应接收流程
- *          返回 std::expected<std::optional<HttpResponse>, HttpError>
- *          - HttpResponse: 请求和响应全部完成
- *          - std::nullopt: 需要继续调用（数据未完全发送或接收）
- *          - HttpError: 发生错误
- *
- * @note 支持超时设置：
- * @code
- * auto result = co_await client.get("/api/data").timeout(std::chrono::seconds(5));
- * @endcode
+ * @brief HTTP客户端等待体模板类
  */
-class HttpClientAwaitable : public galay::kernel::TimeoutSupport<HttpClientAwaitable>
+template<typename SocketType>
+class HttpClientAwaitableImpl : public galay::kernel::TimeoutSupport<HttpClientAwaitableImpl<SocketType>>
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param client HttpClient引用
-     * @param request HttpRequest右值引用
-     */
-    HttpClientAwaitable(HttpClient& client, HttpRequest&& request);
+    HttpClientAwaitableImpl(HttpClientImpl<SocketType>& client, HttpRequest&& request)
+        : m_client(client)
+        , m_request(std::move(request))
+        , m_response()
+        , m_state(State::Invalid)
+        , m_send_awaitable(std::nullopt)
+        , m_recv_awaitable(std::nullopt)
+    {
+    }
 
     bool await_ready() const noexcept {
         return false;
     }
 
-    bool await_suspend(std::coroutine_handle<> handle);
+    bool await_suspend(std::coroutine_handle<> handle) {
+        if (m_state == State::Invalid) {
+            m_state = State::Sending;
+            m_send_awaitable.emplace(m_client.getWriter().sendRequest(m_request));
+            return m_send_awaitable->await_suspend(handle);
+        } else if (m_state == State::Sending) {
+            m_send_awaitable.emplace(m_client.getWriter().sendRequest(m_request));
+            return m_send_awaitable->await_suspend(handle);
+        } else {
+            m_recv_awaitable.emplace(m_client.getReader().getResponse(m_response));
+            return m_recv_awaitable->await_suspend(handle);
+        }
+    }
 
-    std::expected<std::optional<HttpResponse>, HttpError> await_resume();
+    std::expected<std::optional<HttpResponse>, HttpError> await_resume() {
+        if (!m_result.has_value()) {
+            auto& io_error = m_result.error();
+            HTTP_LOG_DEBUG("request failed with IO error: {}", io_error.message());
 
-    /**
-     * @brief 检查状态是否为 Invalid
-     * @return true 如果状态为 Invalid
-     */
+            HttpErrorCode http_error_code;
+            if (io_error.code() == kTimeout) {
+                http_error_code = kRequestTimeOut;
+            } else if (io_error.code() == kDisconnectError) {
+                http_error_code = kConnectionClose;
+            } else {
+                http_error_code = kTcpRecvError;
+            }
+
+            reset();
+            return std::unexpected(HttpError(http_error_code, io_error.message()));
+        }
+
+        if (m_state == State::Sending) {
+            auto sendResult = m_send_awaitable->await_resume();
+
+            if (!sendResult) {
+                HTTP_LOG_DEBUG("send request failed: {}", sendResult.error().message());
+                reset();
+                return std::unexpected(sendResult.error());
+            }
+
+            if (!sendResult.value()) {
+                return std::nullopt;
+            }
+
+            m_state = State::Receiving;
+            m_send_awaitable.reset();
+            return std::nullopt;
+        } else if (m_state == State::Receiving) {
+            auto recvResult = m_recv_awaitable->await_resume();
+
+            if (!recvResult) {
+                HTTP_LOG_DEBUG("receive response failed: {}", recvResult.error().message());
+                reset();
+                return std::unexpected(recvResult.error());
+            }
+
+            if (!recvResult.value()) {
+                return std::nullopt;
+            }
+
+            auto response = std::move(m_response);
+            reset();
+            return response;
+        } else {
+            HTTP_LOG_ERROR("await_resume called in Invalid state");
+            reset();
+            return std::unexpected(HttpError(kInternalError, "HttpClientAwaitable in Invalid state"));
+        }
+    }
+
     bool isInvalid() const {
         return m_state == State::Invalid;
     }
 
-    /**
-     * @brief 重置状态并清理资源
-     * @details 在错误发生时调用，确保资源正确清理
-     */
     void reset() {
         m_state = State::Invalid;
         m_send_awaitable.reset();
         m_recv_awaitable.reset();
-        m_response = HttpResponse();  // 清空响应
-        m_result = std::nullopt;  // 重置为 nullopt
+        m_response = HttpResponse();
+        m_result = std::nullopt;
     }
 
 private:
     enum class State {
-        Invalid,           // 无效状态，可以重新创建
-        Sending,           // 正在发送请求
-        Receiving          // 正在接收响应
+        Invalid,
+        Sending,
+        Receiving
     };
 
-    HttpClient& m_client;
+    HttpClientImpl<SocketType>& m_client;
     HttpRequest m_request;
     HttpResponse m_response;
     State m_state;
 
-    // 持有底层的 awaitable 对象
-    std::optional<SendResponseAwaitable> m_send_awaitable;
-    std::optional<GetResponseAwaitable> m_recv_awaitable;
+    std::optional<SendResponseAwaitableImpl<SocketType>> m_send_awaitable;
+    std::optional<GetResponseAwaitableImpl<SocketType>> m_recv_awaitable;
 
 public:
-    // TimeoutSupport 需要访问此成员来设置超时错误
-    // 注意：这里使用 IOError 类型，因为 TimeoutSupport 会设置 IOError
     std::expected<std::optional<HttpResponse>, galay::kernel::IOError> m_result;
 };
-
-using namespace galay::async;
-using namespace galay::kernel;
 
 /**
  * @brief HTTP客户端配置
@@ -131,219 +209,201 @@ struct HttpClientConfig
 };
 
 /**
- * @brief HTTP客户端类
- * @details 提供异步HTTP客户端功能，采用两段式接口：sendRequest + getResponse
+ * @brief HTTP客户端模板类
  */
-class HttpClient
+template<typename SocketType>
+class HttpClientImpl
 {
 public:
-    /**
-     * @brief 默认构造函数
-     * @param config 客户端配置
-     */
-    HttpClient(const HttpClientConfig& config = HttpClientConfig());
+    HttpClientImpl(const HttpClientConfig& config = HttpClientConfig())
+        : m_socket(nullptr)
+        , m_ring_buffer(nullptr)
+        , m_config(config)
+        , m_writer(nullptr)
+        , m_reader(nullptr)
+    {
+    }
 
-    /**
-     * @brief 构造函数（从已有socket）
-     * @param socket TcpSocket右值引用
-     * @param config 客户端配置
-     */
-    HttpClient(TcpSocket&& socket, const HttpClientConfig& config = HttpClientConfig());
+    HttpClientImpl(SocketType&& socket, const HttpClientConfig& config = HttpClientConfig())
+        : m_socket(std::make_unique<SocketType>(std::move(socket)))
+        , m_ring_buffer(std::make_unique<RingBuffer>(config.ring_buffer_size))
+        , m_config(config)
+        , m_writer(std::make_unique<HttpWriterImpl<SocketType>>(config.writer_setting, *m_socket))
+        , m_reader(std::make_unique<HttpReaderImpl<SocketType>>(*m_ring_buffer, config.reader_setting, *m_socket))
+    {
+    }
 
-    /**
-     * @brief 析构函数
-     */
-    ~HttpClient() = default;
+    ~HttpClientImpl() = default;
 
-    // 禁用拷贝
-    HttpClient(const HttpClient&) = delete;
-    HttpClient& operator=(const HttpClient&) = delete;
+    HttpClientImpl(const HttpClientImpl&) = delete;
+    HttpClientImpl& operator=(const HttpClientImpl&) = delete;
+    HttpClientImpl(HttpClientImpl&&) = delete;
+    HttpClientImpl& operator=(HttpClientImpl&&) = delete;
 
-    // 禁用移动
-    HttpClient(HttpClient&&) = delete;
-    HttpClient& operator=(HttpClient&&) = delete;
+    auto connect(const std::string& url) {
+        auto parsed_url = HttpUrl::parse(url);
+        if (!parsed_url) {
+            throw std::runtime_error("Invalid HTTP URL: " + url);
+        }
 
-    /**
-     * @brief 连接到 HTTP 服务器
-     * @param url 完整的 HTTP URL（如 http://example.com:8080/path）
-     * @return ConnectAwaitable 连接等待体
-     * @throws std::runtime_error 如果 URL 格式无效或不支持 HTTPS
-     */
-    ConnectAwaitable connect(const std::string& url);
+        m_url = parsed_url.value();
 
-    /**
-     * @brief 发送GET请求
-     * @param uri 请求URI
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& get(const std::string& uri,
-                             const std::map<std::string, std::string>& headers = {});
+        if constexpr (std::is_same_v<SocketType, TcpSocket>) {
+            if (m_url.is_secure) {
+                throw std::runtime_error("HTTPS requires HttpsClient");
+            }
+        }
 
-    /**
-     * @brief 发送POST请求
-     * @param uri 请求URI
-     * @param body 请求体
-     * @param content_type Content-Type，默认为 application/x-www-form-urlencoded
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& post(const std::string& uri,
-                              const std::string& body,
-                              const std::string& content_type = "application/x-www-form-urlencoded",
-                              const std::map<std::string, std::string>& headers = {});
+        HTTP_LOG_INFO("Connecting to server at {}:{}{}", m_url.host, m_url.port, m_url.path);
 
-    /**
-     * @brief 发送PUT请求
-     * @param uri 请求URI
-     * @param body 请求体
-     * @param content_type Content-Type
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& put(const std::string& uri,
-                             const std::string& body,
-                             const std::string& content_type = "application/json",
-                             const std::map<std::string, std::string>& headers = {});
+        m_socket = std::make_unique<SocketType>(IPType::IPV4);
+        m_ring_buffer = std::make_unique<RingBuffer>(m_config.ring_buffer_size);
 
-    /**
-     * @brief 发送DELETE请求
-     * @param uri 请求URI
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& del(const std::string& uri,
-                             const std::map<std::string, std::string>& headers = {});
+        auto nonblock_result = m_socket->option().handleNonBlock();
+        if (!nonblock_result) {
+            throw std::runtime_error("Failed to set non-blocking: " + nonblock_result.error().message());
+        }
 
-    /**
-     * @brief 发送HEAD请求
-     * @param uri 请求URI
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& head(const std::string& uri,
-                              const std::map<std::string, std::string>& headers = {});
+        m_writer = std::make_unique<HttpWriterImpl<SocketType>>(m_config.writer_setting, *m_socket);
+        m_reader = std::make_unique<HttpReaderImpl<SocketType>>(*m_ring_buffer, m_config.reader_setting, *m_socket);
 
-    /**
-     * @brief 发送OPTIONS请求
-     * @param uri 请求URI
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& options(const std::string& uri,
-                                 const std::map<std::string, std::string>& headers = {});
+        Host server_host(IPType::IPV4, m_url.host, m_url.port);
+        return m_socket->connect(server_host);
+    }
 
-    /**
-     * @brief 发送PATCH请求
-     * @param uri 请求URI
-     * @param body 请求体
-     * @param content_type Content-Type，默认为 application/json
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& patch(const std::string& uri,
-                               const std::string& body,
-                               const std::string& content_type = "application/json",
-                               const std::map<std::string, std::string>& headers = {});
+    HttpClientAwaitableImpl<SocketType>& get(const std::string& uri,
+                                              const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::GET, uri, "", "", headers);
+    }
 
-    /**
-     * @brief 发送TRACE请求
-     * @param uri 请求URI
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     */
-    HttpClientAwaitable& trace(const std::string& uri,
-                               const std::map<std::string, std::string>& headers = {});
+    HttpClientAwaitableImpl<SocketType>& post(const std::string& uri,
+                                               const std::string& body,
+                                               const std::string& content_type = "application/x-www-form-urlencoded",
+                                               const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::POST, uri, body, content_type, headers);
+    }
 
-    /**
-     * @brief 发送 HTTP CONNECT 请求（用于建立隧道）
-     * @param target_uri 目标主机（格式：host:port，如 "example.com:443"）
-     * @param headers 可选的额外请求头
-     * @return HttpClientAwaitable& 客户端等待体引用
-     * @note CONNECT 方法通常用于 HTTP 代理场景，建立到目标服务器的隧道
-     */
-    HttpClientAwaitable& tunnel(const std::string& target_host,
-                                const std::map<std::string, std::string>& headers = {});
+    HttpClientAwaitableImpl<SocketType>& put(const std::string& uri,
+                                              const std::string& body,
+                                              const std::string& content_type = "application/json",
+                                              const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::PUT, uri, body, content_type, headers);
+    }
 
-    /**
-     * @brief 发送HTTP请求
-     * @param request HttpRequest引用
-     * @return SendResponseAwaitable 发送等待体
-     */
-    SendResponseAwaitable sendRequest(HttpRequest& request) {
+    HttpClientAwaitableImpl<SocketType>& del(const std::string& uri,
+                                              const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::DELETE, uri, "", "", headers);
+    }
+
+    HttpClientAwaitableImpl<SocketType>& head(const std::string& uri,
+                                               const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::HEAD, uri, "", "", headers);
+    }
+
+    HttpClientAwaitableImpl<SocketType>& options(const std::string& uri,
+                                                  const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::OPTIONS, uri, "", "", headers);
+    }
+
+    HttpClientAwaitableImpl<SocketType>& patch(const std::string& uri,
+                                                const std::string& body,
+                                                const std::string& content_type = "application/json",
+                                                const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::PATCH, uri, body, content_type, headers);
+    }
+
+    HttpClientAwaitableImpl<SocketType>& trace(const std::string& uri,
+                                                const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::TRACE, uri, "", "", headers);
+    }
+
+    HttpClientAwaitableImpl<SocketType>& tunnel(const std::string& target_host,
+                                                 const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::CONNECT, target_host, "", "", headers);
+    }
+
+    SendResponseAwaitableImpl<SocketType> sendRequest(HttpRequest& request) {
         return m_writer->sendRequest(request);
     }
 
-    /**
-     * @brief 接收HTTP响应
-     * @param response HttpResponse引用
-     * @return GetResponseAwaitable 接收等待体
-     */
-    GetResponseAwaitable getResponse(HttpResponse& response) {
+    GetResponseAwaitableImpl<SocketType> getResponse(HttpResponse& response) {
         return m_reader->getResponse(response);
     }
 
-    /**
-     * @brief 发送chunk数据
-     * @param data 要发送的数据
-     * @param is_last 是否是最后一个chunk
-     * @return SendResponseAwaitable
-     */
-    SendResponseAwaitable sendChunk(const std::string& data, bool is_last = false) {
+    SendResponseAwaitableImpl<SocketType> sendChunk(const std::string& data, bool is_last = false) {
         return m_writer->sendChunk(data, is_last);
     }
 
-    /**
-     * @brief 获取HttpReader
-     * @return HttpReader引用
-     */
-    HttpReader& getReader() {
+    HttpReaderImpl<SocketType>& getReader() {
         return *m_reader;
     }
 
-    /**
-     * @brief 获取HttpWriter
-     * @return HttpWriter引用
-     */
-    HttpWriter& getWriter() {
+    HttpWriterImpl<SocketType>& getWriter() {
         return *m_writer;
     }
 
-    /**
-     * @brief 关闭连接
-     * @return CloseAwaitable 关闭等待体
-     */
-    CloseAwaitable close() {
+    auto close() {
         return m_socket->close();
     }
 
-    /**
-     * @brief 获取底层socket
-     * @return TcpSocket引用
-     */
-    TcpSocket& socket() { return *m_socket; }
-
-    /**
-     * @brief 获取RingBuffer
-     * @return RingBuffer引用
-     */
+    SocketType& socket() { return *m_socket; }
     RingBuffer& ringBuffer() { return *m_ring_buffer; }
-
-    /**
-     * @brief 获取解析后的 URL
-     * @return HttpUrl 引用
-     */
     const HttpUrl& url() const { return m_url; }
 
 private:
-    std::unique_ptr<TcpSocket> m_socket;
+    HttpClientAwaitableImpl<SocketType>& createRequest(HttpMethod method,
+                                                        const std::string& uri,
+                                                        const std::string& body,
+                                                        const std::string& content_type,
+                                                        const std::map<std::string, std::string>& headers) {
+        if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
+            HttpRequest request;
+            HttpRequestHeader header;
+
+            header.method() = method;
+            header.uri() = uri;
+            header.version() = HttpVersion::HttpVersion_1_1;
+
+            if (!body.empty() && !content_type.empty()) {
+                header.headerPairs().addHeaderPair("Content-Type", content_type);
+                header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+            }
+
+            for (const auto& [key, value] : headers) {
+                header.headerPairs().addHeaderPair(key, value);
+            }
+
+            request.setHeader(std::move(header));
+
+            if (!body.empty()) {
+                std::string body_copy = body;
+                request.setBodyStr(std::move(body_copy));
+            }
+
+            m_awaitable.emplace(*this, std::move(request));
+        }
+
+        return *m_awaitable;
+    }
+
+    std::unique_ptr<SocketType> m_socket;
     std::unique_ptr<RingBuffer> m_ring_buffer;
     HttpClientConfig m_config;
-    std::unique_ptr<HttpWriter> m_writer;
-    std::unique_ptr<HttpReader> m_reader;
-    std::optional<HttpClientAwaitable> m_awaitable;  // 存储 awaitable 对象
-    HttpUrl m_url;  // 存储解析后的 URL
+    std::unique_ptr<HttpWriterImpl<SocketType>> m_writer;
+    std::unique_ptr<HttpReaderImpl<SocketType>> m_reader;
+    std::optional<HttpClientAwaitableImpl<SocketType>> m_awaitable;
+    HttpUrl m_url;
 };
+
+// 类型别名 - HTTP (TcpSocket)
+using HttpClientAwaitable = HttpClientAwaitableImpl<TcpSocket>;
+using HttpClient = HttpClientImpl<TcpSocket>;
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-socket/async/SslSocket.h"
+using HttpsClientAwaitable = HttpClientAwaitableImpl<galay::async::SslSocket>;
+using HttpsClient = HttpClientImpl<galay::async::SslSocket>;
+#endif
 
 } // namespace galay::http
 

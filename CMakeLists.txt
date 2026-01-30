@@ -3,12 +3,15 @@ project(galay-http VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_PREFIX_PATH "/usr/local")
 
-# 设置默认构建类型为 Debug（如果用户没有指定）
+# 设置默认构建类型为 Release（如果用户没有指定）
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
 endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+# 包含编译选项（SSL 支持等）
+include(cmake/options.cmake)
 
 include_directories(${PROJECT_SOURCE_DIR})
 

@@ -2,9 +2,11 @@
 #define GALAY_HTTP_READER_H
 
 #include "HttpReaderSetting.h"
+#include "HttpLog.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpError.h"
+#include "galay-http/protoc/http/HttpChunk.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Timeout.hpp"
@@ -18,29 +20,24 @@ namespace galay::http
 using namespace galay::kernel;
 using namespace galay::async;
 
+// 前向声明
+template<typename SocketType>
+class HttpReaderImpl;
+
 /**
  * @brief HTTP请求读取等待体
- * @details 用于异步读取HTTP请求，内部使用ReadvAwaitable进行实际的IO操作
- *
- * @note 支持超时设置：
- * @code
- * auto result = co_await reader.getRequest(request).timeout(std::chrono::seconds(5));
- * @endcode
+ * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
  */
-class GetRequestAwaitable : public galay::kernel::TimeoutSupport<GetRequestAwaitable>
+template<typename SocketType>
+class GetRequestAwaitableImpl : public galay::kernel::TimeoutSupport<GetRequestAwaitableImpl<SocketType>>
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param ring_buffer RingBuffer引用，用于缓冲接收的数据
-     * @param setting HttpReaderSetting引用，包含读取配置
-     * @param request HttpRequest引用，用于存储解析结果
-     * @param readv_awaitable ReadvAwaitable右值引用，用于实际的IO操作
-     */
-    GetRequestAwaitable(RingBuffer& ring_buffer,
-                    const HttpReaderSetting& setting,
-                    HttpRequest& request,
-                    ReadvAwaitable&& readv_awaitable)
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
+    GetRequestAwaitableImpl(RingBuffer& ring_buffer,
+                           const HttpReaderSetting& setting,
+                           HttpRequest& request,
+                           ReadvAwaitableType&& readv_awaitable)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_request(request)
@@ -49,67 +46,92 @@ public:
     {
     }
 
-    /**
-     * @brief 检查是否准备就绪
-     * @return 始终返回false，需要挂起协程
-     */
     bool await_ready() const noexcept {
         return false;
     }
 
-    /**
-     * @brief 挂起协程
-     * @param handle 协程句柄
-     * @return 返回ReadvAwaitable的await_suspend结果
-     */
     auto await_suspend(std::coroutine_handle<> handle) {
         return m_readv_awaitable.await_suspend(handle);
     }
 
-    /**
-     * @brief 恢复协程时调用
-     * @return std::expected<bool, HttpError>
-     *         - true: HttpRequest完整解析
-     *         - false: 不完整，需要继续调用
-     *         - HttpError: 解析错误
-     */
-    std::expected<bool, HttpError> await_resume();
+    std::expected<bool, HttpError> await_resume() {
+        auto readv_result = m_readv_awaitable.await_resume();
+        if (!readv_result) {
+            if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
+                HTTP_LOG_DEBUG("connection closed by peer (disconnect error)");
+                return std::unexpected(HttpError(kConnectionClose));
+            }
+            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            return std::unexpected(HttpError(kRecvError, readv_result.error().message()));
+        }
+
+        ssize_t bytes_read = readv_result.value();
+
+        if (bytes_read == 0) {
+            HTTP_LOG_DEBUG("connection closed by peer");
+            return std::unexpected(HttpError(kConnectionClose));
+        }
+
+        m_ring_buffer.produce(bytes_read);
+        m_total_received += bytes_read;
+
+        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        if (read_iovecs.empty()) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_request.fromIOVec(read_iovecs);
+
+        if (consumed > 0) {
+            m_ring_buffer.consume(consumed);
+        }
+
+        if (error_code == kHeaderInComplete || error_code == kIncomplete) {
+            if (m_total_received >= m_setting.getMaxHeaderSize() && !m_request.isComplete()) {
+                HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
+                            m_total_received, m_setting.getMaxHeaderSize());
+                return std::unexpected(HttpError(kHeaderTooLarge));
+            }
+            return false;
+        }
+
+        if (error_code != kNoError) {
+            HTTP_LOG_DEBUG("parse error: {}", static_cast<int>(error_code));
+            return std::unexpected(HttpError(error_code));
+        }
+
+        if (m_request.isComplete()) {
+            return true;
+        }
+
+        return false;
+    }
 
 private:
     RingBuffer& m_ring_buffer;
     const HttpReaderSetting& m_setting;
     HttpRequest& m_request;
-    ReadvAwaitable m_readv_awaitable;
+    ReadvAwaitableType m_readv_awaitable;
     size_t m_total_received;
 
 public:
-    // TimeoutSupport 需要访问此成员来设置超时错误
     std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
  * @brief HTTP响应读取等待体
- * @details 用于异步读取HTTP响应，内部使用ReadvAwaitable进行实际的IO操作
- *
- * @note 支持超时设置：
- * @code
- * auto result = co_await reader.getResponse(response).timeout(std::chrono::seconds(5));
- * @endcode
+ * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
  */
-class GetResponseAwaitable : public galay::kernel::TimeoutSupport<GetResponseAwaitable>
+template<typename SocketType>
+class GetResponseAwaitableImpl : public galay::kernel::TimeoutSupport<GetResponseAwaitableImpl<SocketType>>
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param ring_buffer RingBuffer引用，用于缓冲接收的数据
-     * @param setting HttpReaderSetting引用，包含读取配置
-     * @param response HttpResponse引用，用于存储解析结果
-     * @param readv_awaitable ReadvAwaitable右值引用，用于实际的IO操作
-     */
-    GetResponseAwaitable(RingBuffer& ring_buffer,
-                     const HttpReaderSetting& setting,
-                     HttpResponse& response,
-                     ReadvAwaitable&& readv_awaitable)
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
+    GetResponseAwaitableImpl(RingBuffer& ring_buffer,
+                            const HttpReaderSetting& setting,
+                            HttpResponse& response,
+                            ReadvAwaitableType&& readv_awaitable)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_response(response)
@@ -118,68 +140,92 @@ public:
     {
     }
 
-    /**
-     * @brief 检查是否准备就绪
-     * @return 始终返回false，需要挂起协程
-     */
     bool await_ready() const noexcept {
         return false;
     }
 
-    /**
-     * @brief 挂起协程
-     * @param handle 协程句柄
-     * @return 返回ReadvAwaitable的await_suspend结果
-     */
     auto await_suspend(std::coroutine_handle<> handle) {
         return m_readv_awaitable.await_suspend(handle);
     }
 
-    /**
-     * @brief 恢复协程时调用
-     * @return std::expected<bool, HttpError>
-     *         - true: HttpResponse完整解析
-     *         - false: 不完整，需要继续调用
-     *         - HttpError: 解析错误
-     */
-    std::expected<bool, HttpError> await_resume();
+    std::expected<bool, HttpError> await_resume() {
+        auto readv_result = m_readv_awaitable.await_resume();
+        if (!readv_result) {
+            if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
+                HTTP_LOG_DEBUG("connection closed by peer (disconnect error)");
+                return std::unexpected(HttpError(kConnectionClose));
+            }
+            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            return std::unexpected(HttpError(kRecvError, readv_result.error().message()));
+        }
+
+        ssize_t bytes_read = readv_result.value();
+
+        if (bytes_read == 0) {
+            HTTP_LOG_DEBUG("connection closed by peer");
+            return std::unexpected(HttpError(kConnectionClose));
+        }
+
+        m_ring_buffer.produce(bytes_read);
+        m_total_received += bytes_read;
+
+        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        if (read_iovecs.empty()) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_response.fromIOVec(read_iovecs);
+
+        if (consumed > 0) {
+            m_ring_buffer.consume(consumed);
+        }
+
+        if (error_code == kHeaderInComplete || error_code == kIncomplete) {
+            if (m_total_received >= m_setting.getMaxHeaderSize() && !m_response.isComplete()) {
+                HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
+                            m_total_received, m_setting.getMaxHeaderSize());
+                return std::unexpected(HttpError(kHeaderTooLarge));
+            }
+            return false;
+        }
+
+        if (error_code != kNoError) {
+            HTTP_LOG_DEBUG("parse error: {}", static_cast<int>(error_code));
+            return std::unexpected(HttpError(error_code));
+        }
+
+        if (m_response.isComplete()) {
+            return true;
+        }
+
+        return false;
+    }
 
 private:
     RingBuffer& m_ring_buffer;
     const HttpReaderSetting& m_setting;
     HttpResponse& m_response;
-    ReadvAwaitable m_readv_awaitable;
+    ReadvAwaitableType m_readv_awaitable;
     size_t m_total_received;
 
 public:
-    // TimeoutSupport 需要访问此成员来设置超时错误
     std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
  * @brief HTTP Chunk读取等待体
- * @details 用于异步读取HTTP chunked编码的数据块
- *          每次调用从RingBuffer消费一个或多个完整的chunk
- *
- * @note 支持超时设置：
- * @code
- * auto result = co_await reader.getChunk(chunk_data).timeout(std::chrono::seconds(5));
- * @endcode
+ * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
  */
-class GetChunkAwaitable : public galay::kernel::TimeoutSupport<GetChunkAwaitable>
+template<typename SocketType>
+class GetChunkAwaitableImpl : public galay::kernel::TimeoutSupport<GetChunkAwaitableImpl<SocketType>>
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param ring_buffer RingBuffer引用，用于缓冲接收的数据
-     * @param setting HttpReaderSetting引用，包含读取配置
-     * @param chunk_data 用户传入的string引用，用于接收chunk数据
-     * @param readv_awaitable ReadvAwaitable右值引用，用于实际的IO操作
-     */
-    GetChunkAwaitable(RingBuffer& ring_buffer,
-                  const HttpReaderSetting& setting,
-                  std::string& chunk_data,
-                  ReadvAwaitable&& readv_awaitable)
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
+    GetChunkAwaitableImpl(RingBuffer& ring_buffer,
+                         const HttpReaderSetting& setting,
+                         std::string& chunk_data,
+                         ReadvAwaitableType&& readv_awaitable)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_chunk_data(chunk_data)
@@ -187,100 +233,120 @@ public:
     {
     }
 
-    /**
-     * @brief 检查是否准备就绪
-     * @return 始终返回false，需要挂起协程
-     */
     bool await_ready() const noexcept {
         return false;
     }
 
-    /**
-     * @brief 挂起协程
-     * @param handle 协程句柄
-     * @return 返回ReadvAwaitable的await_suspend结果
-     */
     auto await_suspend(std::coroutine_handle<> handle) {
         return m_readv_awaitable.await_suspend(handle);
     }
 
-    /**
-     * @brief 恢复协程时调用
-     * @return std::expected<bool, HttpError>
-     *         - true: 读取到最后一个chunk (size=0)，所有chunk读取完成
-     *         - false: 读取到chunk数据但不是最后一个，需要继续调用
-     *         - HttpError: 解析错误
-     */
-    std::expected<bool, HttpError> await_resume();
+    std::expected<bool, HttpError> await_resume() {
+        auto readv_result = m_readv_awaitable.await_resume();
+        if (!readv_result) {
+            if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
+                HTTP_LOG_DEBUG("connection closed by peer (disconnect error)");
+                return std::unexpected(HttpError(kConnectionClose));
+            }
+            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            return std::unexpected(HttpError(kRecvError, readv_result.error().message()));
+        }
+
+        ssize_t bytes_read = readv_result.value();
+
+        if (bytes_read == 0) {
+            HTTP_LOG_DEBUG("connection closed by peer");
+            return std::unexpected(HttpError(kConnectionClose));
+        }
+
+        m_ring_buffer.produce(bytes_read);
+
+        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        if (read_iovecs.empty()) {
+            return false;
+        }
+
+        auto result = Chunk::fromIOVec(read_iovecs, m_chunk_data);
+
+        if (!result) {
+            auto& error = result.error();
+            if (error.code() == kIncomplete) {
+                return false;
+            }
+            HTTP_LOG_DEBUG("chunk parse error: {}", error.message());
+            return std::unexpected(error);
+        }
+
+        auto [is_last, consumed] = result.value();
+        m_ring_buffer.consume(consumed);
+
+        if (is_last) {
+            return true;
+        }
+
+        return false;
+    }
 
 private:
     RingBuffer& m_ring_buffer;
     const HttpReaderSetting& m_setting;
     std::string& m_chunk_data;
-    ReadvAwaitable m_readv_awaitable;
+    ReadvAwaitableType m_readv_awaitable;
 
 public:
-    // TimeoutSupport 需要访问此成员来设置超时错误
     std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
- * @brief HTTP读取器
- * @details 提供异步读取HTTP请求的接口
+ * @brief HTTP读取器模板类
+ * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
  */
-class HttpReader
+template<typename SocketType>
+class HttpReaderImpl
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param ring_buffer RingBuffer引用，用于缓冲接收的数据
-     * @param setting HttpReaderSetting引用，包含读取配置
-     * @param socket TcpSocket引用，用于IO操作
-     */
-    HttpReader(RingBuffer& ring_buffer, const HttpReaderSetting& setting, TcpSocket& socket)
+    HttpReaderImpl(RingBuffer& ring_buffer, const HttpReaderSetting& setting, SocketType& socket)
         : m_ring_buffer(ring_buffer)
         , m_setting(setting)
         , m_socket(socket)
     {
     }
 
-    /**
-     * @brief 获取一个完整的HTTP请求
-     * @param request HttpRequest引用，用于存储解析结果
-     * @return GetRequestAwaitable 请求等待体
-     */
-    GetRequestAwaitable getRequest(HttpRequest& request) {
-        return GetRequestAwaitable(m_ring_buffer, m_setting, request,
+    GetRequestAwaitableImpl<SocketType> getRequest(HttpRequest& request) {
+        return GetRequestAwaitableImpl<SocketType>(m_ring_buffer, m_setting, request,
                               m_socket.readv(m_ring_buffer.getWriteIovecs()));
     }
 
-    /**
-     * @brief 获取一个完整的HTTP响应
-     * @param response HttpResponse引用，用于存储解析结果
-     * @return GetResponseAwaitable 响应等待体
-     */
-    GetResponseAwaitable getResponse(HttpResponse& response) {
-        return GetResponseAwaitable(m_ring_buffer, m_setting, response,
+    GetResponseAwaitableImpl<SocketType> getResponse(HttpResponse& response) {
+        return GetResponseAwaitableImpl<SocketType>(m_ring_buffer, m_setting, response,
                                 m_socket.readv(m_ring_buffer.getWriteIovecs()));
     }
 
-    /**
-     * @brief 获取HTTP chunked编码的数据块
-     * @param chunk_data 用户传入的string引用，用于接收chunk数据
-     * @return GetChunkAwaitable chunk等待体
-     * @details 每次调用从RingBuffer消费一个或多个完整的chunk
-     *          返回true表示读取到最后一个chunk，返回false表示需要继续调用
-     */
-    GetChunkAwaitable getChunk(std::string& chunk_data) {
-        return GetChunkAwaitable(m_ring_buffer, m_setting, chunk_data,
+    GetChunkAwaitableImpl<SocketType> getChunk(std::string& chunk_data) {
+        return GetChunkAwaitableImpl<SocketType>(m_ring_buffer, m_setting, chunk_data,
                              m_socket.readv(m_ring_buffer.getWriteIovecs()));
     }
 
 private:
     RingBuffer& m_ring_buffer;
     const HttpReaderSetting& m_setting;
-    TcpSocket& m_socket;
+    SocketType& m_socket;
 };
+
+// 类型别名 - HTTP (TcpSocket)
+using GetRequestAwaitable = GetRequestAwaitableImpl<TcpSocket>;
+using GetResponseAwaitable = GetResponseAwaitableImpl<TcpSocket>;
+using GetChunkAwaitable = GetChunkAwaitableImpl<TcpSocket>;
+using HttpReader = HttpReaderImpl<TcpSocket>;
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+// 类型别名 - HTTPS (SslSocket)
+#include "galay-socket/async/SslSocket.h"
+using GetRequestAwaitableSsl = GetRequestAwaitableImpl<galay::async::SslSocket>;
+using GetResponseAwaitableSsl = GetResponseAwaitableImpl<galay::async::SslSocket>;
+using GetChunkAwaitableSsl = GetChunkAwaitableImpl<galay::async::SslSocket>;
+using HttpsReader = HttpReaderImpl<galay::async::SslSocket>;
+#endif
 
 } // namespace galay::http
 

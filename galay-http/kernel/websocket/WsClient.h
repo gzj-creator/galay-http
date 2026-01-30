@@ -4,15 +4,21 @@
 #include "WsConn.h"
 #include "WsReader.h"
 #include "WsWriter.h"
+#include "WsUpgrade.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/kernel/http/HttpLog.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
+#include <galay-utils/algorithm/Base64.hpp>
 #include <string>
 #include <optional>
 #include <expected>
 #include <memory>
+#include <regex>
+#include <random>
 
 namespace galay::websocket
 {
@@ -25,55 +31,231 @@ using namespace galay::http;
  * @brief WebSocket URL 解析结果
  */
 struct WsUrl {
-    std::string scheme;   // "ws" 或 "wss"
-    std::string host;     // 主机名或 IP
-    int port;             // 端口号
-    std::string path;     // 路径（包含查询参数）
-    bool is_secure;       // 是否是 wss://
+    std::string scheme;
+    std::string host;
+    int port;
+    std::string path;
+    bool is_secure;
 
-    /**
-     * @brief 解析 WebSocket URL
-     * @param url WebSocket URL 字符串（如 "ws://127.0.0.1:8080/ws"）
-     * @return std::optional<WsUrl> 解析成功返回 WsUrl，失败返回 nullopt
-     */
-    static std::optional<WsUrl> parse(const std::string& url);
+    static std::optional<WsUrl> parse(const std::string& url) {
+        std::regex url_regex(R"(^(ws|wss)://([^:/]+)(?::(\d+))?(/.*)?$)", std::regex::icase);
+        std::smatch matches;
+
+        if (!std::regex_match(url, matches, url_regex)) {
+            HTTP_LOG_ERROR("Invalid WebSocket URL format: {}", url);
+            return std::nullopt;
+        }
+
+        WsUrl result;
+        result.scheme = matches[1].str();
+        result.host = matches[2].str();
+        result.is_secure = (result.scheme == "wss" || result.scheme == "WSS");
+
+        if (matches[3].matched) {
+            try {
+                result.port = std::stoi(matches[3].str());
+            } catch (...) {
+                HTTP_LOG_ERROR("Invalid port number in URL: {}", url);
+                return std::nullopt;
+            }
+        } else {
+            result.port = result.is_secure ? 443 : 80;
+        }
+
+        if (matches[4].matched) {
+            result.path = matches[4].str();
+        } else {
+            result.path = "/";
+        }
+
+        return result;
+    }
 };
 
+// 辅助函数
+inline std::string generateWebSocketKey() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 255);
+
+    unsigned char random_bytes[16];
+    for (int i = 0; i < 16; i++) {
+        random_bytes[i] = static_cast<unsigned char>(dis(gen));
+    }
+
+    return galay::utils::Base64Util::Base64Encode(random_bytes, 16);
+}
+
 // 前向声明
-class WsClient;
+template<typename SocketType>
+class WsClientImpl;
 
 /**
- * @brief WebSocket 客户端升级等待体
- * @details 参考 HttpClientAwaitable 的设计，使用状态机管理升级流程
+ * @brief WebSocket 客户端升级等待体模板类
  */
-class WsClientUpgradeAwaitable
+template<typename SocketType>
+class WsClientUpgradeAwaitableImpl
 {
 public:
-    WsClientUpgradeAwaitable(WsClient* client);
+    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
+    WsClientUpgradeAwaitableImpl(WsClientImpl<SocketType>* client)
+        : m_client(client)
+        , m_state(State::Invalid)
+        , m_send_offset(0)
+    {
+    }
 
     bool await_ready() const noexcept { return false; }
 
-    bool await_suspend(std::coroutine_handle<> handle);
+    bool await_suspend(std::coroutine_handle<> handle) {
+        if (m_state == State::Invalid) {
+            m_state = State::Sending;
 
-    /**
-     * @brief 恢复协程时调用
-     * @return std::expected<bool, WsError>
-     *         - true: 升级成功
-     *         - false: 需要继续等待（返回 nullopt 的语义）
-     *         - WsError: 升级失败
-     */
-    std::expected<bool, WsError> await_resume();
+            m_ws_key = generateWebSocketKey();
 
-    /**
-     * @brief 检查状态是否为 Invalid
-     */
+            m_upgrade_request = Http1_1RequestBuilder::get(m_client->m_url.path)
+                .host(m_client->m_url.host + ":" + std::to_string(m_client->m_url.port))
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header("Sec-WebSocket-Key", m_ws_key)
+                .build();
+
+            m_send_buffer = m_upgrade_request.toString();
+            m_send_offset = 0;
+
+            HTTP_LOG_INFO("Sending WebSocket upgrade request...");
+
+            size_t remaining = m_send_buffer.size() - m_send_offset;
+            const char* send_ptr = m_send_buffer.data() + m_send_offset;
+            m_send_awaitable.emplace(m_client->m_socket->send(send_ptr, remaining));
+            return m_send_awaitable->await_suspend(handle);
+
+        } else if (m_state == State::Sending) {
+            size_t remaining = m_send_buffer.size() - m_send_offset;
+            const char* send_ptr = m_send_buffer.data() + m_send_offset;
+            m_send_awaitable.emplace(m_client->m_socket->send(send_ptr, remaining));
+            return m_send_awaitable->await_suspend(handle);
+
+        } else {
+            m_recv_awaitable.emplace(m_client->m_socket->readv(m_client->m_ring_buffer->getWriteIovecs()));
+            return m_recv_awaitable->await_suspend(handle);
+        }
+    }
+
+    std::expected<bool, WsError> await_resume() {
+        if (m_state == State::Sending) {
+            auto send_result = m_send_awaitable->await_resume();
+
+            if (!send_result) {
+                HTTP_LOG_ERROR("Failed to send upgrade request: {}", send_result.error().message());
+                reset();
+                return std::unexpected(WsError(kWsConnectionError,
+                    "Failed to send upgrade request: " + send_result.error().message()));
+            }
+
+            m_send_offset += send_result.value();
+
+            if (m_send_offset < m_send_buffer.size()) {
+                return false;
+            }
+
+            HTTP_LOG_INFO("Upgrade request sent, waiting for response...");
+            m_state = State::Receiving;
+            m_send_awaitable.reset();
+            return false;
+
+        } else if (m_state == State::Receiving) {
+            auto recv_result = m_recv_awaitable->await_resume();
+
+            if (!recv_result) {
+                HTTP_LOG_ERROR("Failed to receive upgrade response: {}", recv_result.error().message());
+                reset();
+                return std::unexpected(WsError(kWsConnectionError,
+                    "Failed to receive upgrade response: " + recv_result.error().message()));
+            }
+
+            m_client->m_ring_buffer->produce(recv_result.value());
+
+            auto parse_result = m_upgrade_response.fromIOVec(
+                m_client->m_ring_buffer->getReadIovecs());
+
+            if (parse_result.first != HttpErrorCode::kNoError) {
+                HTTP_LOG_ERROR("Failed to parse upgrade response: error code {}",
+                              static_cast<int>(parse_result.first));
+                reset();
+                return std::unexpected(WsError(kWsProtocolError,
+                    "Failed to parse upgrade response"));
+            }
+
+            if (!m_upgrade_response.isComplete()) {
+                return false;
+            }
+
+            HTTP_LOG_INFO("Received complete upgrade response");
+
+            if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
+                HTTP_LOG_ERROR("WebSocket upgrade failed. Status: {} {}",
+                              static_cast<int>(m_upgrade_response.header().code()),
+                              httpStatusCodeToString(m_upgrade_response.header().code()));
+                reset();
+                return std::unexpected(WsError(kWsUpgradeFailed,
+                    "Upgrade failed with status " +
+                    std::to_string(static_cast<int>(m_upgrade_response.header().code()))));
+            }
+
+            if (!m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
+                HTTP_LOG_ERROR("Missing Sec-WebSocket-Accept header in response");
+                reset();
+                return std::unexpected(WsError(kWsUpgradeFailed,
+                    "Missing Sec-WebSocket-Accept header"));
+            }
+
+            std::string accept_key = m_upgrade_response.header().headerPairs()
+                .getValue("Sec-WebSocket-Accept");
+            std::string expected_accept = WsUpgrade::generateAcceptKey(m_ws_key);
+
+            if (accept_key != expected_accept) {
+                HTTP_LOG_ERROR("Invalid Sec-WebSocket-Accept value");
+                reset();
+                return std::unexpected(WsError(kWsUpgradeFailed,
+                    "Invalid Sec-WebSocket-Accept value"));
+            }
+
+            HTTP_LOG_INFO("WebSocket upgrade successful!");
+
+            size_t consumed = parse_result.second;
+            m_client->m_ring_buffer->consume(consumed);
+
+            m_client->m_ws_conn = std::make_unique<WsConnImpl<SocketType>>(
+                std::move(*m_client->m_socket),
+                std::move(*m_client->m_ring_buffer),
+                m_client->m_reader_setting,
+                m_client->m_writer_setting,
+                false
+            );
+
+            HTTP_LOG_INFO("WsConn created successfully");
+
+            m_client->m_socket.reset();
+            m_client->m_ring_buffer.reset();
+            m_client->m_upgrade_awaitable.reset();
+
+            return true;
+
+        } else {
+            HTTP_LOG_ERROR("await_resume called in Invalid state");
+            reset();
+            return std::unexpected(WsError(kWsProtocolError, "Invalid state"));
+        }
+    }
+
     bool isInvalid() const {
         return m_state == State::Invalid;
     }
 
-    /**
-     * @brief 重置状态并清理资源
-     */
     void reset() {
         m_state = State::Invalid;
         m_send_awaitable.reset();
@@ -84,199 +266,150 @@ public:
 
 private:
     enum class State {
-        Invalid,           // 无效状态
-        Sending,           // 正在发送升级请求
-        Receiving          // 正在接收升级响应
+        Invalid,
+        Sending,
+        Receiving
     };
 
-    WsClient* m_client;
+    WsClientImpl<SocketType>* m_client;
     State m_state;
 
-    // 持有底层的 TcpSocket awaitable
-    std::optional<SendAwaitable> m_send_awaitable;
-    std::optional<ReadvAwaitable> m_recv_awaitable;
+    std::optional<SendAwaitableType> m_send_awaitable;
+    std::optional<ReadvAwaitableType> m_recv_awaitable;
 
-    // 发送缓冲区
     std::string m_send_buffer;
     size_t m_send_offset;
 
-    // 升级过程中的数据（从 WsClient 移动过来）
     std::string m_ws_key;
     HttpRequest m_upgrade_request;
     HttpResponse m_upgrade_response;
 };
 
 /**
- * @brief WebSocket 客户端
- * @details 提供简化的 WebSocket 客户端接口，负责连接管理和 URL 解析
- *          实际的收发操作通过内部的 WsConn 进行
- *
- * @example
- * @code
- * Coroutine example() {
- *     WsClient client;
- *
- *     // 1. 连接到服务器（TCP 连接）
- *     auto connect_result = co_await client.connect("ws://127.0.0.1:8080/ws");
- *     if (!connect_result) {
- *         HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
- *         co_return;
- *     }
- *
- *     // 2. WebSocket 握手升级
- *     while (true) {
- *         auto upgrade_result = co_await client.upgrade();
- *         if (!upgrade_result.has_value()) {
- *             HTTP_LOG_ERROR("Upgrade failed: {}", upgrade_result.error().message());
- *             co_return;
- *         }
- *         if (upgrade_result.value()) {
- *             // 升级成功
- *             break;
- *         }
- *         // 继续等待
- *     }
- *
- *     // 3. 发送和接收消息
- *     co_await client.sendText("Hello Server!");
- *
- *     std::string message;
- *     WsOpcode opcode;
- *     co_await client.getMessage(message, opcode);
- *
- *     // 4. 关闭连接
- *     co_await client.close();
- * }
- * @endcode
+ * @brief WebSocket 客户端模板类
  */
-class WsClient
+template<typename SocketType>
+class WsClientImpl
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param reader_setting WebSocket 读取器配置
-     * @param writer_setting WebSocket 写入器配置
-     * @param ring_buffer_size RingBuffer 大小（默认 8192）
-     */
-    WsClient(const WsReaderSetting& reader_setting = WsReaderSetting(),
-             const WsWriterSetting& writer_setting = WsWriterSetting(),
-             size_t ring_buffer_size = 8192);
+    WsClientImpl(const WsReaderSetting& reader_setting = WsReaderSetting(),
+                 const WsWriterSetting& writer_setting = WsWriterSetting(),
+                 size_t ring_buffer_size = 8192)
+        : m_reader_setting(reader_setting)
+        , m_writer_setting(writer_setting)
+        , m_ring_buffer_size(ring_buffer_size)
+        , m_socket(nullptr)
+        , m_ring_buffer(nullptr)
+        , m_ws_conn(nullptr)
+        , m_upgrade_awaitable(nullptr)
+    {
+    }
 
-    /**
-     * @brief 析构函数
-     */
-    ~WsClient() = default;
+    ~WsClientImpl() = default;
 
-    // 禁用拷贝
-    WsClient(const WsClient&) = delete;
-    WsClient& operator=(const WsClient&) = delete;
+    WsClientImpl(const WsClientImpl&) = delete;
+    WsClientImpl& operator=(const WsClientImpl&) = delete;
+    WsClientImpl(WsClientImpl&&) = delete;
+    WsClientImpl& operator=(WsClientImpl&&) = delete;
 
-    // 禁用移动
-    WsClient(WsClient&&) = delete;
-    WsClient& operator=(WsClient&&) = delete;
+    auto connect(const std::string& url) {
+        auto parsed_url = WsUrl::parse(url);
+        if (!parsed_url) {
+            throw std::runtime_error("Invalid WebSocket URL: " + url);
+        }
 
-    /**
-     * @brief 连接到 WebSocket 服务器（TCP 连接）
-     * @param url WebSocket URL（如 "ws://127.0.0.1:8080/ws"）
-     * @return ConnectAwaitable TCP 连接等待体
-     * @note 连接成功后，需要调用 upgrade() 进行 WebSocket 握手
-     */
-    ConnectAwaitable connect(const std::string& url);
+        m_url = parsed_url.value();
 
-    /**
-     * @brief WebSocket 握手升级
-     * @return WsClientUpgradeAwaitable 升级等待体
-     * @note 需要在循环中调用，直到返回 true 表示升级成功
-     */
-    WsClientUpgradeAwaitable& upgrade();
+        if constexpr (std::is_same_v<SocketType, TcpSocket>) {
+            if (m_url.is_secure) {
+                throw std::runtime_error("WSS requires WssClient");
+            }
+        }
 
-    /**
-     * @brief 检查是否已连接
-     * @return true 已连接，false 未连接
-     */
+        HTTP_LOG_INFO("Connecting to WebSocket server at {}:{}{}",
+                     m_url.host, m_url.port, m_url.path);
+
+        m_socket = std::make_unique<SocketType>(IPType::IPV4);
+        m_ring_buffer = std::make_unique<RingBuffer>(m_ring_buffer_size);
+
+        auto nonblock_result = m_socket->option().handleNonBlock();
+        if (!nonblock_result) {
+            throw std::runtime_error("Failed to set non-blocking: " + nonblock_result.error().message());
+        }
+
+        Host server_host(IPType::IPV4, m_url.host, m_url.port);
+        return m_socket->connect(server_host);
+    }
+
+    WsClientUpgradeAwaitableImpl<SocketType>& upgrade() {
+        if (!m_socket) {
+            throw std::runtime_error("WsClient not connected. Call connect() first.");
+        }
+
+        if (!m_upgrade_awaitable || m_upgrade_awaitable->isInvalid()) {
+            m_upgrade_awaitable = std::make_unique<WsClientUpgradeAwaitableImpl<SocketType>>(this);
+        }
+
+        return *m_upgrade_awaitable;
+    }
+
     bool isConnected() const {
         return m_ws_conn != nullptr;
     }
 
-    /**
-     * @brief 关闭连接
-     * @return CloseAwaitable 关闭等待体
-     */
-    CloseAwaitable close();
+    auto close() {
+        if (!m_ws_conn) {
+            throw std::runtime_error("WsClient not connected");
+        }
+        return m_ws_conn->close();
+    }
 
-    /**
-     * @brief 设置读取器配置
-     * @note 必须在 connect() 之前调用
-     */
     void setReaderSetting(const WsReaderSetting& setting) {
         m_reader_setting = setting;
     }
 
-    /**
-     * @brief 设置写入器配置
-     * @note 必须在 connect() 之前调用
-     */
     void setWriterSetting(const WsWriterSetting& setting) {
         m_writer_setting = setting;
     }
 
-    /**
-     * @brief 获取 WebSocket 读取器
-     * @return WsReader& 读取器引用
-     * @note 必须在 upgrade() 成功后才能使用
-     * @note 使用示例：
-     * @code
-     * std::string message;
-     * WsOpcode opcode;
-     * co_await client.getWsReader().getMessage(message, opcode);
-     * @endcode
-     */
-    WsReader& getWsReader() {
+    WsReaderImpl<SocketType>& getWsReader() {
         return m_ws_conn->getReader();
     }
 
-    /**
-     * @brief 获取 WebSocket 写入器
-     * @return WsWriter& 写入器引用
-     * @note 必须在 upgrade() 成功后才能使用
-     * @note 使用示例：
-     * @code
-     * co_await client.getWsWriter().sendText("Hello");
-     * @endcode
-     */
-    WsWriter& getWsWriter() {
+    WsWriterImpl<SocketType>& getWsWriter() {
         return m_ws_conn->getWriter();
     }
 
-    /**
-     * @brief 获取底层 WsConn（高级用户使用）
-     * @return WsConn* 连接指针，未连接时返回 nullptr
-     */
-    WsConn* getConn() {
+    WsConnImpl<SocketType>* getConn() {
         return m_ws_conn.get();
     }
 
-    // 允许 WsClientUpgradeAwaitable 访问私有成员
-    friend class WsClientUpgradeAwaitable;
+    friend class WsClientUpgradeAwaitableImpl<SocketType>;
 
 private:
     WsReaderSetting m_reader_setting;
     WsWriterSetting m_writer_setting;
     size_t m_ring_buffer_size;
 
-    // 连接相关（升级前使用，升级后移动到 WsConn）
-    std::unique_ptr<TcpSocket> m_socket;
+    std::unique_ptr<SocketType> m_socket;
     std::unique_ptr<RingBuffer> m_ring_buffer;
 
-    // WebSocket 连接（升级后使用）
-    std::unique_ptr<WsConn> m_ws_conn;
+    std::unique_ptr<WsConnImpl<SocketType>> m_ws_conn;
 
-    // URL 信息
     WsUrl m_url;
 
-    // 升级等待体（只在升级过程中使用，完成后释放）
-    std::unique_ptr<WsClientUpgradeAwaitable> m_upgrade_awaitable;
+    std::unique_ptr<WsClientUpgradeAwaitableImpl<SocketType>> m_upgrade_awaitable;
 };
+
+// 类型别名 - WebSocket over TCP
+using WsClientUpgradeAwaitable = WsClientUpgradeAwaitableImpl<TcpSocket>;
+using WsClient = WsClientImpl<TcpSocket>;
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-socket/async/SslSocket.h"
+using WssClientUpgradeAwaitable = WsClientUpgradeAwaitableImpl<galay::async::SslSocket>;
+using WssClient = WsClientImpl<galay::async::SslSocket>;
+#endif
 
 } // namespace galay::websocket
 

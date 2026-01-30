@@ -28,6 +28,7 @@ enum WsErrorCode
     kWsMaskRequired,             // 需要掩码（客户端->服务器）
     kWsMaskNotAllowed,           // 不允许掩码（服务器->客户端）
     kWsConnectionError,          // 连接错误
+    kWsSendError,                // 发送错误
     kWsUpgradeFailed,            // 升级失败
     kWsUnknownError              // 未知错误
 };
@@ -121,6 +122,8 @@ private:
                 return "Mask not allowed (server to client)";
             case kWsConnectionError:
                 return "Connection error";
+            case kWsSendError:
+                return "Send error";
             case kWsUpgradeFailed:
                 return "WebSocket upgrade failed";
             case kWsUnknownError:

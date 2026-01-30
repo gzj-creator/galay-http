@@ -230,7 +230,10 @@ ws.onclose = () => {
     response.setBodyStr(std::move(body));
 
     auto writer = conn.getWriter();
-    co_await writer.sendResponse(response);
+    while (true) {
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result || send_result.value()) break;
+    }
     co_await conn.close();
     co_return;
 }

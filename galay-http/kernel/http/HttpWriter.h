@@ -2,9 +2,11 @@
 #define GALAY_HTTP_WRITER_H
 
 #include "HttpWriterSetting.h"
+#include "HttpLog.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpError.h"
+#include "galay-http/protoc/http/HttpChunk.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
@@ -19,26 +21,20 @@ using namespace galay::kernel;
 using namespace galay::async;
 
 // 前向声明
-class HttpWriter;
+template<typename SocketType>
+class HttpWriterImpl;
 
 /**
  * @brief HTTP响应写入等待体
- * @details 用于异步写入HTTP响应，支持断点续传
- *
- * @note 支持超时设置：
- * @code
- * auto result = co_await writer.sendResponse(response).timeout(std::chrono::seconds(5));
- * @endcode
+ * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
  */
-class SendResponseAwaitable : public galay::kernel::TimeoutSupport<SendResponseAwaitable>
+template<typename SocketType>
+class SendResponseAwaitableImpl : public galay::kernel::TimeoutSupport<SendResponseAwaitableImpl<SocketType>>
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param writer HttpWriter引用
-     * @param send_awaitable SendAwaitable右值引用
-     */
-    SendResponseAwaitable(HttpWriter& writer, SendAwaitable&& send_awaitable)
+    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
+
+    SendResponseAwaitableImpl(HttpWriterImpl<SocketType>& writer, SendAwaitableType&& send_awaitable)
         : m_writer(writer)
         , m_send_awaitable(std::move(send_awaitable))
     {
@@ -52,177 +48,152 @@ public:
         return m_send_awaitable.await_suspend(handle);
     }
 
-    std::expected<bool, HttpError> await_resume();
+    std::expected<bool, HttpError> await_resume() {
+        auto send_result = m_send_awaitable.await_resume();
+        if (!send_result) {
+            HTTP_LOG_DEBUG("send failed: {}", send_result.error().message());
+            return std::unexpected(HttpError(kSendError, send_result.error().message()));
+        }
+
+        size_t bytes_written = send_result.value();
+        m_writer.updateRemaining(bytes_written);
+
+        if (m_writer.getRemainingBytes() == 0) {
+            return true;
+        }
+
+        return false;
+    }
 
 private:
-    HttpWriter& m_writer;
-    SendAwaitable m_send_awaitable;
+    HttpWriterImpl<SocketType>& m_writer;
+    SendAwaitableType m_send_awaitable;
 
 public:
-    // TimeoutSupport 需要访问此成员来设置超时错误
     std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 /**
- * @brief HTTP写入器
- * @details 提供异步写入HTTP响应的接口，支持断点续传
+ * @brief HTTP写入器模板类
+ * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
  */
-class HttpWriter
+template<typename SocketType>
+class HttpWriterImpl
 {
 public:
-    /**
-     * @brief 构造函数
-     * @param setting HttpWriterSetting引用，包含写入配置
-     * @param socket TcpSocket引用，用于IO操作
-     */
-    HttpWriter(const HttpWriterSetting& setting, TcpSocket& socket)
+    HttpWriterImpl(const HttpWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(socket)
         , m_remaining_bytes(0)
     {
     }
 
-    /**
-     * @brief 发送HTTP响应
-     * @param response HttpResponse引用
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable sendResponse(HttpResponse& response) {
-        // 只在第一次调用时（剩余字节为0）生成字符串
+    SendResponseAwaitableImpl<SocketType> sendResponse(HttpResponse& response) {
         if (m_remaining_bytes == 0) {
             m_buffer = response.toString();
             m_remaining_bytes = m_buffer.size();
         }
 
-        // 计算当前发送位置
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送HTTP请求
-     * @param request HttpRequest引用
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable sendRequest(HttpRequest& request) {
-        // 只在第一次调用时（剩余字节为0）生成字符串
+    SendResponseAwaitableImpl<SocketType> sendRequest(HttpRequest& request) {
         if (m_remaining_bytes == 0) {
             m_buffer = request.toString();
             m_remaining_bytes = m_buffer.size();
         }
 
-        // 计算当前发送位置
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送HTTP响应头
-     * @param header HttpResponseHeader右值引用
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable sendHeader(HttpResponseHeader&& header) {
-        // 只在第一次调用时（剩余字节为0）生成字符串
+    SendResponseAwaitableImpl<SocketType> sendHeader(HttpResponseHeader&& header) {
         if (m_remaining_bytes == 0) {
             m_buffer = header.toString();
             m_remaining_bytes = m_buffer.size();
         }
 
-        // 计算当前发送位置
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送HTTP请求头
-     * @param header HttpRequestHeader右值引用
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable sendHeader(HttpRequestHeader&& header) {
-        // 只在第一次调用时（剩余字节为0）生成字符串
+    SendResponseAwaitableImpl<SocketType> sendHeader(HttpRequestHeader&& header) {
         if (m_remaining_bytes == 0) {
             m_buffer = header.toString();
             m_remaining_bytes = m_buffer.size();
         }
 
-        // 计算当前发送位置
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送字符串数据
-     * @param data 字符串右值引用
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable send(std::string&& data) {
-        // 只在第一次调用时（剩余字节为0）赋值
+    SendResponseAwaitableImpl<SocketType> send(std::string&& data) {
         if (m_remaining_bytes == 0) {
             m_buffer = std::move(data);
             m_remaining_bytes = m_buffer.size();
         }
 
-        // 计算当前发送位置
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitable(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
     }
 
-    /**
-     * @brief 发送原始数据（不支持断点续传，调用方需保证buffer生命周期）
-     * @param buffer 数据缓冲区指针
-     * @param length 数据长度
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable send(const char* buffer, size_t length) {
-        // 原始数据发送，不使用内部buffer
-        // 注意：这个接口不支持断点续传，需要一次发送完成
-        return SendResponseAwaitable(*this, m_socket.send(buffer, length));
+    SendResponseAwaitableImpl<SocketType> send(const char* buffer, size_t length) {
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(buffer, length));
     }
 
-    /**
-     * @brief 发送chunk编码的数据
-     * @param data 要发送的数据
-     * @param is_last 是否是最后一个chunk
-     * @return SendResponseAwaitable 响应等待体
-     */
-    SendResponseAwaitable sendChunk(const std::string& data, bool is_last = false);
+    SendResponseAwaitableImpl<SocketType> sendChunk(const std::string& data, bool is_last = false) {
+        if (m_remaining_bytes == 0) {
+            m_buffer = Chunk::toChunk(data, is_last);
+            m_remaining_bytes = m_buffer.size();
+        }
 
-    /**
-     * @brief 更新剩余发送字节数
-     * @param bytes_sent 本次发送的字节数
-     */
+        size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
+        const char* send_ptr = m_buffer.data() + sent_bytes;
+
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+    }
+
     void updateRemaining(size_t bytes_sent) {
         if (bytes_sent >= m_remaining_bytes) {
             m_remaining_bytes = 0;
-            m_buffer.clear();  // 发送完成，清空buffer
+            m_buffer.clear();
         } else {
             m_remaining_bytes -= bytes_sent;
         }
     }
 
-    /**
-     * @brief 获取剩余发送字节数
-     */
     size_t getRemainingBytes() const {
         return m_remaining_bytes;
     }
 
 private:
     const HttpWriterSetting& m_setting;
-    TcpSocket& m_socket;
-    std::string m_buffer;        // 发送缓冲区
-    size_t m_remaining_bytes;    // 剩余发送字节数
+    SocketType& m_socket;
+    std::string m_buffer;
+    size_t m_remaining_bytes;
 };
+
+// 类型别名 - HTTP (TcpSocket)
+using SendResponseAwaitable = SendResponseAwaitableImpl<TcpSocket>;
+using HttpWriter = HttpWriterImpl<TcpSocket>;
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+// 类型别名 - HTTPS (SslSocket)
+#include "galay-socket/async/SslSocket.h"
+using SendResponseAwaitableSsl = SendResponseAwaitableImpl<galay::async::SslSocket>;
+using HttpsWriter = HttpWriterImpl<galay::async::SslSocket>;
+#endif
 
 } // namespace galay::http
 

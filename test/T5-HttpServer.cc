@@ -152,11 +152,16 @@ Coroutine handleRequest(HttpConn conn) {
     response.setHeader(std::move(resp_header));
     response.setBodyStr(std::move(body));
 
-    auto sendResult = co_await writer.sendResponse(response);
-    if (!sendResult) {
-        LogError("Failed to send response: {}", sendResult.error().message());
-    } else {
-        LogInfo("Response sent: complete");
+    while (true) {
+        auto sendResult = co_await writer.sendResponse(response);
+        if (!sendResult) {
+            LogError("Failed to send response: {}", sendResult.error().message());
+            break;
+        }
+        if (sendResult.value()) {
+            LogInfo("Response sent: complete");
+            break;
+        }
     }
 
     co_await conn.close();

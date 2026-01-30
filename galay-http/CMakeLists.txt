@@ -1,4 +1,4 @@
-# HTTP 源文件（移除 HTTPS 相关）
+# HTTP 源文件（模板化后移除了部分 .cc 文件）
 set(HTTP_SOURCES
     protoc/http/HttpBase.cc
     protoc/http/HttpBody.cc
@@ -10,27 +10,22 @@ set(HTTP_SOURCES
     utils/HttpUtils.cc
     utils/Http1_1ResponseBuilder.cc
     utils/Http1_1RequestBuilder.cc
-    kernel/http/HttpReader.cc
-    kernel/http/HttpWriter.cc
-    kernel/http/HttpConn.cc
-    kernel/http/HttpServer.cc
-    kernel/http/HttpClient.cc
     kernel/http/HttpRouter.cc
 )
 
-# WebSocket 源文件
+# WebSocket 源文件（模板化后移除了部分 .cc 文件）
 set(WS_SOURCES
     protoc/websocket/WebSocketFrame.cc
-    kernel/websocket/WsReader.cc
-    kernel/websocket/WsWriter.cc
-    kernel/websocket/WsConn.cc
-    kernel/websocket/WsClient.cc
     kernel/websocket/WsUpgrade.cc
     kernel/websocket/WsHeartbeat.cc
 )
 
-# HTTP/2 暂时移除，后续单独重构
-# set(HTTP2_SOURCES ...)
+# HTTP/2 源文件（暂时注释，后续实现）
+# set(HTTP2_SOURCES
+#     protoc/http2/Http2Base.cc
+#     protoc/http2/Http2Frame.cc
+#     protoc/http2/Http2Hpack.cc
+# )
 
 # 合并所有源文件
 set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES})
@@ -58,6 +53,13 @@ target_link_libraries(${PROJECT_NAME}
     PUBLIC galay-kernel::galay-kernel
     PUBLIC pthread
 )
+
+# 如果启用 SSL，链接 galay-socket 库
+if(GALAY_HTTP_ENABLE_SSL)
+    target_link_libraries(${PROJECT_NAME}
+        PUBLIC galay-socket::galay-socket
+    )
+endif()
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
         CXX_STANDARD 23
