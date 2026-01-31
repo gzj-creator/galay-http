@@ -82,6 +82,13 @@ public:
         return HttpWriterImpl<SocketType>(m_writer_setting, m_socket);
     }
 
+    /**
+     * @brief 获取底层 Socket 引用
+     * @return SocketType 引用
+     * @note 用于需要直接访问底层 socket 的场景（如 WebSocket 升级后的处理）
+     */
+    SocketType& getSocket() { return m_socket; }
+
     // 允许HttpServerImpl访问私有成员
     template<typename S>
     friend class HttpServerImpl;

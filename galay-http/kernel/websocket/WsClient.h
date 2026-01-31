@@ -384,6 +384,37 @@ public:
         return m_ws_conn.get();
     }
 
+    /**
+     * @brief 获取底层 Socket（用于 SSL 握手等操作）
+     * @return SocketType 指针，如果未连接则返回 nullptr
+     */
+    SocketType* getSocket() {
+        return m_socket.get();
+    }
+
+    /**
+     * @brief SSL 握手（仅对 SslSocket 有效）
+     * @return 握手等待体
+     * @note 必须在 connect() 成功后、upgrade() 之前调用
+     */
+    auto handshake() {
+        if (!m_socket) {
+            throw std::runtime_error("WsClient not connected. Call connect() first.");
+        }
+        return m_socket->handshake();
+    }
+
+    /**
+     * @brief 检查 SSL 握手是否完成（仅对 SslSocket 有效）
+     */
+    bool isHandshakeCompleted() const {
+        if (!m_socket) return false;
+        if constexpr (requires { m_socket->isHandshakeCompleted(); }) {
+            return m_socket->isHandshakeCompleted();
+        }
+        return true;  // 非 SSL socket 总是返回 true
+    }
+
     friend class WsClientUpgradeAwaitableImpl<SocketType>;
 
 private:
@@ -409,9 +440,28 @@ using WsClient = WsClientImpl<TcpSocket>;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/SslSocket.h"
+
 namespace galay::websocket {
-using WssClientUpgradeAwaitable = WsClientUpgradeAwaitableImpl<galay::ssl::SslSocket>;
-using WssClient = WsClientImpl<galay::ssl::SslSocket>;
+
+/**
+ * @note WSS 客户端说明
+ *
+ * 由于 galay::ssl::SslSocket 目前不支持 readv 方法，WsClientImpl 模板
+ * 不能直接用于 SslSocket。
+ *
+ * 要实现 WSS 客户端，请参考 example/E8-WssClient.cc 示例，
+ * 直接使用 SslSocket 和 WebSocketFrame 进行操作：
+ *
+ * 1. 创建 SslContext 和 SslSocket
+ * 2. 执行 TCP 连接 (socket.connect())
+ * 3. 执行 SSL 握手 (socket.handshake())
+ * 4. 发送 WebSocket 升级请求
+ * 5. 接收并验证升级响应
+ * 6. 使用 WsFrameParser 进行帧的编解码
+ *
+ * 完整的 WssClient 类支持需要为 SslSocket 添加 readv 方法。
+ */
+
 } // namespace galay::websocket
 #endif
 
