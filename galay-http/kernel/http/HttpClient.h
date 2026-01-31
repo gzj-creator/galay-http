@@ -350,7 +350,7 @@ public:
     RingBuffer& ringBuffer() { return *m_ring_buffer; }
     const HttpUrl& url() const { return m_url; }
 
-private:
+protected:
     HttpClientAwaitableImpl<SocketType>& createRequest(HttpMethod method,
                                                         const std::string& uri,
                                                         const std::string& body,
@@ -403,9 +403,133 @@ using HttpClient = HttpClientImpl<TcpSocket>;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/SslSocket.h"
+#include "galay-ssl/SslContext.h"
+
 namespace galay::http {
+
 using HttpsClientAwaitable = HttpClientAwaitableImpl<galay::ssl::SslSocket>;
-using HttpsClient = HttpClientImpl<galay::ssl::SslSocket>;
+
+/**
+ * @brief HTTPS 客户端配置
+ */
+struct HttpsClientConfig
+{
+    HttpReaderSetting reader_setting;
+    HttpWriterSetting writer_setting;
+    size_t ring_buffer_size = 8192;
+
+    // SSL 配置
+    std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
+    bool verify_peer = false;       // 是否验证服务器证书
+    int verify_depth = 4;           // 证书链验证深度
+};
+
+/**
+ * @brief HTTPS 客户端类
+ */
+class HttpsClient : public HttpClientImpl<galay::ssl::SslSocket>
+{
+public:
+    HttpsClient(const HttpsClientConfig& config = HttpsClientConfig())
+        : HttpClientImpl<galay::ssl::SslSocket>(convertConfig(config))
+        , m_https_config(config)
+        , m_ssl_ctx(galay::ssl::SslMethod::TLS_Client)
+    {
+        initSslContext();
+    }
+
+    ~HttpsClient() = default;
+
+    HttpsClient(const HttpsClient&) = delete;
+    HttpsClient& operator=(const HttpsClient&) = delete;
+    HttpsClient(HttpsClient&&) = delete;
+    HttpsClient& operator=(HttpsClient&&) = delete;
+
+    auto connect(const std::string& url) {
+        auto parsed_url = HttpUrl::parse(url);
+        if (!parsed_url) {
+            throw std::runtime_error("Invalid HTTPS URL: " + url);
+        }
+
+        m_url = parsed_url.value();
+
+        if (!m_url.is_secure) {
+            HTTP_LOG_WARN("Using HttpsClient for non-HTTPS URL, upgrading to HTTPS");
+        }
+
+        HTTP_LOG_INFO("Connecting to HTTPS server at {}:{}{}", m_url.host, m_url.port, m_url.path);
+
+        // 正确的 SslSocket 构造方式
+        m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
+        m_ring_buffer = std::make_unique<RingBuffer>(m_config.ring_buffer_size);
+
+        auto nonblock_result = m_socket->option().handleNonBlock();
+        if (!nonblock_result) {
+            throw std::runtime_error("Failed to set non-blocking: " + nonblock_result.error().message());
+        }
+
+        // 设置 SNI (Server Name Indication)
+        auto sni_result = m_socket->setHostname(m_url.host);
+        if (!sni_result) {
+            HTTP_LOG_WARN("Failed to set SNI hostname: {}", sni_result.error().message());
+        }
+
+        m_writer = std::make_unique<HttpWriterImpl<galay::ssl::SslSocket>>(m_config.writer_setting, *m_socket);
+        m_reader = std::make_unique<HttpReaderImpl<galay::ssl::SslSocket>>(*m_ring_buffer, m_config.reader_setting, *m_socket);
+
+        Host server_host(IPType::IPV4, m_url.host, m_url.port);
+        return m_socket->connect(server_host);
+    }
+
+    /**
+     * @brief 执行 SSL 握手（连接后必须调用）
+     */
+    auto handshake() {
+        return m_socket->handshake();
+    }
+
+    /**
+     * @brief 检查握手是否完成
+     */
+    bool isHandshakeCompleted() const {
+        return m_socket && m_socket->isHandshakeCompleted();
+    }
+
+private:
+    void initSslContext() {
+        if (!m_ssl_ctx.isValid()) {
+            throw std::runtime_error("Failed to create SSL context");
+        }
+
+        // 加载 CA 证书
+        if (!m_https_config.ca_path.empty()) {
+            auto result = m_ssl_ctx.loadCACertificate(m_https_config.ca_path);
+            if (!result) {
+                HTTP_LOG_WARN("Failed to load CA certificate: {}", m_https_config.ca_path);
+            }
+        }
+
+        // 设置验证模式
+        if (m_https_config.verify_peer) {
+            m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::Peer);
+            m_ssl_ctx.setVerifyDepth(m_https_config.verify_depth);
+        } else {
+            m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);
+        }
+    }
+
+    static HttpClientConfig convertConfig(const HttpsClientConfig& config) {
+        HttpClientConfig base_config;
+        base_config.reader_setting = config.reader_setting;
+        base_config.writer_setting = config.writer_setting;
+        base_config.ring_buffer_size = config.ring_buffer_size;
+        return base_config;
+    }
+
+    HttpsClientConfig m_https_config;
+    galay::ssl::SslContext m_ssl_ctx;
+};
+
 } // namespace galay::http
 #endif
 

@@ -59,6 +59,14 @@ public:
     }
 
     /**
+     * @brief SSL shutdown（仅对 SslSocket 有效）
+     * @return ShutdownAwaitable shutdown等待体
+     */
+    auto shutdown() {
+        return m_socket.shutdown();
+    }
+
+    /**
      * @brief 获取HttpReader
      * @return HttpReaderImpl<SocketType> 临时构造的Reader对象
      */
