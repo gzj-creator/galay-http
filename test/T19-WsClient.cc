@@ -39,9 +39,10 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_messages) {
 
     // Upgrade to WebSocket
     std::cout << "Upgrading to WebSocket..." << std::endl;
+    auto upgrader = client.upgrade();
     bool upgraded = false;
     while (!upgraded) {
-        auto upgrade_result = co_await client.upgrade();
+        auto upgrade_result = co_await upgrader();
         if (!upgrade_result) {
             std::cerr << "Upgrade failed: " << upgrade_result.error().message() << std::endl;
             fail_count++;

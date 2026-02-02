@@ -1,387 +1,209 @@
 /**
- * @file bench_websocket.cc
- * @brief WebSocket Frame 编码/解码性能测试
+ * @file B5-Websocket.cc
+ * @brief WebSocket 服务器压测程序
+ * @details 配合 B4-WebsocketClient 进行 WebSocket 性能测试
  */
 
+#include "galay-http/kernel/http/HttpServer.h"
+#include "galay-http/kernel/websocket/WsUpgrade.h"
+#include "galay-http/kernel/websocket/WsConn.h"
+#include "galay-http/protoc/http/HttpRequest.h"
+#include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/kernel/http/HttpLog.h"
 #include <iostream>
-#include <chrono>
-#include <vector>
-#include <random>
-#include "galay-http/protoc/websocket/WebSocketFrame.h"
+#include <atomic>
+#include <signal.h>
 
+using namespace galay::http;
 using namespace galay::websocket;
-using namespace std::chrono;
+using namespace galay::kernel;
 
-void benchmark_frame_encoding_small() {
-    std::cout << "=== Small Frame Encoding Benchmark (64 bytes) ===" << std::endl;
+// 统计信息
+std::atomic<int> total_connections{0};
+std::atomic<int> total_messages{0};
+std::atomic<long long> total_bytes{0};
+std::atomic<bool> g_running{true};
 
-    const int iterations = 1000000;
-    std::string testData(64, 'A');
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        WsFrame frame = WsFrameParser::createTextFrame(testData);
-        auto encoded = WsFrameParser::toBytes(frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
+void signalHandler(int) {
+    g_running = false;
 }
 
-void benchmark_frame_encoding_medium() {
-    std::cout << "\n=== Medium Frame Encoding Benchmark (1KB) ===" << std::endl;
-
-    const int iterations = 500000;
-    std::string testData(1024, 'B');
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        WsFrame frame = WsFrameParser::createTextFrame(testData);
-        auto encoded = WsFrameParser::toBytes(frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-}
-
-void benchmark_frame_encoding_large() {
-    std::cout << "\n=== Large Frame Encoding Benchmark (64KB) ===" << std::endl;
-
-    const int iterations = 10000;
-    std::string testData(65536, 'C');
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        WsFrame frame = WsFrameParser::createBinaryFrame(testData);
-        auto encoded = WsFrameParser::toBytes(frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-
-    // 计算吞吐量 (MB/s)
-    double totalMB = (iterations * 65536.0) / (1024 * 1024);
-    double seconds = duration / 1000.0;
-    std::cout << "  Data throughput: " << (totalMB / seconds) << " MB/s" << std::endl;
-}
-
-void benchmark_frame_decoding_small() {
-    std::cout << "\n=== Small Frame Decoding Benchmark (64 bytes) ===" << std::endl;
-
-    const int iterations = 1000000;
-    std::string testData(64, 'A');
-
-    // 准备编码后的帧
-    WsFrame frame = WsFrameParser::createTextFrame(testData);
-    std::string encoded = WsFrameParser::toBytes(frame, true);
-
-    std::vector<iovec> iovecs(1);
-    iovecs[0].iov_base = const_cast<char*>(encoded.data());
-    iovecs[0].iov_len = encoded.size();
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        WsFrame decoded_frame;
-        auto result = WsFrameParser::fromIOVec(iovecs, decoded_frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-}
-
-void benchmark_frame_decoding_medium() {
-    std::cout << "\n=== Medium Frame Decoding Benchmark (1KB) ===" << std::endl;
-
-    const int iterations = 500000;
-    std::string testData(1024, 'B');
-
-    WsFrame frame = WsFrameParser::createTextFrame(testData);
-    std::string encoded = WsFrameParser::toBytes(frame, true);
-
-    std::vector<iovec> iovecs(1);
-    iovecs[0].iov_base = const_cast<char*>(encoded.data());
-    iovecs[0].iov_len = encoded.size();
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        WsFrame decoded_frame;
-        auto result = WsFrameParser::fromIOVec(iovecs, decoded_frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-}
-
-void benchmark_frame_decoding_large() {
-    std::cout << "\n=== Large Frame Decoding Benchmark (64KB) ===" << std::endl;
-
-    const int iterations = 10000;
-    std::string testData(65536, 'C');
-
-    WsFrame frame = WsFrameParser::createBinaryFrame(testData);
-    std::string encoded = WsFrameParser::toBytes(frame, true);
-
-    std::vector<iovec> iovecs(1);
-    iovecs[0].iov_base = const_cast<char*>(encoded.data());
-    iovecs[0].iov_len = encoded.size();
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        WsFrame decoded_frame;
-        auto result = WsFrameParser::fromIOVec(iovecs, decoded_frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-
-    // 计算吞吐量 (MB/s)
-    double totalMB = (iterations * 65536.0) / (1024 * 1024);
-    double seconds = duration / 1000.0;
-    std::cout << "  Data throughput: " << (totalMB / seconds) << " MB/s" << std::endl;
-}
-
-void benchmark_frame_roundtrip() {
-    std::cout << "\n=== Frame Roundtrip Benchmark (encode + decode, 1KB) ===" << std::endl;
-
-    const int iterations = 200000;
-    std::string testData(1024, 'D');
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        // 编码
-        WsFrame frame = WsFrameParser::createTextFrame(testData);
-        std::string encoded = WsFrameParser::toBytes(frame, true);
-
-        // 解码
-        std::vector<iovec> iovecs(1);
-        iovecs[0].iov_base = const_cast<char*>(encoded.data());
-        iovecs[0].iov_len = encoded.size();
-
-        WsFrame decoded_frame;
-        auto result = WsFrameParser::fromIOVec(iovecs, decoded_frame, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-}
-
-void benchmark_control_frames() {
-    std::cout << "\n=== Control Frames Benchmark (Ping/Pong/Close) ===" << std::endl;
-
-    const int iterations = 1000000;
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        // Ping
-        WsFrame ping = WsFrameParser::createPingFrame("ping");
-        auto ping_encoded = WsFrameParser::toBytes(ping, true);
-
-        // Pong
-        WsFrame pong = WsFrameParser::createPongFrame("pong");
-        auto pong_encoded = WsFrameParser::toBytes(pong, true);
-
-        // Close
-        WsFrame close = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
-        auto close_encoded = WsFrameParser::toBytes(close, true);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << " (x3 frames)" << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 3 * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / (iterations * 3)) << " μs/op" << std::endl;
-}
-
-void benchmark_masking() {
-    std::cout << "\n=== Masking Performance Benchmark (1KB) ===" << std::endl;
-
-    const int iterations = 500000;
-    std::string testData(1024, 'E');
-    uint8_t mask_key[4] = {0x12, 0x34, 0x56, 0x78};
-
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        std::string data = testData;
-        WsFrameParser::applyMask(data, mask_key);
-    }
-
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / iterations) << " μs/op" << std::endl;
-
-    // 计算吞吐量 (MB/s)
-    double totalMB = (iterations * 1024.0) / (1024 * 1024);
-    double seconds = duration / 1000.0;
-    std::cout << "  Data throughput: " << (totalMB / seconds) << " MB/s" << std::endl;
-}
-
-void benchmark_utf8_validation() {
-    std::cout << "\n=== UTF-8 Validation Benchmark ===" << std::endl;
-
-    const int iterations = 500000;
-
-    // ASCII 文本
-    std::string ascii_text = "Hello World! This is a test message for UTF-8 validation benchmark.";
-
-    // UTF-8 文本（包含中文）
-    std::string utf8_text = "你好世界！这是一个UTF-8验证性能测试消息。Hello World!";
-
-    // ASCII 测试
-    {
-        auto start = high_resolution_clock::now();
-        for (int i = 0; i < iterations; ++i) {
-            WsFrameParser::isValidUtf8(ascii_text);
+/**
+ * @brief WebSocket 连接处理协程
+ */
+Coroutine handleWebSocketConnection(WsConn& ws_conn) {
+    total_connections++;
+
+    auto& reader = ws_conn.getReader();
+    auto& writer = ws_conn.getWriter();
+
+    // 发送欢迎消息
+    co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
+
+    // 消息循环
+    while (true) {
+        std::string message;
+        WsOpcode opcode;
+
+        auto result = co_await reader.getMessage(message, opcode);
+
+        if (!result.has_value()) {
+            // 连接错误
+            break;
         }
-        auto end = high_resolution_clock::now();
-        auto duration = duration_cast<milliseconds>(end - start).count();
 
-        std::cout << "  ASCII text (" << ascii_text.size() << " bytes):" << std::endl;
-        std::cout << "    Iterations: " << iterations << std::endl;
-        std::cout << "    Time: " << duration << " ms" << std::endl;
-        std::cout << "    Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
-    }
-
-    // UTF-8 测试
-    {
-        auto start = high_resolution_clock::now();
-        for (int i = 0; i < iterations; ++i) {
-            WsFrameParser::isValidUtf8(utf8_text);
+        if (!result.value()) {
+            // 消息未完成，继续读取
+            continue;
         }
-        auto end = high_resolution_clock::now();
-        auto duration = duration_cast<milliseconds>(end - start).count();
 
-        std::cout << "  UTF-8 text (" << utf8_text.size() << " bytes):" << std::endl;
-        std::cout << "    Iterations: " << iterations << std::endl;
-        std::cout << "    Time: " << duration << " ms" << std::endl;
-        std::cout << "    Throughput: " << (iterations * 1000 / duration) << " ops/sec" << std::endl;
-    }
-}
+        // 处理不同类型的消息
+        if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
+            total_messages++;
+            total_bytes += message.size();
 
-void benchmark_fragmented_frames() {
-    std::cout << "\n=== Fragmented Frames Benchmark ===" << std::endl;
+            // 回显消息
+            if (opcode == WsOpcode::Text) {
+                co_await writer.sendText(message);
+            } else {
+                co_await writer.sendBinary(message);
+            }
 
-    const int iterations = 200000;
-    std::string data1 = "Hello ";
-    std::string data2 = "World!";
+        } else if (opcode == WsOpcode::Ping) {
+            // 响应 Ping
+            co_await writer.sendPong(message);
 
-    auto start = high_resolution_clock::now();
-
-    for (int i = 0; i < iterations; ++i) {
-        // 第一个分片
-        WsFrame frame1(WsOpcode::Text, data1, false);
-        auto encoded1 = WsFrameParser::toBytes(frame1, true);
-
-        // 第二个分片
-        WsFrame frame2(WsOpcode::Continuation, data2, true);
-        auto encoded2 = WsFrameParser::toBytes(frame2, true);
-
-        // 解码第一个分片
-        std::vector<iovec> iovecs1(1);
-        iovecs1[0].iov_base = const_cast<char*>(encoded1.data());
-        iovecs1[0].iov_len = encoded1.size();
-        WsFrame decoded1;
-        WsFrameParser::fromIOVec(iovecs1, decoded1, true);
-
-        // 解码第二个分片
-        std::vector<iovec> iovecs2(1);
-        iovecs2[0].iov_base = const_cast<char*>(encoded2.data());
-        iovecs2[0].iov_len = encoded2.size();
-        WsFrame decoded2;
-        WsFrameParser::fromIOVec(iovecs2, decoded2, true);
+        } else if (opcode == WsOpcode::Close) {
+            // 客户端关闭连接
+            co_await writer.sendClose();
+            break;
+        }
     }
 
-    auto end = high_resolution_clock::now();
-    auto duration = duration_cast<milliseconds>(end - start).count();
-
-    std::cout << "  Iterations: " << iterations << " (x2 fragments)" << std::endl;
-    std::cout << "  Time: " << duration << " ms" << std::endl;
-    std::cout << "  Throughput: " << (static_cast<long long>(iterations) * 2 * 1000 / duration) << " ops/sec" << std::endl;
-    std::cout << "  Avg time: " << (duration * 1000.0 / (iterations * 2)) << " μs/op" << std::endl;
+    co_await ws_conn.close();
+    co_return;
 }
 
-int main() {
+/**
+ * @brief HTTP 请求处理协程
+ */
+Coroutine handleHttpRequest(HttpConn conn) {
+    auto reader = conn.getReader();
+    HttpRequest request;
+
+    auto read_result = co_await reader.getRequest(request);
+    if (!read_result) {
+        co_await conn.close();
+        co_return;
+    }
+
+    // 检查是否是 WebSocket 升级请求
+    if (request.header().uri() == "/ws" || request.header().uri() == "/") {
+        auto upgrade_result = WsUpgrade::handleUpgrade(request);
+
+        if (!upgrade_result.success) {
+            auto writer = conn.getWriter();
+            co_await writer.sendResponse(upgrade_result.response);
+            co_await conn.close();
+            co_return;
+        }
+
+        // 发送升级响应
+        auto writer = conn.getWriter();
+        auto send_result = co_await writer.sendResponse(upgrade_result.response);
+
+        if (!send_result) {
+            co_await conn.close();
+            co_return;
+        }
+
+        // 升级到 WebSocket
+        WsReaderSetting reader_setting;
+        reader_setting.max_frame_size = 1024 * 1024;
+        reader_setting.max_message_size = 10 * 1024 * 1024;
+
+        WsWriterSetting writer_setting;
+
+        WsConn ws_conn(
+            std::move(conn),
+            reader_setting,
+            writer_setting,
+            true  // is_server
+        );
+
+        co_await handleWebSocketConnection(ws_conn).wait();
+    } else {
+        // 非 WebSocket 请求，返回 404
+        HttpResponse response;
+        response.header().version() = HttpVersion::HttpVersion_1_1;
+        response.header().code() = HttpStatusCode::NotFound_404;
+        response.setBodyStr("Not Found");
+
+        auto writer = conn.getWriter();
+        co_await writer.sendResponse(response);
+        co_await conn.close();
+    }
+
+    co_return;
+}
+
+int main(int argc, char* argv[]) {
+    uint16_t port = 8080;
+    if (argc >= 2) {
+        port = std::atoi(argv[1]);
+    }
+
     std::cout << "========================================" << std::endl;
-    std::cout << "WebSocket Frame Parser Benchmark" << std::endl;
+    std::cout << "WebSocket Benchmark Server" << std::endl;
+    std::cout << "========================================" << std::endl;
+    std::cout << "Port: " << port << std::endl;
+    std::cout << "WebSocket endpoint: ws://localhost:" << port << "/ws" << std::endl;
+    std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << "========================================\n" << std::endl;
 
-    // 编码性能测试
-    benchmark_frame_encoding_small();
-    benchmark_frame_encoding_medium();
-    benchmark_frame_encoding_large();
+    // 设置信号处理
+    signal(SIGINT, signalHandler);
+    signal(SIGTERM, signalHandler);
 
-    // 解码性能测试
-    benchmark_frame_decoding_small();
-    benchmark_frame_decoding_medium();
-    benchmark_frame_decoding_large();
+    try {
+        HttpServerConfig config;
+        config.host = "0.0.0.0";
+        config.port = port;
+        config.io_scheduler_count = 4;
+        config.compute_scheduler_count = 0;
 
-    // 往返性能测试
-    benchmark_frame_roundtrip();
+        HttpServer server(config);
 
-    // 控制帧性能测试
-    benchmark_control_frames();
+        HTTP_LOG_INFO("WebSocket benchmark server starting on {}:{}", config.host, config.port);
 
-    // 掩码性能测试
-    benchmark_masking();
+        server.start(handleHttpRequest);
 
-    // UTF-8 验证性能测试
-    benchmark_utf8_validation();
+        std::cout << "Server started successfully!\n" << std::endl;
 
-    // 分片帧性能测试
-    benchmark_fragmented_frames();
+        // 等待停止信号
+        while (g_running) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
 
-    std::cout << "\n========================================" << std::endl;
-    std::cout << "Benchmark completed!" << std::endl;
-    std::cout << "========================================" << std::endl;
+        std::cout << "\nShutting down..." << std::endl;
+        server.stop();
+
+        // 打印统计信息
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "Benchmark Statistics:" << std::endl;
+        std::cout << "========================================" << std::endl;
+        std::cout << "Total connections: " << total_connections.load() << std::endl;
+        std::cout << "Total messages: " << total_messages.load() << std::endl;
+        std::cout << "Total bytes: " << total_bytes.load() << " ("
+                  << (total_bytes.load() / 1024.0 / 1024.0) << " MB)" << std::endl;
+        std::cout << "========================================" << std::endl;
+
+        std::cout << "Server stopped." << std::endl;
+
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
+    }
 
     return 0;
 }
