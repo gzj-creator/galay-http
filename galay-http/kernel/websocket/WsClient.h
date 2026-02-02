@@ -241,7 +241,8 @@ public:
 
             m_client->m_socket.reset();
             m_client->m_ring_buffer.reset();
-            m_client->m_upgrade_awaitable.reset();
+            // 注意：不要在这里 reset m_upgrade_awaitable，因为我们还在它的 await_resume() 中
+            // 调用者会在使用完毕后自动销毁它
 
             return true;
 
