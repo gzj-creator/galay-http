@@ -52,7 +52,7 @@ public:
     using ConnHandler = HttpConnHandlerImpl<SocketType>;
 
     explicit HttpServerImpl(const HttpServerConfig& config = HttpServerConfig())
-        : m_runtime(LoadBalanceStrategy::ROUND_ROBIN, config.io_scheduler_count, config.compute_scheduler_count)
+        : m_runtime(config.io_scheduler_count, config.compute_scheduler_count)
         , m_config(config)
         , m_handler(nullptr)
         , m_listener(nullptr)
@@ -181,56 +181,61 @@ protected:
                       m_runtime.getIOSchedulerCount(),
                       m_runtime.getComputeSchedulerCount());
 
-        auto* scheduler = m_runtime.getNextIOScheduler();
-        if (!scheduler) {
-            HTTP_LOG_ERROR("no IO scheduler available");
-            m_runtime.stop();
-            return false;
-        }
-
-        m_listener = std::make_unique<TcpSocket>(IPType::IPV4);
-
-        auto reuse_result = m_listener->option().handleReuseAddr();
-        if (!reuse_result) {
-            HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-
-        auto nonblock_result = m_listener->option().handleNonBlock();
-        if (!nonblock_result) {
-            HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-
-        Host bind_host(IPType::IPV4, m_config.host, m_config.port);
-        auto bind_result = m_listener->bind(bind_host);
-        if (!bind_result) {
-            HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-
-        auto listen_result = m_listener->listen(m_config.backlog);
-        if (!listen_result) {
-            HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-
         m_running.store(true);
         HTTP_LOG_INFO("HTTP server started on {}:{}", m_config.host, m_config.port);
 
-        scheduler->spawn(serverLoop());
+        // 在每个 IO 调度器上启动一个 serverLoop，每个 serverLoop 创建自己的 listener
+        // 利用 SO_REUSEPORT 实现多线程 accept
+        size_t io_scheduler_count = m_runtime.getIOSchedulerCount();
+        for (size_t i = 0; i < io_scheduler_count; i++) {
+            auto* scheduler = m_runtime.getIOScheduler(i);
+            if (scheduler) {
+                scheduler->spawn(serverLoop(scheduler));
+            }
+        }
 
         return true;
     }
 
-    virtual Coroutine serverLoop() {
+    virtual Coroutine serverLoop(IOScheduler* scheduler) {
+        // 每个 serverLoop 创建自己的 listener socket
+        TcpSocket listener(IPType::IPV4);
+
+        auto reuse_result = listener.option().handleReuseAddr();
+        if (!reuse_result) {
+            HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
+            co_return;
+        }
+
+        // 设置 SO_REUSEPORT 以支持多线程 accept
+        auto reuse_port_result = listener.option().handleReusePort();
+        if (!reuse_port_result) {
+            HTTP_LOG_ERROR("failed to set reuse port: {}", reuse_port_result.error().message());
+            co_return;
+        }
+
+        auto nonblock_result = listener.option().handleNonBlock();
+        if (!nonblock_result) {
+            HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
+            co_return;
+        }
+
+        Host bind_host(IPType::IPV4, m_config.host, m_config.port);
+        auto bind_result = listener.bind(bind_host);
+        if (!bind_result) {
+            HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
+            co_return;
+        }
+
+        auto listen_result = listener.listen(m_config.backlog);
+        if (!listen_result) {
+            HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
+            co_return;
+        }
+
         while (m_running.load()) {
             Host client_host;
-            auto accept_result = co_await m_listener->accept(&client_host);
+            auto accept_result = co_await listener.accept(&client_host);
 
             if (!accept_result) {
                 if (m_running.load()) {
@@ -240,12 +245,6 @@ protected:
             }
 
             HTTP_LOG_INFO("client connected from {}:{}", client_host.ip(), client_host.port());
-
-            auto* scheduler = m_runtime.getNextIOScheduler();
-            if (!scheduler) {
-                HTTP_LOG_ERROR("no IO scheduler available");
-                continue;
-            }
 
             auto client_socket_opt = createClientSocket(accept_result.value());
             if (!client_socket_opt) {
@@ -261,6 +260,8 @@ protected:
             }
 
             HttpConnImpl<SocketType> conn(std::move(client_socket), m_config.reader_setting, m_config.writer_setting);
+
+            // 在当前调度器上处理连接
             scheduler->spawn(m_handler(std::move(conn)));
         }
 
@@ -351,10 +352,45 @@ protected:
         return galay::ssl::SslSocket(&m_ssl_ctx, fd);
     }
 
-    Coroutine serverLoop() override {
+    Coroutine serverLoop(IOScheduler* scheduler) override {
+        // 每个 serverLoop 创建自己的 listener socket
+        TcpSocket listener(IPType::IPV4);
+
+        auto reuse_result = listener.option().handleReuseAddr();
+        if (!reuse_result) {
+            HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
+            co_return;
+        }
+
+        // 设置 SO_REUSEPORT 以支持多线程 accept
+        auto reuse_port_result = listener.option().handleReusePort();
+        if (!reuse_port_result) {
+            HTTP_LOG_ERROR("failed to set reuse port: {}", reuse_port_result.error().message());
+            co_return;
+        }
+
+        auto nonblock_result = listener.option().handleNonBlock();
+        if (!nonblock_result) {
+            HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
+            co_return;
+        }
+
+        Host bind_host(IPType::IPV4, m_config.host, m_config.port);
+        auto bind_result = listener.bind(bind_host);
+        if (!bind_result) {
+            HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
+            co_return;
+        }
+
+        auto listen_result = listener.listen(m_config.backlog);
+        if (!listen_result) {
+            HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
+            co_return;
+        }
+
         while (m_running.load()) {
             Host client_host;
-            auto accept_result = co_await m_listener->accept(&client_host);
+            auto accept_result = co_await listener.accept(&client_host);
 
             if (!accept_result) {
                 if (m_running.load()) {
@@ -364,12 +400,6 @@ protected:
             }
 
             HTTP_LOG_INFO("HTTPS client connected from {}:{}", client_host.ip(), client_host.port());
-
-            auto* scheduler = m_runtime.getNextIOScheduler();
-            if (!scheduler) {
-                HTTP_LOG_ERROR("no IO scheduler available");
-                continue;
-            }
 
             auto client_socket_opt = createClientSocket(accept_result.value());
             if (!client_socket_opt) {
@@ -384,7 +414,7 @@ protected:
                 continue;
             }
 
-            // 在新协程中执行 SSL 握手和处理
+            // 在当前调度器上执行 SSL 握手和处理
             scheduler->spawn(handleSslConnection(std::move(client_socket)));
         }
 
