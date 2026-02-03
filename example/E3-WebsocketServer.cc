@@ -8,6 +8,7 @@
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
 #include "galay-http/kernel/websocket/WsConn.h"
+#include "galay-http/kernel/websocket/WsWriterSetting.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/kernel/http/HttpLog.h"
@@ -47,11 +48,9 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
      reader_setting.max_frame_size = 1024 * 1024;  // 1MB
      reader_setting.max_message_size = 10 * 1024 * 1024;  // 10MB
 
-     WsWriterSetting writer_setting;
-
     // 获取 Reader 和 Writer（必须在协程开始时获取，保证 ws_conn 生命周期）
     auto reader = ws_conn.getReader(reader_setting);
-    auto writer = ws_conn.getWriter(writer_setting);
+    auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
     // 发送欢迎消息
     HTTP_LOG_INFO("Sending welcome message");
@@ -175,10 +174,7 @@ Coroutine handleHttpRequest(HttpConn conn) {
         }
 
         // 从 HttpConn 创建 WebSocket 连接（转移所有权）
-        WsConn ws_conn(
-            std::move(conn),
-            true  // is_server
-        );
+        WsConn ws_conn = WsConn::from(std::move(conn), true);
 
         // 处理 WebSocket 连接（通过引用传递，避免移动导致引用失效）
         co_await handleWebSocketConnection(ws_conn).wait();

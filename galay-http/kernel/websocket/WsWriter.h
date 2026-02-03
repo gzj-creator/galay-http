@@ -4,7 +4,6 @@
 #include "WsWriterSetting.h"
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/websocket/WebSocketError.h"
-#include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
@@ -44,7 +43,7 @@ public:
         return m_send_awaitable.await_suspend(handle);
     }
 
-    std::expected<size_t, WsError> await_resume() {
+    std::expected<bool, WsError> await_resume() {
         auto send_result = m_send_awaitable.await_resume();
         if (!send_result) {
             return std::unexpected(WsError(kWsSendError, send_result.error().message()));
@@ -53,7 +52,10 @@ public:
         size_t bytes_written = send_result.value();
         m_writer.updateRemaining(bytes_written);
 
-        return bytes_written;
+        if (m_writer.getRemainingBytes() == 0) {
+            return true;
+        }
+        return false;
     }
 
 private:
@@ -72,7 +74,7 @@ class WsWriterImpl
 {
 public:
     WsWriterImpl(const WsWriterSetting& setting, SocketType& socket)
-        : m_setting(&setting)
+        : m_setting(setting)
         , m_socket(&socket)
         , m_remaining_bytes(0)
     {
@@ -81,7 +83,7 @@ public:
     SendFrameAwaitableImpl<SocketType> sendText(const std::string& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createTextFrame(text, fin);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
@@ -94,7 +96,7 @@ public:
     SendFrameAwaitableImpl<SocketType> sendBinary(const std::string& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createBinaryFrame(data, fin);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
@@ -107,7 +109,7 @@ public:
     SendFrameAwaitableImpl<SocketType> sendPing(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPingFrame(data);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
@@ -120,7 +122,7 @@ public:
     SendFrameAwaitableImpl<SocketType> sendPong(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPongFrame(data);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
@@ -133,7 +135,7 @@ public:
     SendFrameAwaitableImpl<SocketType> sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createCloseFrame(code, reason);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
@@ -145,7 +147,7 @@ public:
 
     SendFrameAwaitableImpl<SocketType> sendFrame(const WsFrame& frame) {
         if (m_remaining_bytes == 0) {
-            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
@@ -169,7 +171,7 @@ public:
     }
 
 private:
-    const WsWriterSetting* m_setting;
+    WsWriterSetting m_setting;
     SocketType* m_socket;
     std::string m_buffer;
     size_t m_remaining_bytes;

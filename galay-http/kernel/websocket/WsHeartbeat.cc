@@ -4,6 +4,7 @@
  */
 
 #include "WsHeartbeat.h"
+#include "galay-http/kernel/websocket/WsWriterSetting.h"
 #include "galay-kernel/common/Log.h"
 #include "galay-kernel/common/Sleep.hpp"
 
@@ -67,7 +68,7 @@ Coroutine WsHeartbeat::start()
         ping_frame.header.opcode = WsOpcode::Ping;
         ping_frame.header.payload_length = 0;
 
-        auto writer = m_conn.getWriter();
+        auto writer = m_conn.getWriter(WsWriterSetting::byServer());
         auto result = co_await writer.sendFrame(ping_frame);
 
         if (!result) {

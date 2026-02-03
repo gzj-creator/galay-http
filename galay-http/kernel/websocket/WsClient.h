@@ -3,8 +3,6 @@
 
 #include "WsSession.h"
 #include "WsConn.h"
-#include "WsReader.h"
-#include "WsWriter.h"
 #include "WsUpgrade.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
@@ -12,7 +10,6 @@
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
-#include "galay-kernel/kernel/Awaitable.h"
 #include <galay-utils/algorithm/Base64.hpp>
 #include <string>
 #include <optional>
@@ -399,13 +396,13 @@ public:
      * @return WsSessionImpl 对象
      * @note 必须在 connect() 成功后调用
      */
-    WsSessionImpl<SocketType> getSession(size_t ring_buffer_size = 8192,
-                                          const WsReaderSetting& reader_setting = WsReaderSetting(),
-                                          const WsWriterSetting& writer_setting = WsWriterSetting()) {
+    WsSessionImpl<SocketType> getSession( const WsWriterSetting& writer_setting,
+                                          size_t ring_buffer_size = 8192,
+                                          const WsReaderSetting& reader_setting = WsReaderSetting()) {
         if (!m_socket) {
             throw std::runtime_error("WsClient not connected. Call connect() first.");
         }
-        return WsSessionImpl<SocketType>(*m_socket, m_url, ring_buffer_size, reader_setting, writer_setting);
+        return WsSessionImpl<SocketType>(*m_socket, m_url, writer_setting, ring_buffer_size, reader_setting);
     }
 
     auto close() {

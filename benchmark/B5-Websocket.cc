@@ -10,8 +10,14 @@
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/kernel/http/HttpLog.h"
+#include "kernel/websocket/WsWriterSetting.h"
+#include "galay-kernel/concurrency/AsyncMutex.h"
 #include <iostream>
 #include <atomic>
+#include <vector>
+#include <thread>
+#include <algorithm>
+#include <numeric>
 #include <signal.h>
 
 using namespace galay::http;
@@ -23,6 +29,8 @@ std::atomic<int> total_connections{0};
 std::atomic<int> total_messages{0};
 std::atomic<long long> total_bytes{0};
 std::atomic<bool> g_running{true};
+AsyncMutex g_conn_mutex;
+std::vector<std::pair<uint64_t, uint64_t>> g_conn_stats;
 
 void signalHandler(int) {
     g_running = false;
@@ -35,10 +43,21 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     total_connections++;
 
     auto reader = ws_conn.getReader();
-    auto writer = ws_conn.getWriter();
-
+    auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
+    uint64_t conn_messages = 0;
+    uint64_t conn_bytes = 0;
+    HTTP_LOG_INFO("Send Hello To client");
     // 发送欢迎消息
-    co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
+    while (true) {
+        auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
+        if(!res) {
+            HTTP_LOG_ERROR("send Hello failed: {}", res.error().message());
+            co_return;
+        }
+        if(res.value()) {
+            break;
+        }
+    }
 
     // 消息循环
     while (true) {
@@ -61,6 +80,8 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
             total_messages++;
             total_bytes += message.size();
+            conn_messages++;
+            conn_bytes += message.size();
 
             // 回显消息
             if (opcode == WsOpcode::Text) {
@@ -78,6 +99,12 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
             co_await writer.sendClose();
             break;
         }
+    }
+
+    auto lock_result = co_await g_conn_mutex.lock();
+    if (lock_result.has_value()) {
+        g_conn_stats.emplace_back(conn_messages, conn_bytes);
+        g_conn_mutex.unlock();
     }
 
     co_await ws_conn.close();
@@ -116,18 +143,7 @@ Coroutine handleHttpRequest(HttpConn conn) {
             co_await conn.close();
             co_return;
         }
-
-        // 升级到 WebSocket
-        WsReaderSetting reader_setting;
-        reader_setting.max_frame_size = 1024 * 1024;
-        reader_setting.max_message_size = 10 * 1024 * 1024;
-
-        WsWriterSetting writer_setting;
-
-        WsConn ws_conn(
-            std::move(conn),
-            true  // is_server
-        );
+        WsConn ws_conn = WsConn::from(std::move(conn), true);
 
         co_await handleWebSocketConnection(ws_conn).wait();
     } else {
@@ -178,6 +194,29 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Server started successfully!\n" << std::endl;
 
+        std::thread stats_thread([] {
+            uint64_t last_messages = 0;
+            uint64_t last_bytes = 0;
+            auto last_time = std::chrono::steady_clock::now();
+            while (g_running.load(std::memory_order_relaxed)) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                auto now = std::chrono::steady_clock::now();
+                auto cur_messages = static_cast<uint64_t>(total_messages.load());
+                auto cur_bytes = static_cast<uint64_t>(total_bytes.load());
+                auto delta_sec = std::chrono::duration<double>(now - last_time).count();
+                auto delta_messages = cur_messages - last_messages;
+                auto delta_bytes = cur_bytes - last_bytes;
+                if (delta_sec > 0.0) {
+                    std::cout << "[Stats] QPS: " << (delta_messages / delta_sec)
+                              << " | MB/s: " << (delta_bytes / 1024.0 / 1024.0 / delta_sec)
+                              << std::endl;
+                }
+                last_time = now;
+                last_messages = cur_messages;
+                last_bytes = cur_bytes;
+            }
+        });
+
         // 等待停止信号
         while (g_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -185,6 +224,9 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\nShutting down..." << std::endl;
         server.stop();
+        if (stats_thread.joinable()) {
+            stats_thread.join();
+        }
 
         // 打印统计信息
         std::cout << "\n========================================" << std::endl;
@@ -194,6 +236,34 @@ int main(int argc, char* argv[]) {
         std::cout << "Total messages: " << total_messages.load() << std::endl;
         std::cout << "Total bytes: " << total_bytes.load() << " ("
                   << (total_bytes.load() / 1024.0 / 1024.0) << " MB)" << std::endl;
+        while (!g_conn_mutex.tryLock()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        if (!g_conn_stats.empty()) {
+            std::vector<uint64_t> msg_counts;
+            std::vector<uint64_t> byte_counts;
+            msg_counts.reserve(g_conn_stats.size());
+            byte_counts.reserve(g_conn_stats.size());
+            for (const auto& stat : g_conn_stats) {
+                msg_counts.push_back(stat.first);
+                byte_counts.push_back(stat.second);
+            }
+            auto minmax_msg = std::minmax_element(msg_counts.begin(), msg_counts.end());
+            auto minmax_bytes = std::minmax_element(byte_counts.begin(), byte_counts.end());
+            uint64_t sum_msg = std::accumulate(msg_counts.begin(), msg_counts.end(), uint64_t(0));
+            uint64_t sum_bytes = std::accumulate(byte_counts.begin(), byte_counts.end(), uint64_t(0));
+            double avg_msg = static_cast<double>(sum_msg) / msg_counts.size();
+            double avg_bytes = static_cast<double>(sum_bytes) / byte_counts.size();
+            std::cout << "\nPer-connection stats:" << std::endl;
+            std::cout << "  Connections: " << g_conn_stats.size() << std::endl;
+            std::cout << "  Messages: min " << *minmax_msg.first
+                      << ", avg " << avg_msg
+                      << ", max " << *minmax_msg.second << std::endl;
+            std::cout << "  Bytes:    min " << *minmax_bytes.first
+                      << ", avg " << avg_bytes
+                      << ", max " << *minmax_bytes.second << std::endl;
+        }
+        g_conn_mutex.unlock();
         std::cout << "========================================" << std::endl;
 
         std::cout << "Server stopped." << std::endl;

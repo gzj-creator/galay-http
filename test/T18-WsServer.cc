@@ -14,9 +14,11 @@
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/kernel/http/HttpLog.h"
+#include "kernel/websocket/WsWriterSetting.h"
 #include <iostream>
 #include <atomic>
 #include <csignal>
+#include <utility>
 
 using namespace galay::http;
 using namespace galay::websocket;
@@ -38,13 +40,16 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     HTTP_LOG_INFO("WebSocket connection #{} established", g_connection_count.load());
 
     auto reader = ws_conn.getReader();
-    auto writer = ws_conn.getWriter();
+    auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
-    // 发送欢迎消息
-    auto send_result = co_await writer.sendText("Welcome to WebSocket Test Server!");
-    if (!send_result) {
-        HTTP_LOG_ERROR("Failed to send welcome message: {}", send_result.error().message());
-        co_return;
+    // 发送欢迎消息（循环等待直到完成）
+    while (true) {
+        auto send_result = co_await writer.sendText("Welcome to WebSocket Test Server!");
+        if (!send_result) {
+            HTTP_LOG_ERROR("Failed to send welcome message: {}", send_result.error().message());
+            co_return;
+        }
+        if (send_result.value()) break;
     }
 
     // 消息循环
@@ -52,20 +57,31 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         std::string message;
         WsOpcode opcode;
 
-        auto result = co_await reader.getMessage(message, opcode);
+        // 循环等待接收消息
+        bool recv_success = false;
+        while (true) {
+            auto result = co_await reader.getMessage(message, opcode);
 
-        if (!result.has_value()) {
-            WsError error = result.error();
-            if (error.code() == kWsConnectionClosed) {
-                HTTP_LOG_INFO("WebSocket connection closed by peer");
+            if (!result.has_value()) {
+                WsError error = result.error();
+                if (error.code() == kWsConnectionClosed) {
+                    HTTP_LOG_INFO("WebSocket connection closed by peer");
+                    co_await ws_conn.close();
+                    co_return;
+                }
+                HTTP_LOG_ERROR("Failed to read message: {}", error.message());
+                co_await ws_conn.close();
+                co_return;
+            }
+
+            if (result.value()) {
+                recv_success = true;
                 break;
             }
-            HTTP_LOG_ERROR("Failed to read message: {}", error.message());
-            break;
         }
 
-        if (!result.value()) {
-            continue;
+        if (!recv_success) {
+            break;
         }
 
         g_message_count++;
@@ -73,10 +89,14 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         // 处理不同类型的消息
         if (opcode == WsOpcode::Ping) {
             HTTP_LOG_INFO("Received Ping, sending Pong");
-            auto pong_result = co_await writer.sendPong(message);
-            if (!pong_result) {
-                HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
-                break;
+            while (true) {
+                auto pong_result = co_await writer.sendPong(message);
+                if (!pong_result) {
+                    HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
+                    co_await ws_conn.close();
+                    co_return;
+                }
+                if (pong_result.value()) break;
             }
         }
         else if (opcode == WsOpcode::Pong) {
@@ -84,7 +104,10 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         }
         else if (opcode == WsOpcode::Close) {
             HTTP_LOG_INFO("Received Close frame");
-            co_await writer.sendClose();
+            while (true) {
+                auto close_result = co_await writer.sendClose();
+                if (!close_result || close_result.value()) break;
+            }
             break;
         }
         else if (opcode == WsOpcode::Text) {
@@ -92,20 +115,28 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
 
             // Echo back
             std::string echo_msg = "Echo: " + message;
-            auto echo_result = co_await writer.sendText(echo_msg);
-            if (!echo_result) {
-                HTTP_LOG_ERROR("Failed to send echo: {}", echo_result.error().message());
-                break;
+            while (true) {
+                auto echo_result = co_await writer.sendText(echo_msg);
+                if (!echo_result) {
+                    HTTP_LOG_ERROR("Failed to send echo: {}", echo_result.error().message());
+                    co_await ws_conn.close();
+                    co_return;
+                }
+                if (echo_result.value()) break;
             }
         }
         else if (opcode == WsOpcode::Binary) {
             HTTP_LOG_INFO("Binary message #{}, size: {}", g_message_count.load(), message.size());
 
             // Echo back binary
-            auto echo_result = co_await writer.sendBinary(message);
-            if (!echo_result) {
-                HTTP_LOG_ERROR("Failed to send binary echo: {}", echo_result.error().message());
-                break;
+            while (true) {
+                auto echo_result = co_await writer.sendBinary(message);
+                if (!echo_result) {
+                    HTTP_LOG_ERROR("Failed to send binary echo: {}", echo_result.error().message());
+                    co_await ws_conn.close();
+                    co_return;
+                }
+                if (echo_result.value()) break;
             }
         }
     }
@@ -156,17 +187,7 @@ Coroutine handleHttpRequest(HttpConn conn) {
             co_return;
         }
 
-        // 升级到 WebSocket
-        WsReaderSetting reader_setting;
-        reader_setting.max_frame_size = 1024 * 1024;
-        reader_setting.max_message_size = 10 * 1024 * 1024;
-
-        WsWriterSetting writer_setting;
-
-        WsConn ws_conn(
-            std::move(conn),
-            true  // is_server
-        );
+        WsConn ws_conn = WsConn::from(std::move(conn), true);
 
         co_await handleWebSocketConnection(ws_conn).wait();
     }

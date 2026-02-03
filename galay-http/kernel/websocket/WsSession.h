@@ -114,9 +114,9 @@ public:
 
     WsSessionImpl(SocketType& socket,
                   const WsUrl& url,
+                  const WsWriterSetting& writer_setting,
                   size_t ring_buffer_size = 8192,
-                  const WsReaderSetting& reader_setting = WsReaderSetting(),
-                  const WsWriterSetting& writer_setting = WsWriterSetting())
+                  const WsReaderSetting& reader_setting = WsReaderSetting())
         : m_socket(socket)
         , m_url(url)
         , m_ring_buffer(ring_buffer_size)

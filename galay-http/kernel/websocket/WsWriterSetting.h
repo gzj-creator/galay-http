@@ -15,12 +15,21 @@ struct WsWriterSetting
     bool auto_fragment;          // 是否自动分片大消息（默认 true）
     bool use_mask;               // 是否使用掩码（客户端必须为true，服务器必须为false）
 
-    WsWriterSetting(bool is_client = false)
+    WsWriterSetting(bool is_client)
         : max_frame_size(10 * 1024 * 1024)  // 10MB
         , auto_fragment(true)
         , use_mask(is_client)
     {
     }
+
+    static WsWriterSetting byClient() {
+        return WsWriterSetting(true);
+    }
+
+    static WsWriterSetting byServer() {
+        return WsWriterSetting(false);
+    }
+
 };
 
 } // namespace galay::websocket

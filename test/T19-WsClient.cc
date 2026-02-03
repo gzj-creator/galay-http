@@ -10,6 +10,8 @@
 
 #include "galay-http/kernel/websocket/WsClient.h"
 #include "galay-kernel/kernel/Runtime.h"
+#include "kernel/websocket/WsReaderSetting.h"
+#include "kernel/websocket/WsWriterSetting.h"
 #include <iostream>
 #include <atomic>
 
@@ -36,7 +38,7 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_messages) {
         co_return;
     }
     std::cout << "Connected!" << std::endl;
-    auto session = client.getSession();
+    auto session = client.getSession(WsWriterSetting::byClient());
     // Upgrade to WebSocket
     std::cout << "Upgrading to WebSocket..." << std::endl;
     auto upgrader = session.upgrade();

@@ -9,6 +9,7 @@
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
 #include "galay-http/kernel/websocket/WsConn.h"
+#include "galay-http/kernel/websocket/WsWriterSetting.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
@@ -50,13 +51,9 @@ Coroutine handleWebSocketClient(WsConn& ws_conn) {
     reader_setting.max_frame_size = 1024 * 1024;  // 1MB
     reader_setting.max_message_size = 10 * 1024 * 1024;  // 10MB
 
-    WsWriterSetting writer_setting;
-    // 注意：不需要手动设置 use_mask，WsConn 会根据 is_server 参数自动设置
- 
-
     // 获取 Reader 和 Writer
     auto reader = ws_conn.getReader(reader_setting);
-    auto writer = ws_conn.getWriter(writer_setting);
+    auto writer = ws_conn.getWriter(WsWriterSetting::byClient());
 
     // 读取欢迎消息
     LogInfo("Waiting for welcome message");

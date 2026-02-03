@@ -24,12 +24,11 @@ class WsConnImpl
 public:
     /**
      * @brief 从HttpConn构造（用于升级场景）
+     * @note 升级之后HttpConn不再可用
      */
-    WsConnImpl(galay::http::HttpConnImpl<SocketType>&& http_conn, bool is_server = true)
-        : m_socket(std::move(http_conn.m_socket))
-        , m_ring_buffer(std::move(http_conn.m_ring_buffer))
-        , m_is_server(is_server)
+    static WsConnImpl<SocketType> from(galay::http::HttpConnImpl<SocketType>&& http_conn, bool is_server = true)
     {
+        return WsConnImpl<SocketType>(std::move(http_conn.m_socket), std::move(http_conn.m_ring_buffer), is_server);
     }
 
     /**
@@ -95,7 +94,7 @@ public:
      * @param setting WsWriterSetting配置
      * @return WsWriterImpl<SocketType> Writer对象
      */
-    WsWriterImpl<SocketType> getWriter(WsWriterSetting setting = WsWriterSetting()) {
+    WsWriterImpl<SocketType> getWriter(WsWriterSetting setting) {
         // 客户端需要mask，服务器不需要
         setting.use_mask = !m_is_server;
         return WsWriterImpl<SocketType>(setting, m_socket);

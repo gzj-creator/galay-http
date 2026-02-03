@@ -106,7 +106,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     reader_setting.max_frame_size = 1024 * 1024;
     reader_setting.max_message_size = 10 * 1024 * 1024;
 
-    WsWriterSetting writer_setting;
+    WsWriterSetting writer_setting = WsWriterSetting::byClient();
 
     WsConn ws_conn(
         std::move(client.socket()),

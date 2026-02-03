@@ -44,11 +44,12 @@ public:
         , m_readv_awaitable(std::move(readv_awaitable))
         , m_is_server(is_server)
         , m_total_received(0)
+        , m_has_buffered_frame(checkBufferedFrame())
     {
     }
 
     bool await_ready() const noexcept {
-        return false;
+        return m_has_buffered_frame;
     }
 
     auto await_suspend(std::coroutine_handle<> handle) {
@@ -56,6 +57,10 @@ public:
     }
 
     std::expected<bool, WsError> await_resume() {
+        if (m_has_buffered_frame) {
+            return parseFromBuffer();
+        }
+
         auto result = m_readv_awaitable.await_resume();
 
         if (!result.has_value()) {
@@ -70,14 +75,39 @@ public:
         m_total_received += bytes_received;
         m_ring_buffer->produce(bytes_received);
 
+        return parseFromBuffer();
+    }
+
+private:
+    bool checkBufferedFrame() const {
         auto iovecs = m_ring_buffer->getReadIovecs();
+        if (iovecs.empty()) {
+            return false;
+        }
+
+        WsFrame frame;
+        auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, m_is_server);
+        if (!parse_result.has_value()) {
+            return parse_result.error().code() != kWsIncomplete;
+        }
+
+        return true;
+    }
+
+    std::expected<bool, WsError> parseFromBuffer() {
+        auto iovecs = m_ring_buffer->getReadIovecs();
+        if (iovecs.empty()) {
+            return false;
+        }
+
         auto parse_result = WsFrameParser::fromIOVec(iovecs, *m_frame, m_is_server);
 
         if (!parse_result.has_value()) {
             WsError error = parse_result.error();
 
             if (error.code() == kWsIncomplete) {
-                if (m_total_received > m_setting->max_frame_size) {
+                size_t buffered = m_ring_buffer->readable();
+                if (m_total_received + buffered > m_setting->max_frame_size) {
                     return std::unexpected(WsError(kWsMessageTooLarge, "Frame size exceeds limit"));
                 }
                 return false;
@@ -96,13 +126,13 @@ public:
         return true;
     }
 
-private:
     RingBuffer* m_ring_buffer;
     const WsReaderSetting* m_setting;
     WsFrame* m_frame;
     ReadvAwaitableType m_readv_awaitable;
     bool m_is_server;
     size_t m_total_received;
+    bool m_has_buffered_frame;
 
 public:
     std::expected<bool, galay::kernel::IOError> m_result;
@@ -137,11 +167,12 @@ public:
         , m_total_received(0)
         , m_first_frame(true)
         , m_control_frame_callback(control_frame_callback)
+        , m_has_buffered_message(checkBufferedMessage())
     {
     }
 
     bool await_ready() const noexcept {
-        return false;
+        return m_has_buffered_message;
     }
 
     auto await_suspend(std::coroutine_handle<> handle) {
@@ -149,6 +180,10 @@ public:
     }
 
     std::expected<bool, WsError> await_resume() {
+        if (m_has_buffered_message) {
+            return parseFromBuffer();
+        }
+
         auto result = m_readv_awaitable.await_resume();
 
         if (!result.has_value()) {
@@ -163,6 +198,83 @@ public:
         m_total_received += bytes_received;
         m_ring_buffer->produce(bytes_received);
 
+        return parseFromBuffer();
+    }
+
+private:
+    static std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t offset) {
+        std::vector<iovec> out;
+        size_t current_offset = offset;
+
+        for (const auto& iov : iovecs) {
+            if (current_offset >= iov.iov_len) {
+                current_offset -= iov.iov_len;
+                continue;
+            }
+
+            iovec sliced = iov;
+            sliced.iov_base = static_cast<char*>(iov.iov_base) + current_offset;
+            sliced.iov_len = iov.iov_len - current_offset;
+            out.push_back(sliced);
+            current_offset = 0;
+        }
+
+        return out;
+    }
+
+    bool checkBufferedMessage() const {
+        auto iovecs = m_ring_buffer->getReadIovecs();
+        if (iovecs.empty()) {
+            return false;
+        }
+
+        size_t total = 0;
+        for (const auto& iov : iovecs) {
+            total += iov.iov_len;
+        }
+
+        size_t offset = 0;
+        bool first_frame = true;
+
+        while (offset < total) {
+            auto sliced = sliceIovecs(iovecs, offset);
+            if (sliced.empty()) {
+                return false;
+            }
+
+            WsFrame frame;
+            auto parse_result = WsFrameParser::fromIOVec(sliced, frame, m_is_server);
+
+            if (!parse_result.has_value()) {
+                return parse_result.error().code() != kWsIncomplete;
+            }
+
+            offset += parse_result.value();
+
+            if (isControlFrame(frame.header.opcode)) {
+                return true;
+            }
+
+            if (first_frame) {
+                if (frame.header.opcode == WsOpcode::Continuation) {
+                    return true;
+                }
+                first_frame = false;
+            } else {
+                if (frame.header.opcode != WsOpcode::Continuation) {
+                    return true;
+                }
+            }
+
+            if (frame.header.fin) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    std::expected<bool, WsError> parseFromBuffer() {
         while (true) {
             auto iovecs = m_ring_buffer->getReadIovecs();
             if (iovecs.empty()) {
@@ -176,7 +288,8 @@ public:
                 WsError error = parse_result.error();
 
                 if (error.code() == kWsIncomplete) {
-                    if (m_message->size() + m_total_received > m_setting->max_message_size) {
+                    size_t buffered = m_ring_buffer->readable();
+                    if (m_message->size() + m_total_received + buffered > m_setting->max_message_size) {
                         return std::unexpected(WsError(kWsMessageTooLarge, "Message size exceeds limit"));
                     }
                     return false;
@@ -226,7 +339,6 @@ public:
         }
     }
 
-private:
     RingBuffer* m_ring_buffer;
     const WsReaderSetting* m_setting;
     std::string* m_message;
@@ -238,6 +350,7 @@ private:
     size_t m_total_received;
     bool m_first_frame;
     ControlFrameCallback m_control_frame_callback;
+    bool m_has_buffered_message;
 
 public:
     std::expected<bool, galay::kernel::IOError> m_result;
@@ -252,7 +365,7 @@ class WsReaderImpl
 public:
     WsReaderImpl(RingBuffer& ring_buffer, const WsReaderSetting& setting, SocketType& socket, bool is_server = true, bool use_mask = false)
         : m_ring_buffer(&ring_buffer)
-        , m_setting(&setting)
+        , m_setting(setting)
         , m_socket(&socket)
         , m_is_server(is_server)
         , m_use_mask(use_mask)
@@ -260,20 +373,20 @@ public:
     }
 
     GetFrameAwaitableImpl<SocketType> getFrame(WsFrame& frame) {
-        return GetFrameAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, frame,
+        return GetFrameAwaitableImpl<SocketType>(*m_ring_buffer, m_setting, frame,
                                 m_socket->readv(m_ring_buffer->getWriteIovecs()),
                                 m_is_server);
     }
 
     GetMessageAwaitableImpl<SocketType> getMessage(std::string& message, WsOpcode& opcode) {
-        return GetMessageAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, message, opcode,
+        return GetMessageAwaitableImpl<SocketType>(*m_ring_buffer, m_setting, message, opcode,
                                   m_socket->readv(m_ring_buffer->getWriteIovecs()),
                                   m_is_server, *m_socket, m_use_mask);
     }
 
 private:
     RingBuffer* m_ring_buffer;
-    const WsReaderSetting* m_setting;
+    WsReaderSetting m_setting;
     SocketType* m_socket;
     bool m_is_server;
     bool m_use_mask;
