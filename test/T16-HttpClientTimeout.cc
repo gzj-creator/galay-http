@@ -49,13 +49,16 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
         // 创建 HttpClient
         HttpClient client(std::move(socket));
 
+        // 获取Session
+        auto session = client.getSession();
+
         // 发送请求并设置 1 秒超时（假设服务器会延迟 5 秒响应）
         LogInfo("Sending GET request with 1s timeout...");
 
         int loop_count = 0;
         while (true) {
             loop_count++;
-            auto result = co_await client.get("/delay/5").timeout(1000ms);
+            auto result = co_await session.get("/delay/5").timeout(1000ms);
 
             if (!result) {
                 // 期望超时错误
@@ -151,13 +154,16 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
         // 创建 HttpClient
         HttpClient client(std::move(socket));
 
+        // 获取Session
+        auto session = client.getSession();
+
         // 请求一个会导致服务器断开连接的端点
         LogInfo("Sending GET request to /disconnect endpoint...");
 
         int loop_count = 0;
         while (true) {
             loop_count++;
-            auto result = co_await client.get("/disconnect");
+            auto result = co_await session.get("/disconnect");
 
             if (!result) {
                 // 期望连接错误
@@ -219,11 +225,12 @@ Coroutine testReceiveTimeout(IOScheduler* scheduler)
 
         // 请求一个会发送部分数据然后停止的端点
         LogInfo("Sending GET request to /partial endpoint with 2s timeout...");
+        auto session = client.getSession();
 
         int loop_count = 0;
         while (true) {
             loop_count++;
-            auto result = co_await client.get("/partial").timeout(2000ms);
+            auto result = co_await session.get("/partial").timeout(2000ms);
 
             if (!result) {
                 if (result.error().code() == kRequestTimeOut || result.error().code() == kRecvTimeOut) {
@@ -279,12 +286,14 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
         // 创建 HttpClient
         HttpClient client(std::move(socket));
 
+        auto session = client.getSession();
+
         // 第一次请求：超时
         LogInfo("First request with 1s timeout...");
         int loop_count = 0;
         while (true) {
             loop_count++;
-            auto result1 = co_await client.get("/delay/5").timeout(1000ms);
+            auto result1 = co_await session.get("/delay/5").timeout(1000ms);
 
             if (!result1) {
                 if (result1.error().code() == kRequestTimeOut || result1.error().code() == kRecvTimeOut) {
@@ -299,13 +308,12 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
             }
             LogInfo("  First request in progress (loop {})...", loop_count);
         }
-
         // 第二次请求：正常完成
         LogInfo("Second request with sufficient timeout...");
         loop_count = 0;
         while (true) {
             loop_count++;
-            auto result2 = co_await client.get("/api/data").timeout(5000ms);
+            auto result2 = co_await session.get("/api/data").timeout(5000ms);
 
             if (!result2) {
                 LogInfo("⚠ Second request failed: {}", result2.error().message());
@@ -361,11 +369,11 @@ Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
 
         // 发送正常请求，设置足够长的超时
         LogInfo("Sending GET request with 5s timeout...");
-
+        auto session = client.getSession();
         int loop_count = 0;
         while (true) {
             loop_count++;
-            auto result = co_await client.get("/api/data").timeout(5000ms);
+            auto result = co_await session.get("/api/data").timeout(5000ms);
 
             if (!result) {
                 LogError("❌ Request failed: {}", result.error().message());

@@ -125,7 +125,7 @@ int main() {
     std::cout << std::endl;
 
     // 创建运行时
-    Runtime rt(LoadBalanceStrategy::ROUND_ROBIN, 1, 0);
+    Runtime rt(1, 0);
     rt.start();
 
     auto* scheduler = rt.getNextIOScheduler();

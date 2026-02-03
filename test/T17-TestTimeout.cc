@@ -39,13 +39,15 @@ Coroutine testHttpClientAwaitableTimeout(IOScheduler* scheduler)
 
     HttpClient client(std::move(socket));
 
+    auto session = client.getSession();
+
     // 测试超时
     auto start = std::chrono::steady_clock::now();
     int loop_count = 0;
 
     while (true) {
         loop_count++;
-        auto result = co_await client.get("/delay/5").timeout(1000ms);
+        auto result = co_await session.get("/delay/5").timeout(1000ms);
 
         if (!result || result.value().has_value() || loop_count > 100) {
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

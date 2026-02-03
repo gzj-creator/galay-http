@@ -136,7 +136,7 @@ BenchmarkStats benchmark_file_transfer(
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // 创建客户端 Runtime
-    Runtime client_runtime(LoadBalanceStrategy::ROUND_ROBIN, 2, 1);
+    Runtime client_runtime(2, 1);
     client_runtime.start();
 
     // 执行基准测试

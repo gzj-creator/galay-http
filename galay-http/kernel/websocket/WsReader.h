@@ -38,9 +38,9 @@ public:
                          WsFrame& frame,
                          ReadvAwaitableType&& readv_awaitable,
                          bool is_server)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_frame(frame)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_frame(&frame)
         , m_readv_awaitable(std::move(readv_awaitable))
         , m_is_server(is_server)
         , m_total_received(0)
@@ -68,16 +68,16 @@ public:
         }
 
         m_total_received += bytes_received;
-        m_ring_buffer.produce(bytes_received);
+        m_ring_buffer->produce(bytes_received);
 
-        auto iovecs = m_ring_buffer.getReadIovecs();
-        auto parse_result = WsFrameParser::fromIOVec(iovecs, m_frame, m_is_server);
+        auto iovecs = m_ring_buffer->getReadIovecs();
+        auto parse_result = WsFrameParser::fromIOVec(iovecs, *m_frame, m_is_server);
 
         if (!parse_result.has_value()) {
             WsError error = parse_result.error();
 
             if (error.code() == kWsIncomplete) {
-                if (m_total_received > m_setting.max_frame_size) {
+                if (m_total_received > m_setting->max_frame_size) {
                     return std::unexpected(WsError(kWsMessageTooLarge, "Frame size exceeds limit"));
                 }
                 return false;
@@ -87,9 +87,9 @@ public:
         }
 
         size_t consumed = parse_result.value();
-        m_ring_buffer.consume(consumed);
+        m_ring_buffer->consume(consumed);
 
-        if (m_frame.header.payload_length > m_setting.max_frame_size) {
+        if (m_frame->header.payload_length > m_setting->max_frame_size) {
             return std::unexpected(WsError(kWsMessageTooLarge, "Frame payload too large"));
         }
 
@@ -97,9 +97,9 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const WsReaderSetting& m_setting;
-    WsFrame& m_frame;
+    RingBuffer* m_ring_buffer;
+    const WsReaderSetting* m_setting;
+    WsFrame* m_frame;
     ReadvAwaitableType m_readv_awaitable;
     bool m_is_server;
     size_t m_total_received;
@@ -126,13 +126,13 @@ public:
                            SocketType& socket,
                            bool use_mask,
                            ControlFrameCallback control_frame_callback = nullptr)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_message(message)
-        , m_opcode(opcode)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_message(&message)
+        , m_opcode(&opcode)
         , m_readv_awaitable(std::move(readv_awaitable))
         , m_is_server(is_server)
-        , m_socket(socket)
+        , m_socket(&socket)
         , m_use_mask(use_mask)
         , m_total_received(0)
         , m_first_frame(true)
@@ -161,10 +161,10 @@ public:
         }
 
         m_total_received += bytes_received;
-        m_ring_buffer.produce(bytes_received);
+        m_ring_buffer->produce(bytes_received);
 
         while (true) {
-            auto iovecs = m_ring_buffer.getReadIovecs();
+            auto iovecs = m_ring_buffer->getReadIovecs();
             if (iovecs.empty()) {
                 return false;
             }
@@ -176,7 +176,7 @@ public:
                 WsError error = parse_result.error();
 
                 if (error.code() == kWsIncomplete) {
-                    if (m_message.size() + m_total_received > m_setting.max_message_size) {
+                    if (m_message->size() + m_total_received > m_setting->max_message_size) {
                         return std::unexpected(WsError(kWsMessageTooLarge, "Message size exceeds limit"));
                     }
                     return false;
@@ -186,15 +186,15 @@ public:
             }
 
             size_t consumed = parse_result.value();
-            m_ring_buffer.consume(consumed);
+            m_ring_buffer->consume(consumed);
 
             if (isControlFrame(frame.header.opcode)) {
                 if (!frame.header.fin) {
                     return std::unexpected(WsError(kWsControlFrameFragmented));
                 }
 
-                m_message = frame.payload;
-                m_opcode = frame.header.opcode;
+                *m_message = frame.payload;
+                *m_opcode = frame.header.opcode;
                 return true;
             }
 
@@ -202,7 +202,7 @@ public:
                 if (frame.header.opcode == WsOpcode::Continuation) {
                     return std::unexpected(WsError(kWsProtocolError, "First frame cannot be continuation"));
                 }
-                m_opcode = frame.header.opcode;
+                *m_opcode = frame.header.opcode;
                 m_first_frame = false;
             } else {
                 if (frame.header.opcode != WsOpcode::Continuation) {
@@ -210,9 +210,9 @@ public:
                 }
             }
 
-            m_message += frame.payload;
+            *m_message += frame.payload;
 
-            if (m_message.size() > m_setting.max_message_size) {
+            if (m_message->size() > m_setting->max_message_size) {
                 return std::unexpected(WsError(kWsMessageTooLarge, "Message size exceeds limit"));
             }
 
@@ -220,20 +220,20 @@ public:
                 return true;
             }
 
-            if (m_ring_buffer.getReadIovecs().empty()) {
+            if (m_ring_buffer->getReadIovecs().empty()) {
                 return false;
             }
         }
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const WsReaderSetting& m_setting;
-    std::string& m_message;
-    WsOpcode& m_opcode;
+    RingBuffer* m_ring_buffer;
+    const WsReaderSetting* m_setting;
+    std::string* m_message;
+    WsOpcode* m_opcode;
     ReadvAwaitableType m_readv_awaitable;
     bool m_is_server;
-    SocketType& m_socket;
+    SocketType* m_socket;
     bool m_use_mask;
     size_t m_total_received;
     bool m_first_frame;
@@ -251,30 +251,30 @@ class WsReaderImpl
 {
 public:
     WsReaderImpl(RingBuffer& ring_buffer, const WsReaderSetting& setting, SocketType& socket, bool is_server = true, bool use_mask = false)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_socket(&socket)
         , m_is_server(is_server)
         , m_use_mask(use_mask)
     {
     }
 
     GetFrameAwaitableImpl<SocketType> getFrame(WsFrame& frame) {
-        return GetFrameAwaitableImpl<SocketType>(m_ring_buffer, m_setting, frame,
-                                m_socket.readv(m_ring_buffer.getWriteIovecs()),
+        return GetFrameAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, frame,
+                                m_socket->readv(m_ring_buffer->getWriteIovecs()),
                                 m_is_server);
     }
 
     GetMessageAwaitableImpl<SocketType> getMessage(std::string& message, WsOpcode& opcode) {
-        return GetMessageAwaitableImpl<SocketType>(m_ring_buffer, m_setting, message, opcode,
-                                  m_socket.readv(m_ring_buffer.getWriteIovecs()),
-                                  m_is_server, m_socket, m_use_mask);
+        return GetMessageAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, message, opcode,
+                                  m_socket->readv(m_ring_buffer->getWriteIovecs()),
+                                  m_is_server, *m_socket, m_use_mask);
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const WsReaderSetting& m_setting;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const WsReaderSetting* m_setting;
+    SocketType* m_socket;
     bool m_is_server;
     bool m_use_mask;
 };

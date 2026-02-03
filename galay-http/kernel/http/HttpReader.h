@@ -59,10 +59,10 @@ public:
                            const HttpReaderSetting& setting,
                            HttpRequest& request,
                            SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_request(request)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_request(&request)
+        , m_socket(&socket)
         , m_total_received(0)
     {
     }
@@ -74,7 +74,7 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
+            m_readv_awaitable.emplace(m_socket->readv(m_ring_buffer->getWriteIovecs()));
         }
         return m_readv_awaitable->await_suspend(handle);
     }
@@ -97,24 +97,24 @@ public:
             return std::unexpected(HttpError(kConnectionClose));
         }
 
-        m_ring_buffer.produce(bytes_read);
+        m_ring_buffer->produce(bytes_read);
         m_total_received += bytes_read;
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_request.fromIOVec(read_iovecs);
+        auto [error_code, consumed] = m_request->fromIOVec(read_iovecs);
 
         if (consumed > 0) {
-            m_ring_buffer.consume(consumed);
+            m_ring_buffer->consume(consumed);
         }
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
-            if (m_total_received >= m_setting.getMaxHeaderSize() && !m_request.isComplete()) {
+            if (m_total_received >= m_setting->getMaxHeaderSize() && !m_request->isComplete()) {
                 HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
-                            m_total_received, m_setting.getMaxHeaderSize());
+                            m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
             return false;
@@ -125,7 +125,7 @@ public:
             return std::unexpected(HttpError(error_code));
         }
 
-        if (m_request.isComplete()) {
+        if (m_request->isComplete()) {
             return true;
         }
 
@@ -133,10 +133,10 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    HttpRequest& m_request;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    HttpRequest* m_request;
+    SocketType* m_socket;
     size_t m_total_received;
     std::optional<ReadvAwaitableType> m_readv_awaitable;
 
@@ -156,10 +156,10 @@ public:
                            const HttpReaderSetting& setting,
                            HttpRequest& request,
                            SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_request(request)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_request(&request)
+        , m_socket(&socket)
         , m_total_received(0)
     {
     }
@@ -171,9 +171,9 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_recv_awaitable) {
-            auto write_iovecs = m_ring_buffer.getWriteIovecs();
+            auto write_iovecs = m_ring_buffer->getWriteIovecs();
             if (!write_iovecs.empty()) {
-                m_recv_awaitable.emplace(m_socket.recv(
+                m_recv_awaitable.emplace(m_socket->recv(
                     static_cast<char*>(write_iovecs[0].iov_base),
                     write_iovecs[0].iov_len));
             }
@@ -215,24 +215,24 @@ public:
             return std::unexpected(HttpError(kConnectionClose));
         }
 
-        m_ring_buffer.produce(bytes_read);
+        m_ring_buffer->produce(bytes_read);
         m_total_received += bytes_read;
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_request.fromIOVec(read_iovecs);
+        auto [error_code, consumed] = m_request->fromIOVec(read_iovecs);
 
         if (consumed > 0) {
-            m_ring_buffer.consume(consumed);
+            m_ring_buffer->consume(consumed);
         }
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
-            if (m_total_received >= m_setting.getMaxHeaderSize() && !m_request.isComplete()) {
+            if (m_total_received >= m_setting->getMaxHeaderSize() && !m_request->isComplete()) {
                 HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
-                            m_total_received, m_setting.getMaxHeaderSize());
+                            m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
             return false;
@@ -243,7 +243,7 @@ public:
             return std::unexpected(HttpError(error_code));
         }
 
-        if (m_request.isComplete()) {
+        if (m_request->isComplete()) {
             return true;
         }
 
@@ -251,10 +251,10 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    HttpRequest& m_request;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    HttpRequest* m_request;
+    SocketType* m_socket;
     size_t m_total_received;
     std::optional<RecvAwaitableType> m_recv_awaitable;
 
@@ -280,10 +280,10 @@ public:
                             const HttpReaderSetting& setting,
                             HttpResponse& response,
                             SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_response(response)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_response(&response)
+        , m_socket(&socket)
         , m_total_received(0)
     {
     }
@@ -295,7 +295,7 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
+            m_readv_awaitable.emplace(m_socket->readv(m_ring_buffer->getWriteIovecs()));
         }
         return m_readv_awaitable->await_suspend(handle);
     }
@@ -318,24 +318,24 @@ public:
             return std::unexpected(HttpError(kConnectionClose));
         }
 
-        m_ring_buffer.produce(bytes_read);
+        m_ring_buffer->produce(bytes_read);
         m_total_received += bytes_read;
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response.fromIOVec(read_iovecs);
+        auto [error_code, consumed] = m_response->fromIOVec(read_iovecs);
 
         if (consumed > 0) {
-            m_ring_buffer.consume(consumed);
+            m_ring_buffer->consume(consumed);
         }
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
-            if (m_total_received >= m_setting.getMaxHeaderSize() && !m_response.isComplete()) {
+            if (m_total_received >= m_setting->getMaxHeaderSize() && !m_response->isComplete()) {
                 HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
-                            m_total_received, m_setting.getMaxHeaderSize());
+                            m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
             return false;
@@ -346,7 +346,7 @@ public:
             return std::unexpected(HttpError(error_code));
         }
 
-        if (m_response.isComplete()) {
+        if (m_response->isComplete()) {
             return true;
         }
 
@@ -354,10 +354,10 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    HttpResponse& m_response;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    HttpResponse* m_response;
+    SocketType* m_socket;
     size_t m_total_received;
     std::optional<ReadvAwaitableType> m_readv_awaitable;
 
@@ -377,10 +377,10 @@ public:
                             const HttpReaderSetting& setting,
                             HttpResponse& response,
                             SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_response(response)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_response(&response)
+        , m_socket(&socket)
         , m_total_received(0)
     {
     }
@@ -392,9 +392,9 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_recv_awaitable) {
-            auto write_iovecs = m_ring_buffer.getWriteIovecs();
+            auto write_iovecs = m_ring_buffer->getWriteIovecs();
             if (!write_iovecs.empty()) {
-                m_recv_awaitable.emplace(m_socket.recv(
+                m_recv_awaitable.emplace(m_socket->recv(
                     static_cast<char*>(write_iovecs[0].iov_base),
                     write_iovecs[0].iov_len));
             }
@@ -436,24 +436,24 @@ public:
             return std::unexpected(HttpError(kConnectionClose));
         }
 
-        m_ring_buffer.produce(bytes_read);
+        m_ring_buffer->produce(bytes_read);
         m_total_received += bytes_read;
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response.fromIOVec(read_iovecs);
+        auto [error_code, consumed] = m_response->fromIOVec(read_iovecs);
 
         if (consumed > 0) {
-            m_ring_buffer.consume(consumed);
+            m_ring_buffer->consume(consumed);
         }
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
-            if (m_total_received >= m_setting.getMaxHeaderSize() && !m_response.isComplete()) {
+            if (m_total_received >= m_setting->getMaxHeaderSize() && !m_response->isComplete()) {
                 HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
-                            m_total_received, m_setting.getMaxHeaderSize());
+                            m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
             return false;
@@ -464,7 +464,7 @@ public:
             return std::unexpected(HttpError(error_code));
         }
 
-        if (m_response.isComplete()) {
+        if (m_response->isComplete()) {
             return true;
         }
 
@@ -472,10 +472,10 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    HttpResponse& m_response;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    HttpResponse* m_response;
+    SocketType* m_socket;
     size_t m_total_received;
     std::optional<RecvAwaitableType> m_recv_awaitable;
 
@@ -501,10 +501,10 @@ public:
                          const HttpReaderSetting& setting,
                          std::string& chunk_data,
                          SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_chunk_data(chunk_data)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_chunk_data(&chunk_data)
+        , m_socket(&socket)
     {
     }
 
@@ -515,7 +515,7 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
+            m_readv_awaitable.emplace(m_socket->readv(m_ring_buffer->getWriteIovecs()));
         }
         return m_readv_awaitable->await_suspend(handle);
     }
@@ -538,14 +538,14 @@ public:
             return std::unexpected(HttpError(kConnectionClose));
         }
 
-        m_ring_buffer.produce(bytes_read);
+        m_ring_buffer->produce(bytes_read);
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto result = Chunk::fromIOVec(read_iovecs, m_chunk_data);
+        auto result = Chunk::fromIOVec(read_iovecs, *m_chunk_data);
 
         if (!result) {
             auto& error = result.error();
@@ -557,7 +557,7 @@ public:
         }
 
         auto [is_last, consumed] = result.value();
-        m_ring_buffer.consume(consumed);
+        m_ring_buffer->consume(consumed);
 
         if (is_last) {
             return true;
@@ -567,10 +567,10 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    std::string& m_chunk_data;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    std::string* m_chunk_data;
+    SocketType* m_socket;
     std::optional<ReadvAwaitableType> m_readv_awaitable;
 
 public:
@@ -589,10 +589,10 @@ public:
                          const HttpReaderSetting& setting,
                          std::string& chunk_data,
                          SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_chunk_data(chunk_data)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_chunk_data(&chunk_data)
+        , m_socket(&socket)
     {
     }
 
@@ -603,9 +603,9 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_recv_awaitable) {
-            auto write_iovecs = m_ring_buffer.getWriteIovecs();
+            auto write_iovecs = m_ring_buffer->getWriteIovecs();
             if (!write_iovecs.empty()) {
-                m_recv_awaitable.emplace(m_socket.recv(
+                m_recv_awaitable.emplace(m_socket->recv(
                     static_cast<char*>(write_iovecs[0].iov_base),
                     write_iovecs[0].iov_len));
             }
@@ -627,9 +627,9 @@ public:
             return std::unexpected(HttpError(kConnectionClose));
         }
 
-        m_ring_buffer.produce(bytes_read);
+        m_ring_buffer->produce(bytes_read);
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
         if (read_iovecs.empty()) {
             return false;
         }
@@ -646,7 +646,7 @@ public:
         }
 
         auto [is_last, consumed] = result.value();
-        m_ring_buffer.consume(consumed);
+        m_ring_buffer->consume(consumed);
 
         if (is_last) {
             return true;
@@ -656,10 +656,10 @@ public:
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    std::string& m_chunk_data;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    std::string* m_chunk_data;
+    SocketType* m_socket;
     std::optional<RecvAwaitableType> m_recv_awaitable;
 
 public:
@@ -675,28 +675,28 @@ class HttpReaderImpl
 {
 public:
     HttpReaderImpl(RingBuffer& ring_buffer, const HttpReaderSetting& setting, SocketType& socket)
-        : m_ring_buffer(ring_buffer)
-        , m_setting(setting)
-        , m_socket(socket)
+        : m_ring_buffer(&ring_buffer)
+        , m_setting(&setting)
+        , m_socket(&socket)
     {
     }
 
     GetRequestAwaitableImpl<SocketType> getRequest(HttpRequest& request) {
-        return GetRequestAwaitableImpl<SocketType>(m_ring_buffer, m_setting, request, m_socket);
+        return GetRequestAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, request, *m_socket);
     }
 
     GetResponseAwaitableImpl<SocketType> getResponse(HttpResponse& response) {
-        return GetResponseAwaitableImpl<SocketType>(m_ring_buffer, m_setting, response, m_socket);
+        return GetResponseAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, response, *m_socket);
     }
 
     GetChunkAwaitableImpl<SocketType> getChunk(std::string& chunk_data) {
-        return GetChunkAwaitableImpl<SocketType>(m_ring_buffer, m_setting, chunk_data, m_socket);
+        return GetChunkAwaitableImpl<SocketType>(*m_ring_buffer, *m_setting, chunk_data, *m_socket);
     }
 
 private:
-    RingBuffer& m_ring_buffer;
-    const HttpReaderSetting& m_setting;
-    SocketType& m_socket;
+    RingBuffer* m_ring_buffer;
+    const HttpReaderSetting* m_setting;
+    SocketType* m_socket;
 };
 
 // 类型别名 - HTTP (TcpSocket)

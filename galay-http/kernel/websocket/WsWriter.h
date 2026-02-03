@@ -72,8 +72,8 @@ class WsWriterImpl
 {
 public:
     WsWriterImpl(const WsWriterSetting& setting, SocketType& socket)
-        : m_setting(setting)
-        , m_socket(socket)
+        : m_setting(&setting)
+        , m_socket(&socket)
         , m_remaining_bytes(0)
     {
     }
@@ -81,78 +81,78 @@ public:
     SendFrameAwaitableImpl<SocketType> sendText(const std::string& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createTextFrame(text, fin);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendFrameAwaitableImpl<SocketType> sendBinary(const std::string& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createBinaryFrame(data, fin);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendFrameAwaitableImpl<SocketType> sendPing(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPingFrame(data);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendFrameAwaitableImpl<SocketType> sendPong(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPongFrame(data);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendFrameAwaitableImpl<SocketType> sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createCloseFrame(code, reason);
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendFrameAwaitableImpl<SocketType> sendFrame(const WsFrame& frame) {
         if (m_remaining_bytes == 0) {
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_buffer = WsFrameParser::toBytes(frame, m_setting->use_mask);
             m_remaining_bytes = m_buffer.size();
         }
 
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendFrameAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     void updateRemaining(size_t bytes_sent) {
@@ -169,8 +169,8 @@ public:
     }
 
 private:
-    const WsWriterSetting& m_setting;
-    SocketType& m_socket;
+    const WsWriterSetting* m_setting;
+    SocketType* m_socket;
     std::string m_buffer;
     size_t m_remaining_bytes;
 };

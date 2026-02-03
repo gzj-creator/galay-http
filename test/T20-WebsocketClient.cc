@@ -69,8 +69,10 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
 
     LogInfo("Sending WebSocket upgrade request");
 
+    auto session = client.getSession();
+
     // 发送升级请求
-    auto writer = client.getWriter();
+    auto writer = session.getWriter();
     auto send_result = co_await writer.sendRequest(request);
     if (!send_result) {
         LogError("Failed to send upgrade request: {}", send_result.error().message());
@@ -79,7 +81,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     }
 
     // 读取升级响应
-    auto reader = client.getReader();
+    auto reader = session.getReader();
     HttpResponse response;
     bool complete = false;
     while (!complete) {

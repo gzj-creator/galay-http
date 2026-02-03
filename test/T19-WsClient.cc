@@ -36,10 +36,10 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_messages) {
         co_return;
     }
     std::cout << "Connected!" << std::endl;
-
+    auto session = client.getSession();
     // Upgrade to WebSocket
     std::cout << "Upgrading to WebSocket..." << std::endl;
-    auto upgrader = client.upgrade();
+    auto upgrader = session.upgrade();
     bool upgraded = false;
     while (!upgraded) {
         auto upgrade_result = co_await upgrader();
@@ -56,8 +56,8 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_messages) {
         // 如果返回 false，继续循环等待升级完成
     }
 
-    auto& reader = client.getWsReader();
-    auto& writer = client.getWsWriter();
+    auto& reader = session.getReader();
+    auto& writer = session.getWriter();
 
     // 接收欢迎消息
     std::cout << "Waiting for welcome message..." << std::endl;

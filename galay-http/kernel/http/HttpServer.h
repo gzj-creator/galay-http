@@ -38,8 +38,6 @@ struct HttpServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
-    HttpReaderSetting reader_setting;
-    HttpWriterSetting writer_setting;
 };
 
 /**
@@ -76,10 +74,13 @@ public:
         m_router = std::move(router);
 
         m_handler = [this](HttpConnImpl<SocketType> conn) -> Coroutine {
+            HTTP_LOG_DEBUG("Handler started");
             bool keep_alive = true;
 
             while (keep_alive) {
+                HTTP_LOG_DEBUG("Creating reader from conn");
                 auto reader = conn.getReader();
+                HTTP_LOG_DEBUG("Reader created, about to read request");
                 HttpRequest request;
                 auto read_result = co_await reader.getRequest(request);
 
@@ -88,6 +89,7 @@ public:
                     break;
                 }
 
+                HTTP_LOG_DEBUG("Request read successfully");
                 keep_alive = request.header().isKeepAlive() && !request.header().isConnectionClose();
 
                 auto match = m_router->findHandler(request.header().method(), request.header().uri());
@@ -115,12 +117,14 @@ public:
                     continue;
                 }
 
+                HTTP_LOG_DEBUG("Found handler, calling it with conn reference");
                 if constexpr (std::is_same_v<SocketType, TcpSocket>) {
                     co_await (*match.handler)(conn, std::move(request)).wait();
                 } else {
                     HTTP_LOG_ERROR("Router mode not supported for HTTPS yet");
                     break;
                 }
+                HTTP_LOG_DEBUG("Handler completed");
 
                 if (!keep_alive) {
                     break;
@@ -201,6 +205,8 @@ protected:
         // 每个 serverLoop 创建自己的 listener socket
         TcpSocket listener(IPType::IPV4);
 
+        HTTP_LOG_DEBUG("ServerLoop starting, creating listener socket");
+
         auto reuse_result = listener.option().handleReuseAddr();
         if (!reuse_result) {
             HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
@@ -233,6 +239,8 @@ protected:
             co_return;
         }
 
+        HTTP_LOG_DEBUG("ServerLoop listener ready, starting accept loop");
+
         while (m_running.load()) {
             Host client_host;
             auto accept_result = co_await listener.accept(&client_host);
@@ -252,6 +260,8 @@ protected:
                 continue;
             }
 
+            HTTP_LOG_DEBUG("Client socket created, setting non-block");
+
             SocketType client_socket = std::move(*client_socket_opt);
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
@@ -259,10 +269,13 @@ protected:
                 continue;
             }
 
-            HttpConnImpl<SocketType> conn(std::move(client_socket), m_config.reader_setting, m_config.writer_setting);
+            HTTP_LOG_DEBUG("Creating HttpConn");
+            HttpConnImpl<SocketType> conn(std::move(client_socket));
+            HTTP_LOG_DEBUG("HttpConn created, spawning handler");
 
             // 在当前调度器上处理连接
             scheduler->spawn(m_handler(std::move(conn)));
+            HTTP_LOG_DEBUG("Handler spawned");
         }
 
         co_return;
@@ -444,7 +457,7 @@ private:
         HTTP_LOG_DEBUG("SSL handshake completed");
 
         // 创建连接并调用处理器
-        HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket), m_config.reader_setting, m_config.writer_setting);
+        HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket));
         co_await m_handler(std::move(conn)).wait();
     }
 
@@ -455,8 +468,6 @@ private:
         base_config.backlog = config.backlog;
         base_config.io_scheduler_count = config.io_scheduler_count;
         base_config.compute_scheduler_count = config.compute_scheduler_count;
-        base_config.reader_setting = config.reader_setting;
-        base_config.writer_setting = config.writer_setting;
         return base_config;
     }
 

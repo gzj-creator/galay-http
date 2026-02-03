@@ -82,8 +82,8 @@ class HttpWriterImpl
 {
 public:
     HttpWriterImpl(const HttpWriterSetting& setting, SocketType& socket)
-        : m_setting(setting)
-        , m_socket(socket)
+        : m_setting(&setting)
+        , m_socket(&socket)
         , m_remaining_bytes(0)
     {
     }
@@ -97,7 +97,7 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendResponseAwaitableImpl<SocketType> sendRequest(HttpRequest& request) {
@@ -109,7 +109,7 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendResponseAwaitableImpl<SocketType> sendHeader(HttpResponseHeader&& header) {
@@ -121,7 +121,7 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendResponseAwaitableImpl<SocketType> sendHeader(HttpRequestHeader&& header) {
@@ -133,7 +133,7 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendResponseAwaitableImpl<SocketType> send(std::string&& data) {
@@ -145,11 +145,11 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     SendResponseAwaitableImpl<SocketType> send(const char* buffer, size_t length) {
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(buffer, length));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(buffer, length));
     }
 
     SendResponseAwaitableImpl<SocketType> sendChunk(const std::string& data, bool is_last = false) {
@@ -161,7 +161,7 @@ public:
         size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
         const char* send_ptr = m_buffer.data() + sent_bytes;
 
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket.send(send_ptr, m_remaining_bytes));
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
     }
 
     void updateRemaining(size_t bytes_sent) {
@@ -178,8 +178,8 @@ public:
     }
 
 private:
-    const HttpWriterSetting& m_setting;
-    SocketType& m_socket;
+    const HttpWriterSetting* m_setting;
+    SocketType* m_socket;
     std::string m_buffer;
     size_t m_remaining_bytes;
 };

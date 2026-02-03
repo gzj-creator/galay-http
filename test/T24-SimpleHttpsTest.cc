@@ -120,7 +120,7 @@ int main() {
     std::cout << "==========================================" << std::endl;
 
     // 创建运行时
-    Runtime rt(LoadBalanceStrategy::ROUND_ROBIN, 2, 0);
+    Runtime rt(2, 0);
     rt.start();
 
     // 发送 20 个顺序请求

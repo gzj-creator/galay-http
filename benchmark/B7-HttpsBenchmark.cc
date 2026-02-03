@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
     std::cout << "目标: " << host << ":" << port << "\n";
     std::cout << "请确保 HTTPS 服务器已启动!\n";
 
-    Runtime rt(LoadBalanceStrategy::ROUND_ROBIN, 4, 0);
+    Runtime rt(4, 0);
     rt.start();
 
     runBenchmark(rt, 100, 1, host, port, "单连接 100请求");

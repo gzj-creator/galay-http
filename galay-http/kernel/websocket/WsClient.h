@@ -1,6 +1,7 @@
 #ifndef GALAY_WS_CLIENT_H
 #define GALAY_WS_CLIENT_H
 
+#include "WsSession.h"
 #include "WsConn.h"
 #include "WsReader.h"
 #include "WsWriter.h"
@@ -347,20 +348,14 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
 
 /**
  * @brief WebSocket 客户端模板类
+ * @details 只负责连接，通过getSession()获取Session进行通信
  */
 template<typename SocketType>
 class WsClientImpl
 {
 public:
-    WsClientImpl(const WsReaderSetting& reader_setting = WsReaderSetting(),
-                 const WsWriterSetting& writer_setting = WsWriterSetting(),
-                 size_t ring_buffer_size = 8192)
-        : m_reader_setting(reader_setting)
-        , m_writer_setting(writer_setting)
-        , m_ring_buffer_size(ring_buffer_size)
-        , m_socket(nullptr)
-        , m_ring_buffer(nullptr)
-        , m_ws_conn(nullptr)
+    WsClientImpl()
+        : m_socket(nullptr)
     {
     }
 
@@ -389,7 +384,6 @@ public:
                      m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<SocketType>(IPType::IPV4);
-        m_ring_buffer = std::make_unique<RingBuffer>(m_ring_buffer_size);
 
         auto nonblock_result = m_socket->option().handleNonBlock();
         if (!nonblock_result) {
@@ -401,61 +395,24 @@ public:
     }
 
     /**
-     * @brief 创建 WebSocket 升级器
-     * @return WsUpgraderImpl 对象，可以通过 co_await 完成升级
-     *
-     * 使用示例：
-     * @code
-     * auto upgrade_result = co_await client.upgrade();
-     * if (!upgrade_result) {
-     *     // 处理升级失败
-     * }
-     * @endcode
+     * @brief 获取 WebSocket Session 用于升级和通信
+     * @return WsSessionImpl 对象
+     * @note 必须在 connect() 成功后调用
      */
-    WsUpgraderImpl<SocketType> upgrade() {
+    WsSessionImpl<SocketType> getSession(size_t ring_buffer_size = 8192,
+                                          const WsReaderSetting& reader_setting = WsReaderSetting(),
+                                          const WsWriterSetting& writer_setting = WsWriterSetting()) {
         if (!m_socket) {
             throw std::runtime_error("WsClient not connected. Call connect() first.");
         }
-
-        return WsUpgraderImpl<SocketType>(
-            m_socket.get(),
-            m_ring_buffer.get(),
-            m_url,
-            m_reader_setting,
-            m_writer_setting,
-            &m_ws_conn
-        );
-    }
-
-    bool isConnected() const {
-        return m_ws_conn != nullptr;
+        return WsSessionImpl<SocketType>(*m_socket, m_url, ring_buffer_size, reader_setting, writer_setting);
     }
 
     auto close() {
-        if (!m_ws_conn) {
+        if (!m_socket) {
             throw std::runtime_error("WsClient not connected");
         }
-        return m_ws_conn->close();
-    }
-
-    void setReaderSetting(const WsReaderSetting& setting) {
-        m_reader_setting = setting;
-    }
-
-    void setWriterSetting(const WsWriterSetting& setting) {
-        m_writer_setting = setting;
-    }
-
-    WsReaderImpl<SocketType>& getWsReader() {
-        return m_ws_conn->getReader();
-    }
-
-    WsWriterImpl<SocketType>& getWsWriter() {
-        return m_ws_conn->getWriter();
-    }
-
-    WsConnImpl<SocketType>* getConn() {
-        return m_ws_conn.get();
+        return m_socket->close();
     }
 
     /**
@@ -469,7 +426,7 @@ public:
     /**
      * @brief SSL 握手（仅对 SslSocket 有效）
      * @return 握手等待体
-     * @note 必须在 connect() 成功后、upgrade() 之前调用
+     * @note 必须在 connect() 成功后调用
      */
     auto handshake() {
         if (!m_socket) {
@@ -489,16 +446,10 @@ public:
         return true;  // 非 SSL socket 总是返回 true
     }
 
+    const WsUrl& url() const { return m_url; }
+
 private:
-    WsReaderSetting m_reader_setting;
-    WsWriterSetting m_writer_setting;
-    size_t m_ring_buffer_size;
-
     std::unique_ptr<SocketType> m_socket;
-    std::unique_ptr<RingBuffer> m_ring_buffer;
-
-    std::unique_ptr<WsConnImpl<SocketType>> m_ws_conn;
-
     WsUrl m_url;
 };
 

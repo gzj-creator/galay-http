@@ -1,17 +1,13 @@
 #ifndef GALAY_HTTP_CLIENT_H
 #define GALAY_HTTP_CLIENT_H
 
-#include "HttpWriter.h"
-#include "HttpReader.h"
+#include "HttpSession.h"
 #include "HttpLog.h"
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/common/Buffer.h"
-#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include <string>
 #include <optional>
-#include <coroutine>
 #include <map>
 #include <regex>
 
@@ -203,9 +199,6 @@ public:
  */
 struct HttpClientConfig
 {
-    HttpReaderSetting reader_setting;
-    HttpWriterSetting writer_setting;
-    size_t ring_buffer_size = 8192;
 };
 
 /**
@@ -217,19 +210,13 @@ class HttpClientImpl
 public:
     HttpClientImpl(const HttpClientConfig& config = HttpClientConfig())
         : m_socket(nullptr)
-        , m_ring_buffer(nullptr)
         , m_config(config)
-        , m_writer(nullptr)
-        , m_reader(nullptr)
     {
     }
 
     HttpClientImpl(SocketType&& socket, const HttpClientConfig& config = HttpClientConfig())
         : m_socket(std::make_unique<SocketType>(std::move(socket)))
-        , m_ring_buffer(std::make_unique<RingBuffer>(config.ring_buffer_size))
         , m_config(config)
-        , m_writer(std::make_unique<HttpWriterImpl<SocketType>>(config.writer_setting, *m_socket))
-        , m_reader(std::make_unique<HttpReaderImpl<SocketType>>(*m_ring_buffer, config.reader_setting, *m_socket))
     {
     }
 
@@ -257,89 +244,24 @@ public:
         HTTP_LOG_INFO("Connecting to server at {}:{}{}", m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<SocketType>(IPType::IPV4);
-        m_ring_buffer = std::make_unique<RingBuffer>(m_config.ring_buffer_size);
 
         auto nonblock_result = m_socket->option().handleNonBlock();
         if (!nonblock_result) {
             throw std::runtime_error("Failed to set non-blocking: " + nonblock_result.error().message());
         }
 
-        m_writer = std::make_unique<HttpWriterImpl<SocketType>>(m_config.writer_setting, *m_socket);
-        m_reader = std::make_unique<HttpReaderImpl<SocketType>>(*m_ring_buffer, m_config.reader_setting, *m_socket);
-
         Host server_host(IPType::IPV4, m_url.host, m_url.port);
         return m_socket->connect(server_host);
     }
 
-    HttpClientAwaitableImpl<SocketType>& get(const std::string& uri,
-                                              const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::GET, uri, "", "", headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& post(const std::string& uri,
-                                               const std::string& body,
-                                               const std::string& content_type = "application/x-www-form-urlencoded",
-                                               const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::POST, uri, body, content_type, headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& put(const std::string& uri,
-                                              const std::string& body,
-                                              const std::string& content_type = "application/json",
-                                              const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::PUT, uri, body, content_type, headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& del(const std::string& uri,
-                                              const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::DELETE, uri, "", "", headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& head(const std::string& uri,
-                                               const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::HEAD, uri, "", "", headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& options(const std::string& uri,
-                                                  const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::OPTIONS, uri, "", "", headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& patch(const std::string& uri,
-                                                const std::string& body,
-                                                const std::string& content_type = "application/json",
-                                                const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::PATCH, uri, body, content_type, headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& trace(const std::string& uri,
-                                                const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::TRACE, uri, "", "", headers);
-    }
-
-    HttpClientAwaitableImpl<SocketType>& tunnel(const std::string& target_host,
-                                                 const std::map<std::string, std::string>& headers = {}) {
-        return createRequest(HttpMethod::CONNECT, target_host, "", "", headers);
-    }
-
-    SendResponseAwaitableImpl<SocketType> sendRequest(HttpRequest& request) {
-        return m_writer->sendRequest(request);
-    }
-
-    GetResponseAwaitableImpl<SocketType> getResponse(HttpResponse& response) {
-        return m_reader->getResponse(response);
-    }
-
-    SendResponseAwaitableImpl<SocketType> sendChunk(const std::string& data, bool is_last = false) {
-        return m_writer->sendChunk(data, is_last);
-    }
-
-    HttpReaderImpl<SocketType>& getReader() {
-        return *m_reader;
-    }
-
-    HttpWriterImpl<SocketType>& getWriter() {
-        return *m_writer;
+    // 获取Session用于读写操作
+    HttpSessionImpl<SocketType> getSession(size_t ring_buffer_size = 8192,
+                                            const HttpReaderSetting& reader_setting = HttpReaderSetting(),
+                                            const HttpWriterSetting& writer_setting = HttpWriterSetting()) {
+        if (!m_socket) {
+            throw std::runtime_error("Client not connected");
+        }
+        return HttpSessionImpl<SocketType>(*m_socket, ring_buffer_size, reader_setting, writer_setting);
     }
 
     auto close() {
@@ -347,56 +269,18 @@ public:
     }
 
     SocketType& socket() { return *m_socket; }
-    RingBuffer& ringBuffer() { return *m_ring_buffer; }
     const HttpUrl& url() const { return m_url; }
 
+    // 释放 socket 的所有权（用于协议升级）
+    std::unique_ptr<SocketType> releaseSocket() { return std::move(m_socket); }
+
 protected:
-    HttpClientAwaitableImpl<SocketType>& createRequest(HttpMethod method,
-                                                        const std::string& uri,
-                                                        const std::string& body,
-                                                        const std::string& content_type,
-                                                        const std::map<std::string, std::string>& headers) {
-        if (!m_awaitable.has_value() || m_awaitable->isInvalid()) {
-            HttpRequest request;
-            HttpRequestHeader header;
-
-            header.method() = method;
-            header.uri() = uri;
-            header.version() = HttpVersion::HttpVersion_1_1;
-
-            if (!body.empty() && !content_type.empty()) {
-                header.headerPairs().addHeaderPair("Content-Type", content_type);
-                header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
-            }
-
-            for (const auto& [key, value] : headers) {
-                header.headerPairs().addHeaderPair(key, value);
-            }
-
-            request.setHeader(std::move(header));
-
-            if (!body.empty()) {
-                std::string body_copy = body;
-                request.setBodyStr(std::move(body_copy));
-            }
-
-            m_awaitable.emplace(*this, std::move(request));
-        }
-
-        return *m_awaitable;
-    }
-
     std::unique_ptr<SocketType> m_socket;
-    std::unique_ptr<RingBuffer> m_ring_buffer;
     HttpClientConfig m_config;
-    std::unique_ptr<HttpWriterImpl<SocketType>> m_writer;
-    std::unique_ptr<HttpReaderImpl<SocketType>> m_reader;
-    std::optional<HttpClientAwaitableImpl<SocketType>> m_awaitable;
     HttpUrl m_url;
 };
 
 // 类型别名 - HTTP (TcpSocket)
-using HttpClientAwaitable = HttpClientAwaitableImpl<TcpSocket>;
 using HttpClient = HttpClientImpl<TcpSocket>;
 
 } // namespace galay::http
@@ -407,17 +291,11 @@ using HttpClient = HttpClientImpl<TcpSocket>;
 
 namespace galay::http {
 
-using HttpsClientAwaitable = HttpClientAwaitableImpl<galay::ssl::SslSocket>;
-
 /**
  * @brief HTTPS 客户端配置
  */
 struct HttpsClientConfig
 {
-    HttpReaderSetting reader_setting;
-    HttpWriterSetting writer_setting;
-    size_t ring_buffer_size = 8192;
-
     // SSL 配置
     std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
     bool verify_peer = false;       // 是否验证服务器证书
@@ -461,7 +339,6 @@ public:
 
         // 正确的 SslSocket 构造方式
         m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
-        m_ring_buffer = std::make_unique<RingBuffer>(m_config.ring_buffer_size);
 
         auto nonblock_result = m_socket->option().handleNonBlock();
         if (!nonblock_result) {
@@ -473,9 +350,6 @@ public:
         if (!sni_result) {
             HTTP_LOG_WARN("Failed to set SNI hostname: {}", sni_result.error().message());
         }
-
-        m_writer = std::make_unique<HttpWriterImpl<galay::ssl::SslSocket>>(m_config.writer_setting, *m_socket);
-        m_reader = std::make_unique<HttpReaderImpl<galay::ssl::SslSocket>>(*m_ring_buffer, m_config.reader_setting, *m_socket);
 
         Host server_host(IPType::IPV4, m_url.host, m_url.port);
         return m_socket->connect(server_host);
@@ -520,9 +394,6 @@ private:
 
     static HttpClientConfig convertConfig(const HttpsClientConfig& config) {
         HttpClientConfig base_config;
-        base_config.reader_setting = config.reader_setting;
-        base_config.writer_setting = config.writer_setting;
-        base_config.ring_buffer_size = config.ring_buffer_size;
         return base_config;
     }
 

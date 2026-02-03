@@ -340,7 +340,7 @@ int main(int argc, char* argv[]) {
 
     try {
         // 创建 Runtime
-        Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 1, 1);
+        Runtime runtime(1, 1);
         runtime.start();
 
         LogInfo("Runtime started");

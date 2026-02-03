@@ -11,6 +11,11 @@ namespace galay::websocket {
     class WsConnImpl;  // 前向声明
 }
 
+namespace galay::http2 {
+    template<typename SocketType>
+    class Http2ConnImpl;  // 前向声明
+}
+
 namespace galay::http
 {
 
@@ -29,14 +34,10 @@ public:
     /**
      * @brief 构造函数
      * @param socket Socket右值引用
-     * @param reader_setting HttpReaderSetting引用
-     * @param writer_setting HttpWriterSetting引用
      */
-    HttpConnImpl(SocketType&& socket, const HttpReaderSetting& reader_setting, const HttpWriterSetting& writer_setting)
+    HttpConnImpl(SocketType&& socket)
         : m_socket(std::move(socket))
         , m_ring_buffer(8192)  // 8KB buffer
-        , m_reader_setting(reader_setting)
-        , m_writer_setting(writer_setting)
     {
     }
 
@@ -68,18 +69,20 @@ public:
 
     /**
      * @brief 获取HttpReader
-     * @return HttpReaderImpl<SocketType> 临时构造的Reader对象
+     * @param setting HttpReaderSetting配置
+     * @return HttpReaderImpl<SocketType> Reader对象
      */
-    HttpReaderImpl<SocketType> getReader() {
-        return HttpReaderImpl<SocketType>(m_ring_buffer, m_reader_setting, m_socket);
+    HttpReaderImpl<SocketType> getReader(const HttpReaderSetting& setting = HttpReaderSetting()) {
+        return HttpReaderImpl<SocketType>(m_ring_buffer, setting, m_socket);
     }
 
     /**
      * @brief 获取HttpWriter
-     * @return HttpWriterImpl<SocketType> 临时构造的Writer对象
+     * @param setting HttpWriterSetting配置
+     * @return HttpWriterImpl<SocketType> Writer对象
      */
-    HttpWriterImpl<SocketType> getWriter() {
-        return HttpWriterImpl<SocketType>(m_writer_setting, m_socket);
+    HttpWriterImpl<SocketType> getWriter(const HttpWriterSetting& setting = HttpWriterSetting()) {
+        return HttpWriterImpl<SocketType>(setting, m_socket);
     }
 
     /**
@@ -100,6 +103,10 @@ public:
     template<typename S>
     friend class galay::websocket::WsConnImpl;
 
+    // 允许Http2ConnImpl访问私有成员（用于h2c升级）
+    template<typename S>
+    friend class galay::http2::Http2ConnImpl;
+
 private:
     /**
      * @brief 获取底层socket（私有方法，仅供友元类使用）
@@ -115,8 +122,6 @@ private:
 
     SocketType m_socket;
     RingBuffer m_ring_buffer;
-    HttpReaderSetting m_reader_setting;
-    HttpWriterSetting m_writer_setting;
 };
 
 // 类型别名 - HTTP (TcpSocket)

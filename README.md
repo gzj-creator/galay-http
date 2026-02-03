@@ -20,10 +20,16 @@
 - **安全特性**: 路径遍历攻击防护、启动时路径验证
 
 ### HTTP 客户端
-- **URL 连接支持**: 直接使用 URL 字符串连接服务器
-- **HttpClientAwaitable**: 自动处理请求发送和响应接收的完整流程
-- **循环等待机制**: 自动处理不完整的数据传输
-- **超时控制**: 支持请求级别的超时设置
+- **HTTP/1.1 客户端**:
+  - URL 连接支持：直接使用 URL 字符串连接服务器
+  - HttpClientAwaitable：自动处理请求发送和响应接收的完整流程
+  - 循环等待机制：自动处理不完整的数据传输
+  - 超时控制：支持请求级别的超时设置
+- **HTTP/2 客户端**:
+  - **H2cClient**: HTTP/2 over cleartext (h2c)，通过 HTTP/1.1 Upgrade 机制升级
+  - **H2Client**: HTTP/2 over TLS (h2)，通过 ALPN 协商
+  - 完整的 HTTP/2 协议支持：HPACK 头部压缩、流控制、多路复用
+  - Awaitable 模式接口：与 HTTP/1.1 客户端保持一致的使用体验
 
 ### 文件传输和断点续传
 - **四种传输模式**:
@@ -161,6 +167,136 @@ int main() {
     scheduler->spawn(sendRequest(runtime));
 
     std::this_thread::sleep_for(std::chrono::seconds(3));
+    runtime.stop();
+
+    return 0;
+}
+```
+
+### HTTP/2 客户端示例 (h2c)
+
+```cpp
+#include "galay-http/kernel/http2/H2cClient.h"
+#include "galay-kernel/kernel/Runtime.h"
+
+using namespace galay::http2;
+using namespace galay::kernel;
+
+Coroutine runClient() {
+    H2cClient client;
+
+    // 连接到服务器
+    auto connect_result = co_await client.connect("localhost", 8080);
+    if (!connect_result) {
+        std::cerr << "Connect failed\n";
+        co_return;
+    }
+
+    // 升级到 HTTP/2
+    while (true) {
+        auto result = co_await client.upgrade("/");
+        if (!result) {
+            std::cerr << "Upgrade failed\n";
+            co_return;
+        }
+        if (result.value().has_value()) {
+            if (*result.value()) {
+                std::cout << "Upgraded to HTTP/2!\n";
+                break;
+            }
+        }
+    }
+
+    // 发送 GET 请求
+    while (true) {
+        auto result = co_await client.get("/api/data");
+        if (!result) {
+            std::cerr << "Request failed\n";
+            break;
+        }
+        if (result.value()) {
+            auto& response = *result.value();
+            std::cout << "Status: " << response.status << "\n";
+            std::cout << "Body: " << response.body << "\n";
+            break;
+        }
+    }
+
+    co_await client.close();
+    co_return;
+}
+
+int main() {
+    Runtime runtime(1, 0);
+    runtime.start();
+
+    auto* scheduler = runtime.getNextIOScheduler();
+    scheduler->spawn(runClient());
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+    runtime.stop();
+
+    return 0;
+}
+```
+
+### HTTP/2 客户端示例 (h2 over TLS)
+
+```cpp
+#include "galay-http/kernel/http2/H2Client.h"
+#include "galay-kernel/kernel/Runtime.h"
+
+using namespace galay::http2;
+using namespace galay::kernel;
+
+Coroutine runClient() {
+    H2ClientConfig config;
+    config.verify_peer = false;  // 测试时不验证证书
+
+    H2Client client(config);
+
+    // 连接到服务器（包含 TLS 握手和 HTTP/2 协商）
+    while (true) {
+        auto result = co_await client.connect("example.com", 443);
+        if (!result) {
+            std::cerr << "Connect failed\n";
+            co_return;
+        }
+        if (result.value().has_value()) {
+            if (*result.value()) {
+                std::cout << "Connected! ALPN: " << client.getALPNProtocol() << "\n";
+                break;
+            }
+        }
+    }
+
+    // 发送 GET 请求
+    while (true) {
+        auto result = co_await client.get("/");
+        if (!result) {
+            std::cerr << "Request failed\n";
+            break;
+        }
+        if (result.value()) {
+            auto& response = *result.value();
+            std::cout << "Status: " << response.status << "\n";
+            std::cout << "Body size: " << response.body.size() << " bytes\n";
+            break;
+        }
+    }
+
+    co_await client.close();
+    co_return;
+}
+
+int main() {
+    Runtime runtime(1, 0);
+    runtime.start();
+
+    auto* scheduler = runtime.getNextIOScheduler();
+    scheduler->spawn(runClient());
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
     runtime.stop();
 
     return 0;
@@ -528,11 +664,48 @@ Coroutine wsClient() {
 
 ## 性能数据
 
-- **HTTP 解析**: ~0.5 μs/op
-- **Chunk 编码**: 0.25 μs/op (400万 ops/sec)
-- **Chunk 解析**: 0.46 μs/op (217万 ops/sec)
-- **路由匹配**: O(1) 精确匹配，O(k) 模糊匹配
-- **零拷贝传输**: sendfile 系统调用，CPU 占用低
+### 基准测试
+
+| 测试项目 | 性能指标 | 说明 |
+|---------|---------|------|
+| **HTTP Server QPS** | **126,618 req/s** | 4线程，100连接，Keep-Alive |
+| **HTTP Server 延迟** | **P99: 1.27ms** | 高并发场景下的延迟 |
+| **HTTP 解析** | ~0.5 μs/op | 单次解析操作 |
+| **Chunk 编码** | 0.25 μs/op | 400万 ops/sec |
+| **Chunk 解析** | 0.46 μs/op | 217万 ops/sec |
+| **路由匹配** | O(1) / O(k) | 精确匹配 / 模糊匹配 |
+| **零拷贝传输** | sendfile | CPU 占用低 |
+
+### HTTP Server 压测结果
+
+使用 `wrk` 工具进行压测（B9-HttpServer 基准测试）：
+
+```bash
+# 短时高并发测试
+wrk -t4 -c100 -d10s --latency http://127.0.0.1:8080/
+
+Running 10s test @ http://127.0.0.1:8080/
+  4 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   791.06us  142.64us   5.80ms   97.05%
+    Req/Sec    31.82k     2.32k   33.70k    94.80%
+  Latency Distribution
+     50%  775.00us
+     75%  792.00us
+     90%  823.00us
+     99%    1.27ms
+  1279162 requests in 10.10s, 109.79MB read
+Requests/sec: 126618.25
+Transfer/sec:     10.87MB
+```
+
+**关键特性**:
+- ✅ **无文件描述符错误**: 经过 520 万+ 请求压测，零错误
+- ✅ **稳定的 Keep-Alive**: 连接复用率高
+- ✅ **低延迟**: P99 延迟 < 10ms
+- ✅ **高吞吐量**: 单机 QPS 12 万+
+
+详细压测文档: [B9-HttpServer 压测](docs/B9-HttpServer压测.md)
 
 ## 依赖项
 
@@ -579,19 +752,48 @@ target_link_libraries(your_target
 
 ## 示例程序
 
-项目包含多个示例程序，位于 `example/` 目录：
+项目包含多个示例程序，位于 `example/` 和 `benchmark/` 目录：
 
-- `1.echo_server.cc` - Echo 服务器示例
-- `2.echo_client.cc` - Echo 客户端示例
-- `3.websocket_server.cc` - WebSocket 服务器示例
-- `4.websocket_client.cc` - WebSocket 客户端示例
+### 示例程序 (example/)
+
+- `E1-EchoServer.cc` - Echo 服务器示例
+- `E2-EchoClient.cc` - Echo 客户端示例
+- `E3-WebsocketServer.cc` - WebSocket 服务器示例
+- `E4-WebsocketClient.cc` - WebSocket 客户端示例
+- `E5-HttpsServer.cc` - HTTPS 服务器示例
+- `E6-HttpsClient.cc` - HTTPS 客户端示例
+- `E7-WssServer.cc` - WSS (WebSocket over SSL) 服务器示例
+- `E8-WssClient.cc` - WSS 客户端示例
+- `E9-H2cServer.cc` - HTTP/2 cleartext 服务器示例
+- `E10-H2Server.cc` - HTTP/2 over TLS 服务器示例
+- `E11-H2cServerPush.cc` - HTTP/2 Server Push 示例
+- `E12-H2cClient.cc` - HTTP/2 cleartext 客户端示例
+- `E13-H2Client.cc` - HTTP/2 over TLS 客户端示例
+
+### 基准测试程序 (benchmark/)
+
+- `B9-HttpServer.cc` - **HTTP 服务器压测程序** (QPS: 126,618)
+- `B4-WebsocketClient.cc` - WebSocket 客户端压测
+- `B5-Websocket.cc` - WebSocket 压测
+- `B6-HttpRouter.cc` - 路由系统压测
+- `B7-HttpsBenchmark.cc` - HTTPS 压测
+- `B8-H2cClient.cc` - HTTP/2 客户端压测
+- `B8-H2cServer.cc` - HTTP/2 服务器压测
 
 运行示例：
 ```bash
 cd build
-./example/1.echo_server 8080
-# 在另一个终端
-./example/2.echo_client http://127.0.0.1:8080/echo "Hello"
+
+# 启动 Echo 服务器
+./example/E1-EchoServer 8080
+
+# 在另一个终端运行客户端
+./example/E2-EchoClient http://127.0.0.1:8080/echo "Hello"
+
+# 运行 HTTP 服务器压测
+./benchmark/B9-HttpServer 8080
+# 在另一个终端使用 wrk 压测
+wrk -t4 -c100 -d30s --latency http://127.0.0.1:8080/
 ```
 
 ## 测试

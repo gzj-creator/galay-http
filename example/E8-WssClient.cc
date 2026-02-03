@@ -295,7 +295,7 @@ int main(int argc, char* argv[]) {
     std::cout << "========================================\n";
 
     try {
-        Runtime runtime(LoadBalanceStrategy::ROUND_ROBIN, 1, 0);
+        Runtime runtime(1, 0);
         runtime.start();
 
         auto* scheduler = runtime.getNextIOScheduler();

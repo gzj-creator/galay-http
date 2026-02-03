@@ -135,6 +135,9 @@ public:
     // PRIORITY 标志
     bool hasPriority() const { return m_header.hasFlag(Http2FrameFlags::kPriority); }
 
+    // PADDED 标志
+    bool isPadded() const { return m_header.hasFlag(Http2FrameFlags::kPadded); }
+
     // 优先级字段
     bool exclusive() const { return m_exclusive; }
     uint32_t streamDependency() const { return m_stream_dependency; }
@@ -268,6 +271,9 @@ public:
         if (value) m_header.setFlag(Http2FrameFlags::kEndHeaders);
         else m_header.clearFlag(Http2FrameFlags::kEndHeaders);
     }
+
+    // PADDED 标志
+    bool isPadded() const { return m_header.hasFlag(Http2FrameFlags::kPadded); }
 
     std::string serialize() const override;
     Http2ErrorCode parsePayload(const uint8_t* data, size_t length) override;

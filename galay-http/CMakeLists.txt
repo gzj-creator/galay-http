@@ -20,15 +20,15 @@ set(WS_SOURCES
     kernel/websocket/WsHeartbeat.cc
 )
 
-# HTTP/2 源文件（暂时注释，后续实现）
-# set(HTTP2_SOURCES
-#     protoc/http2/Http2Base.cc
-#     protoc/http2/Http2Frame.cc
-#     protoc/http2/Http2Hpack.cc
-# )
+# HTTP/2 源文件
+set(HTTP2_SOURCES
+    protoc/http2/Http2Base.cc
+    protoc/http2/Http2Frame.cc
+    protoc/http2/Http2Hpack.cc
+)
 
 # 合并所有源文件
-set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES})
+set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES} ${HTTP2_SOURCES})
 
 find_package(spdlog REQUIRED)
 find_package(galay-kernel REQUIRED)

@@ -113,7 +113,7 @@ int main(int argc, char* argv[]) {
     std::cout << "HTTPS Client Example\n";
     std::cout << "========================================\n";
 
-    Runtime rt(LoadBalanceStrategy::ROUND_ROBIN, 1, 0);
+    Runtime rt(1, 0);
     rt.start();
 
     auto* scheduler = rt.getNextIOScheduler();

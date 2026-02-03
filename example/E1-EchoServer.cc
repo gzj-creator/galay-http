@@ -28,9 +28,8 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
 
     // 发送响应（循环发送直到完成）
     auto writer = conn.getWriter();
-    using namespace std::chrono_literals;
     while (true) {
-        auto result = co_await writer.sendResponse(response).timeout(10ms);
+        auto result = co_await writer.sendResponse(response);
         if (!result) {
             std::cerr << "Failed to send response: " << result.error().message() << "\n";
             break;
@@ -38,7 +37,7 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
         if (result.value()) break;
     }
 
-    co_await conn.close();
+    // 不要在handler中关闭连接，让HttpServer的路由处理器根据Keep-Alive决定
     co_return;
 }
 
@@ -69,7 +68,8 @@ Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
         auto send_result = co_await writer.sendResponse(response);
         if (!send_result || send_result.value()) break;
     }
-    co_await conn.close();
+
+    // 不要在handler中关闭连接，让HttpServer的路由处理器根据Keep-Alive决定
     co_return;
 }
 
