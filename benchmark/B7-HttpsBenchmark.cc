@@ -5,6 +5,7 @@
  */
 
 #include "galay-http/kernel/http/HttpClient.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
@@ -60,14 +61,10 @@ Coroutine keepAliveWorker(int worker_id, int requests_per_conn, const std::strin
         auto& reader = session.getReader();
 
         for (int i = 0; i < requests_per_conn; i++) {
-            HttpRequest request;
-            HttpRequestHeader header;
-            header.method() = HttpMethod::GET;
-            header.uri() = "/";
-            header.version() = HttpVersion::HttpVersion_1_1;
-            header.headerPairs().addHeaderPair("Host", host);
-            header.headerPairs().addHeaderPair("Connection", "keep-alive");
-            request.setHeader(std::move(header));
+            auto request = Http1_1RequestBuilder::get("/")
+                .host(host)
+                .connection("keep-alive")
+                .buildMove();
 
             bool send_ok = false;
             while (true) {

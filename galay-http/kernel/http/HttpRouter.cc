@@ -4,6 +4,7 @@
 #include "HttpETag.h"
 #include "HttpRange.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include <sstream>
 #include <set>
 #include <cctype>
@@ -438,9 +439,10 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
 
         if (fileNotFound) {
             // 文件不存在
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::NotFound_404;
-            response.setBodyStr("404 Not Found");
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::NotFound_404)
+                .body("404 Not Found")
+                .buildMove();
             auto writer = conn.getWriter();
             co_await writer.send(response.toString());
             co_return;
@@ -452,9 +454,10 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         if (dirIt != canonicalDir.end()) {
             // 路径遍历攻击
             HTTP_LOG_WARN("Path traversal attempt: {}", requestPath);
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::Forbidden_403;
-            response.setBodyStr("403 Forbidden");
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::Forbidden_403)
+                .body("403 Forbidden")
+                .buildMove();
             auto writer = conn.getWriter();
             co_await writer.send(response.toString());
             co_return;
@@ -464,9 +467,10 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         HTTP_LOG_DEBUG("Checking if file exists: {}", canonicalFile.string());
         if (!fs::exists(canonicalFile) || !fs::is_regular_file(canonicalFile)) {
             HTTP_LOG_WARN("File not found or not regular: {}", canonicalFile.string());
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::NotFound_404;
-            response.setBodyStr("404 Not Found");
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::NotFound_404)
+                .body("404 Not Found")
+                .buildMove();
             auto writer = conn.getWriter();
             co_await writer.send(response.toString());
             co_return;
@@ -539,9 +543,10 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
 
         // 检查文件是否存在
         if (!fs::exists(filePath) || !fs::is_regular_file(filePath)) {
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::NotFound_404;
-            response.setBodyStr("404 Not Found");
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::NotFound_404)
+                .body("404 Not Found")
+                .buildMove();
             auto writer = conn.getWriter();
             co_await writer.send(response.toString());
             co_return;
@@ -595,14 +600,15 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     // 1. 处理 If-None-Match (ETag 条件请求)
     std::string ifNoneMatch = req.header().headerPairs().getValue("If-None-Match");
     HTTP_LOG_DEBUG("sendFileContent: If-None-Match={}", ifNoneMatch);
-    if (!ifNoneMatch.empty()) {
-        // 检查 ETag 是否匹配
+        if (!ifNoneMatch.empty()) {
+            // 检查 ETag 是否匹配
         if (ifNoneMatch == "*" || ETagGenerator::match(etag, ifNoneMatch)) {
             // ETag 匹配，返回 304 Not Modified
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::NotModified_304;
-            response.header().headerPairs().addHeaderPair("ETag", etag);
-            response.header().headerPairs().addHeaderPair("Last-Modified", lastModifiedStr);
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::NotModified_304)
+                .header("ETag", etag)
+                .header("Last-Modified", lastModifiedStr)
+                .buildMove();
             co_await writer.send(response.toString());
             co_return;
         }
@@ -631,10 +637,11 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
         // 验证 Range 是否有效
         if (hasRange && !rangeResult.isValid()) {
             // Range 无效，返回 416 Range Not Satisfiable
-            HttpResponse response;
-            response.header().code() = HttpStatusCode::RangeNotSatisfiable_416;
-            response.header().headerPairs().addHeaderPair("Content-Range", "bytes */" + std::to_string(fileSize));
-            response.setBodyStr("416 Range Not Satisfiable");
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::RangeNotSatisfiable_416)
+                .header("Content-Range", "bytes */" + std::to_string(fileSize))
+                .body("416 Range Not Satisfiable")
+                .buildMove();
             co_await writer.send(response.toString());
             co_return;
         }
@@ -659,12 +666,13 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     HTTP_LOG_DEBUG("sendFileContent: transfer mode={}", static_cast<int>(mode));
 
     // 构建响应头
-    HttpResponse response;
-    response.header().code() = HttpStatusCode::OK_200;
-    response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
-    response.header().headerPairs().addHeaderPair("ETag", etag);
-    response.header().headerPairs().addHeaderPair("Last-Modified", lastModifiedStr);
-    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+    auto response = Http1_1ResponseBuilder()
+        .status(HttpStatusCode::OK_200)
+        .header("Content-Type", mimeType)
+        .header("ETag", etag)
+        .header("Last-Modified", lastModifiedStr)
+        .header("Accept-Ranges", "bytes")
+        .buildMove();
     HTTP_LOG_DEBUG("sendFileContent: response headers set");
 
     switch (mode) {
@@ -675,9 +683,11 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             std::ifstream file(filePath, std::ios::binary);
             if (!file) {
                 HTTP_LOG_ERROR("Failed to open file: {}", filePath);
-                response.header().code() = HttpStatusCode::InternalServerError_500;
-                response.setBodyStr("500 Internal Server Error");
-                co_await writer.send(response.toString());
+                auto error_response = Http1_1ResponseBuilder()
+                    .status(HttpStatusCode::InternalServerError_500)
+                    .body("500 Internal Server Error")
+                    .buildMove();
+                co_await writer.send(error_response.toString());
                 co_return;
             }
 
@@ -832,15 +842,15 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
     auto writer = conn.getWriter();
 
     // 构建 206 Partial Content 响应
-    HttpResponse response;
-    response.header().code() = HttpStatusCode::PartialContent_206;
-    response.header().headerPairs().addHeaderPair("Content-Type", mimeType);
-    response.header().headerPairs().addHeaderPair("Content-Range",
-        HttpRangeParser::makeContentRange(range, fileSize));
-    response.header().headerPairs().addHeaderPair("Content-Length", std::to_string(range.length));
-    response.header().headerPairs().addHeaderPair("ETag", etag);
-    response.header().headerPairs().addHeaderPair("Last-Modified", lastModified);
-    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+    auto response = Http1_1ResponseBuilder()
+        .status(HttpStatusCode::PartialContent_206)
+        .header("Content-Type", mimeType)
+        .header("Content-Range", HttpRangeParser::makeContentRange(range, fileSize))
+        .header("Content-Length", std::to_string(range.length))
+        .header("ETag", etag)
+        .header("Last-Modified", lastModified)
+        .header("Accept-Ranges", "bytes")
+        .buildMove();
 
     // 发送响应头
     std::string headerStr = response.header().toString();
@@ -940,13 +950,13 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
 
     // 构建 206 Partial Content 响应（multipart/byteranges）
     std::string boundary = rangeResult.boundary;
-    HttpResponse response;
-    response.header().code() = HttpStatusCode::PartialContent_206;
-    response.header().headerPairs().addHeaderPair("Content-Type",
-        "multipart/byteranges; boundary=" + boundary);
-    response.header().headerPairs().addHeaderPair("ETag", etag);
-    response.header().headerPairs().addHeaderPair("Last-Modified", lastModified);
-    response.header().headerPairs().addHeaderPair("Accept-Ranges", "bytes");
+    auto response = Http1_1ResponseBuilder()
+        .status(HttpStatusCode::PartialContent_206)
+        .header("Content-Type", "multipart/byteranges; boundary=" + boundary)
+        .header("ETag", etag)
+        .header("Last-Modified", lastModified)
+        .header("Accept-Ranges", "bytes")
+        .buildMove();
 
     // 计算总长度（包括所有边界和头部）
     size_t totalLength = 0;
@@ -1076,4 +1086,3 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
 }
 
 } // namespace galay::http
-

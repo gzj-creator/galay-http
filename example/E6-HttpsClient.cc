@@ -5,6 +5,7 @@
  */
 
 #include "galay-http/kernel/http/HttpClient.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 
@@ -55,14 +56,10 @@ Coroutine httpsClientExample(const std::string& url) {
             std::cout << "\n--- Request " << i << " ---\n";
 
             // 构建请求
-            HttpRequest request;
-            HttpRequestHeader header;
-            header.method() = HttpMethod::GET;
-            header.uri() = "/";
-            header.version() = HttpVersion::HttpVersion_1_1;
-            header.headerPairs().addHeaderPair("Host", "localhost");
-            header.headerPairs().addHeaderPair("Connection", "keep-alive");
-            request.setHeader(std::move(header));
+            auto request = Http1_1RequestBuilder::get("/")
+                .host("localhost")
+                .connection("keep-alive")
+                .buildMove();
 
             // 发送请求
             while (true) {

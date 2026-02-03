@@ -4,6 +4,7 @@
  */
 
 #include "galay-http/kernel/http/HttpClient.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
@@ -57,14 +58,10 @@ Coroutine singleRequest(int id) {
         auto session = client.getSession();
         // 发送请求
         std::cout << "[Request " << id << "] Sending request..." << std::endl;
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::GET;
-        header.uri() = "/";
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Host", "localhost");
-        header.headerPairs().addHeaderPair("Connection", "close");
-        request.setHeader(std::move(header));
+        auto request = Http1_1RequestBuilder::get("/")
+            .host("localhost")
+            .connection("close")
+            .buildMove();
 
         auto& writer = session.getWriter();
         while (true) {

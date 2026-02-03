@@ -11,6 +11,7 @@
 #include "galay-http/kernel/websocket/WsWriterSetting.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 
 #ifdef USE_KQUEUE
@@ -182,10 +183,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
     }
 
     // 普通 HTTP 请求
-    HttpResponse response;
-    response.header().version() = HttpVersion::HttpVersion_1_1;
-    response.header().code() = HttpStatusCode::OK_200;
-    response.header().headerPairs().addHeaderPair("Content-Type", "text/html; charset=utf-8");
+    auto response = Http1_1ResponseBuilder()
+        .status(HttpStatusCode::OK_200)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .buildMove();
 
     std::string body = R"(<!DOCTYPE html>
 <html>

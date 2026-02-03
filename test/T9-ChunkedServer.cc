@@ -9,6 +9,7 @@
 #include "galay-http/kernel/http/HttpWriter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/common/Log.h"
@@ -164,18 +165,12 @@ Coroutine handleClient(TcpSocket client, Host clientHost) {
         LogInfo("Non-chunked request");
 
         // 发送简单响应
-        HttpResponse response;
-        HttpResponseHeader respHeader;
-        respHeader.version() = HttpVersion::HttpVersion_1_1;
-        respHeader.code() = HttpStatusCode::OK_200;
-        respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
-        respHeader.headerPairs().addHeaderPair("Server", "galay-http-chunked-test/1.0");
-
-        std::string body = "Non-chunked request received\n";
-        respHeader.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
-
-        response.setHeader(std::move(respHeader));
-        response.setBodyStr(std::move(body));
+        auto response = Http1_1ResponseBuilder()
+            .status(HttpStatusCode::OK_200)
+            .header("Content-Type", "text/plain")
+            .header("Server", "galay-http-chunked-test/1.0")
+            .body("Non-chunked request received\n")
+            .buildMove();
 
         while (true) {
             auto sendResult = co_await writer.sendResponse(response);
@@ -376,18 +371,12 @@ Coroutine chunkedTestServer() {
             LogInfo("Non-chunked request");
 
             // 发送简单响应
-            HttpResponse response;
-            HttpResponseHeader respHeader;
-            respHeader.version() = HttpVersion::HttpVersion_1_1;
-            respHeader.code() = HttpStatusCode::OK_200;
-            respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
-            respHeader.headerPairs().addHeaderPair("Server", "galay-http-chunked-test/1.0");
-
-            std::string body = "Non-chunked request received\n";
-            respHeader.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
-
-            response.setHeader(std::move(respHeader));
-            response.setBodyStr(std::move(body));
+            auto response = Http1_1ResponseBuilder()
+                .status(HttpStatusCode::OK_200)
+                .header("Content-Type", "text/plain")
+                .header("Server", "galay-http-chunked-test/1.0")
+                .body("Non-chunked request received\n")
+                .buildMove();
 
             while (true) {
                 auto sendResult = co_await writer.sendResponse(response);

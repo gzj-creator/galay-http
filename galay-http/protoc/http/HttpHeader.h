@@ -105,9 +105,9 @@ namespace galay::http {
         size_t toUtf8(int code, char *buff);
         bool fromHexToI(const std::string_view &s, size_t i, size_t cnt, int &val);
     private:
-        HttpMethod m_method;
+        HttpMethod m_method = HttpMethod::GET;
         std::string m_uri;
-        HttpVersion m_version;
+        HttpVersion m_version = HttpVersion::HttpVersion_1_1;
         std::map<std::string, std::string> m_argList;
         HeaderPair m_headerPairs;
         // 增量解析状态
@@ -147,8 +147,8 @@ namespace galay::http {
     private:
         HttpErrorCode parseChar(char c);
     private:
-        HttpStatusCode m_code;
-        HttpVersion m_version;
+        HttpStatusCode m_code = HttpStatusCode::OK_200;
+        HttpVersion m_version = HttpVersion::HttpVersion_1_1;
         HeaderPair m_headerPairs;
         // 增量解析状态
         ResponseParseState m_parseState = ResponseParseState::Version;

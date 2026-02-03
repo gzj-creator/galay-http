@@ -4,6 +4,7 @@
  */
 
 #include "galay-http/kernel/http/HttpClient.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
@@ -59,14 +60,10 @@ Coroutine keepAliveRequests(int conn_id, int requests_per_conn) {
         // 在同一连接上发送多个请求
         for (int i = 0; i < requests_per_conn; i++) {
             // 构建请求
-            HttpRequest request;
-            HttpRequestHeader header;
-            header.method() = HttpMethod::GET;
-            header.uri() = "/";
-            header.version() = HttpVersion::HttpVersion_1_1;
-            header.headerPairs().addHeaderPair("Host", "localhost");
-            header.headerPairs().addHeaderPair("Connection", "keep-alive");
-            request.setHeader(std::move(header));
+            auto request = Http1_1RequestBuilder::get("/")
+                .host("localhost")
+                .connection("keep-alive")
+                .buildMove();
 
             // 发送请求
             bool send_ok = false;

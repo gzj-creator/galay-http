@@ -16,6 +16,7 @@
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 
 #ifdef GALAY_HTTP_SSL_ENABLED
@@ -195,10 +196,10 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     }
 
     // 普通 HTTPS 请求 - 返回测试页面
-    HttpResponse response;
-    response.header().version() = HttpVersion::HttpVersion_1_1;
-    response.header().code() = HttpStatusCode::OK_200;
-    response.header().headerPairs().addHeaderPair("Content-Type", "text/html; charset=utf-8");
+    auto response = Http1_1ResponseBuilder()
+        .status(HttpStatusCode::OK_200)
+        .header("Content-Type", "text/html; charset=utf-8")
+        .buildMove();
 
     std::string body = R"html(<!DOCTYPE html>
 <html>

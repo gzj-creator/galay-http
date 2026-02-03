@@ -4,6 +4,7 @@
 #include "HttpConn.h"
 #include "HttpRouter.h"
 #include "HttpLog.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/kernel/Coroutine.h"
@@ -99,11 +100,11 @@ public:
                                  static_cast<int>(request.header().method()),
                                  request.header().uri());
 
-                    HttpResponse response;
-                    response.header().version() = HttpVersion::HttpVersion_1_1;
-                    response.header().code() = HttpStatusCode::OK_200;
-                    response.header().headerPairs().addHeaderPair("Content-Type", "text/plain");
-                    response.setBodyStr("404 Not Found");
+                    auto response = Http1_1ResponseBuilder()
+                        .status(HttpStatusCode::OK_200)
+                        .header("Content-Type", "text/plain")
+                        .body("404 Not Found")
+                        .buildMove();
 
                     auto writer = conn.getWriter();
                     while (true) {

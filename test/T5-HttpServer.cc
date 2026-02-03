@@ -10,6 +10,7 @@
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/common/Log.h"
 
 #ifdef USE_KQUEUE
@@ -67,14 +68,9 @@ Coroutine handleRequest(HttpConn conn) {
             static_cast<int>(request.header().method()),
             request.header().uri());
 
-    // 创建响应
-    HttpResponseHeader resp_header;
-    resp_header.version() = HttpVersion::HttpVersion_1_1;
-    resp_header.code() = HttpStatusCode::OK_200;
-    resp_header.headerPairs().addHeaderPair("Content-Type", "text/html; charset=utf-8");
-    resp_header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-
     // 根据不同的路径返回不同的内容
+    HttpStatusCode code = HttpStatusCode::OK_200;
+    std::string content_type = "text/html; charset=utf-8";
     std::string body;
     std::string uri = request.header().uri();
 
@@ -121,8 +117,7 @@ Coroutine handleRequest(HttpConn conn) {
 </body>
 </html>)";
     } else if (uri == "/api/info") {
-        resp_header.headerPairs().removeHeaderPair("Content-Type");
-        resp_header.headerPairs().addHeaderPair("Content-Type", "application/json");
+        content_type = "application/json";
         body = R"({
     "server": "galay-http",
     "version": "1.0.0",
@@ -130,7 +125,7 @@ Coroutine handleRequest(HttpConn conn) {
     "timestamp": ")" + std::to_string(std::time(nullptr)) + R"("
 })";
     } else {
-        resp_header.code() = HttpStatusCode::NotFound_404;
+        code = HttpStatusCode::NotFound_404;
         body = R"(<!DOCTYPE html>
 <html>
 <head>
@@ -145,12 +140,13 @@ Coroutine handleRequest(HttpConn conn) {
 </html>)";
     }
 
-    resp_header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
-
     // 发送响应
-    HttpResponse response;
-    response.setHeader(std::move(resp_header));
-    response.setBodyStr(std::move(body));
+    auto response = Http1_1ResponseBuilder()
+        .status(code)
+        .header("Content-Type", content_type)
+        .header("Server", GALAY_SERVER)
+        .body(std::move(body))
+        .buildMove();
 
     while (true) {
         auto sendResult = co_await writer.sendResponse(response);

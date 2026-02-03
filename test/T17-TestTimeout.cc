@@ -6,6 +6,7 @@
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-http/kernel/http/HttpReader.h"
 #include "galay-http/kernel/http/HttpWriter.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <chrono>
@@ -98,12 +99,8 @@ Coroutine testReaderWriterAwaitableTimeout(IOScheduler* scheduler)
 
     // 测试 SendResponseAwaitable.timeout()
     std::cout << "Testing SendResponseAwaitable.timeout()..." << std::endl;
-    HttpRequest request;
-    HttpRequestHeader header;
-    header.method() = HttpMethod::GET;
-    header.uri() = "/api/data";
-    header.version() = HttpVersion::HttpVersion_1_1;
-    request.setHeader(std::move(header));
+    auto request = Http1_1RequestBuilder::get("/api/data")
+        .buildMove();
 
     auto start = std::chrono::steady_clock::now();
     int loop_count = 0;

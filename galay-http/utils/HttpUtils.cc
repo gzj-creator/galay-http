@@ -1,4 +1,6 @@
 #include "HttpUtils.h"
+#include "galay-http/utils/Http1_1RequestBuilder.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 
 // WebSocket 相关功能需要 OpenSSL，暂时禁用
 // TODO: WebSocket 将在单独的仓库实现
@@ -12,911 +14,394 @@
 
 namespace galay::http 
 {
+namespace {
+
+HttpResponse buildHtmlResponse(HttpStatusCode code, std::string body)
+{
+    return Http1_1ResponseBuilder()
+        .status(code)
+        .header("Server", GALAY_SERVER)
+        .header("Content-Type", "text/html")
+        .body(std::move(body))
+        .buildMove();
+}
+
+} // namespace
+
     HttpRequest HttpUtils::defaultGet(std::string_view uri)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::GET;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
-        request.setHeader(std::move(header));
-        return request;
+        return Http1_1RequestBuilder::get(std::string(uri))
+            .userAgent(SERVER_NAME)
+            .header("Accept", "*/*")
+            .buildMove();
     }
 
     HttpRequest HttpUtils::defaultPost(std::string_view uri, std::string&& body)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::POST;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
+        auto builder = Http1_1RequestBuilder::post(std::string(uri));
+        builder.userAgent(SERVER_NAME).header("Accept", "*/*");
         if (!body.empty()) {
-            header.headerPairs().addHeaderPair("Content-Type", "application/json");
-            header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+            builder.contentType("application/x-www-form-urlencoded").body(std::move(body));
         }
-        request.setHeader(std::move(header));
-        if (!body.empty()) {
-            request.setBodyStr(std::move(body));
-        }
-        return request;
+        return builder.buildMove();
     }
 
     HttpRequest HttpUtils::defaultPut(std::string_view uri, std::string&& body)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::PUT;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
+        auto builder = Http1_1RequestBuilder::put(std::string(uri));
+        builder.userAgent(SERVER_NAME).header("Accept", "*/*");
         if (!body.empty()) {
-            header.headerPairs().addHeaderPair("Content-Type", "application/json");
-            header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+            builder.contentType("application/x-www-form-urlencoded").body(std::move(body));
         }
-        request.setHeader(std::move(header));
-        if (!body.empty()) {
-            request.setBodyStr(std::move(body));
-        }
-        return request;
+        return builder.buildMove();
     }
 
     HttpRequest HttpUtils::defaultDelete(std::string_view uri)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::DELETE;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
-        request.setHeader(std::move(header));
-        return request;
+        return Http1_1RequestBuilder::del(std::string(uri))
+            .userAgent(SERVER_NAME)
+            .header("Accept", "*/*")
+            .buildMove();
     }
 
     HttpRequest HttpUtils::defaultPatch(std::string_view uri, std::string&& body)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::PATCH;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
+        auto builder = Http1_1RequestBuilder::patch(std::string(uri));
+        builder.userAgent(SERVER_NAME).header("Accept", "*/*");
         if (!body.empty()) {
-            header.headerPairs().addHeaderPair("Content-Type", "application/json");
-            header.headerPairs().addHeaderPair("Content-Length", std::to_string(body.size()));
+            builder.contentType("application/x-www-form-urlencoded").body(std::move(body));
         }
-        request.setHeader(std::move(header));
-        if (!body.empty()) {
-            request.setBodyStr(std::move(body));
-        }
-        return request;
+        return builder.buildMove();
     }
 
     HttpRequest HttpUtils::defaultHead(std::string_view uri)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::HEAD;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
-        request.setHeader(std::move(header));
-        return request;
+        return Http1_1RequestBuilder::head(std::string(uri))
+            .userAgent(SERVER_NAME)
+            .header("Accept", "*/*")
+            .buildMove();
     }
 
     HttpRequest HttpUtils::defaultOptions(std::string_view uri)
     {
-        HttpRequest request;
-        HttpRequestHeader header;
-        header.method() = HttpMethod::OPTIONS;
-        header.uri() = uri;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("User-Agent", SERVER_NAME);
-        header.headerPairs().addHeaderPair("Accept", "*/*");
-        request.setHeader(std::move(header));
-        return request;
+        return Http1_1RequestBuilder::options(std::string(uri))
+            .userAgent(SERVER_NAME)
+            .header("Accept", "*/*")
+            .buildMove();
     }
 
     HttpResponse HttpUtils::defaultBadRequest()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::BadRequest_400;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>400 Bad Request</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::BadRequest_400, "<html><body><h1>400 Bad Request</h1></body></html>");
     }
 
     
     HttpResponse HttpUtils::defaultInternalServerError()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::InternalServerError_500;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>500 Internal Server Error</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::InternalServerError_500, "<html><body><h1>500 Internal Server Error</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNotFound()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NotFound_404;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>404 Not Found</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NotFound_404, "<html><body><h1>404 Not Found</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultMethodNotAllowed()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::MethodNotAllowed_405;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>405 Method Not Allowed</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::MethodNotAllowed_405, "<html><body><h1>405 Method Not Allowed</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultRequestTimeout()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::RequestTimeout_408;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>408 Request Timeout</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::RequestTimeout_408, "<html><body><h1>408 Request Timeout</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultTooManyRequests()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::TooManyRequests_429;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>429 Too Many Requests</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::TooManyRequests_429, "<html><body><h1>429 Too Many Requests</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNotImplemented()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NotImplemented_501;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>501 Not Implemented</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NotImplemented_501, "<html><body><h1>501 Not Implemented</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultServiceUnavailable()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::ServiceUnavailable_503;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>503 Service Unavailable</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::ServiceUnavailable_503, "<html><body><h1>503 Service Unavailable</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultContinue()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Continue_100;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>100 Continue</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Continue_100, "<html><body><h1>100 Continue</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultSwitchingProtocol()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::SwitchingProtocol_101;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>101 Switching Protocol</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::SwitchingProtocol_101, "<html><body><h1>101 Switching Protocol</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultProcessing()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Processing_102;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>102 Processing</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Processing_102, "<html><body><h1>102 Processing</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultEarlyHints()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::EarlyHints_103;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>103 Early Hints</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::EarlyHints_103, "<html><body><h1>103 Early Hints</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultCreated()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Created_201;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>201 Created</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Created_201, "<html><body><h1>201 Created</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultAccepted()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Accepted_202;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>202 Accepted</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Accepted_202, "<html><body><h1>202 Accepted</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNonAuthoritativeInformation()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NonAuthoritativeInformation_203;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>203 Non-Authoritative Information</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NonAuthoritativeInformation_203, "<html><body><h1>203 Non-Authoritative Information</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNoContent()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NoContent_204;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>204 No Content</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NoContent_204, "<html><body><h1>204 No Content</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultResetContent()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::ResetContent_205;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>205 Reset Content</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::ResetContent_205, "<html><body><h1>205 Reset Content</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultPartialContent()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::PartialContent_206;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>206 Partial Content</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::PartialContent_206, "<html><body><h1>206 Partial Content</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultMultiStatus()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::MultiStatus_207;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>207 Multi-Status</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::MultiStatus_207, "<html><body><h1>207 Multi-Status</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultAlreadyReported()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::AlreadyReported_208;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>208 Already Reported</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::AlreadyReported_208, "<html><body><h1>208 Already Reported</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultIMUsed()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::IMUsed_226;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>226 IM Used</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::IMUsed_226, "<html><body><h1>226 IM Used</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultMultipleChoices()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::MultipleChoices_300;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>300 Multiple Choices</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::MultipleChoices_300, "<html><body><h1>300 Multiple Choices</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultMovedPermanently()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::MovedPermanently_301;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>301 Moved Permanently</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::MovedPermanently_301, "<html><body><h1>301 Moved Permanently</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultFound()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Found_302;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>302 Found</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Found_302, "<html><body><h1>302 Found</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultSeeOther()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::SeeOther_303;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>303 See Other</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::SeeOther_303, "<html><body><h1>303 See Other</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNotModified()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NotModified_304;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>304 Not Modified</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NotModified_304, "<html><body><h1>304 Not Modified</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUseProxy()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::UseProxy_305;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>305 Use Proxy</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::UseProxy_305, "<html><body><h1>305 Use Proxy</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUnused()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Unused_306;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>306 unused</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Unused_306, "<html><body><h1>306 unused</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultTemporaryRedirect()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::TemporaryRedirect_307;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>307 Temporary Redirect</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::TemporaryRedirect_307, "<html><body><h1>307 Temporary Redirect</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultPermanentRedirect()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::PermanentRedirect_308;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>308 Permanent Redirect</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::PermanentRedirect_308, "<html><body><h1>308 Permanent Redirect</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUnauthorized()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Unauthorized_401;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>401 Unauthorized</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Unauthorized_401, "<html><body><h1>401 Unauthorized</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultPaymentRequired()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::PaymentRequired_402;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>402 Payment Required</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::PaymentRequired_402, "<html><body><h1>402 Payment Required</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultForbidden()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Forbidden_403;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>403 Forbidden</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Forbidden_403, "<html><body><h1>403 Forbidden</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultConflict()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Conflict_409;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>409 Conflict</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Conflict_409, "<html><body><h1>409 Conflict</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultGone()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Gone_410;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>410 Gone</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Gone_410, "<html><body><h1>410 Gone</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultLengthRequired()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::LengthRequired_411;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>411 Length Required</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::LengthRequired_411, "<html><body><h1>411 Length Required</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultPreconditionFailed()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::PreconditionFailed_412;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>412 Precondition Failed</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::PreconditionFailed_412, "<html><body><h1>412 Precondition Failed</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultPayloadTooLarge()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::PayloadTooLarge_413;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>413 Payload Too Large</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::PayloadTooLarge_413, "<html><body><h1>413 Payload Too Large</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUriTooLong()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::UriTooLong_414;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>414 URI Too Long</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::UriTooLong_414, "<html><body><h1>414 URI Too Long</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUnsupportedMediaType()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::UnsupportedMediaType_415;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>415 Unsupported Media Type</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::UnsupportedMediaType_415, "<html><body><h1>415 Unsupported Media Type</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultRangeNotSatisfiable()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::RangeNotSatisfiable_416;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>416 Range Not Satisfiable</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::RangeNotSatisfiable_416, "<html><body><h1>416 Range Not Satisfiable</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultExpectationFailed()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::ExpectationFailed_417;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>417 Expectation Failed</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::ExpectationFailed_417, "<html><body><h1>417 Expectation Failed</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultImATeapot()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::ImATeapot_418;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>418 I'm a teapot</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::ImATeapot_418, "<html><body><h1>418 I'm a teapot</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultMisdirectedRequest()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::MisdirectedRequest_421;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>421 Misdirected Request</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::MisdirectedRequest_421, "<html><body><h1>421 Misdirected Request</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUnprocessableContent()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::UnprocessableContent_422;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>422 Unprocessable Content</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::UnprocessableContent_422, "<html><body><h1>422 Unprocessable Content</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultLocked()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::Locked_423;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>423 Locked</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::Locked_423, "<html><body><h1>423 Locked</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultFailedDependency()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::FailedDependency_424;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>424 Failed Dependency</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::FailedDependency_424, "<html><body><h1>424 Failed Dependency</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultTooEarly()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::TooEarly_425;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>425 Too Early</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::TooEarly_425, "<html><body><h1>425 Too Early</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUpgradeRequired()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::UpgradeRequired_426;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>426 Upgrade Required</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::UpgradeRequired_426, "<html><body><h1>426 Upgrade Required</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultPreconditionRequired()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::PreconditionRequired_428;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>428 Precondition Required</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::PreconditionRequired_428, "<html><body><h1>428 Precondition Required</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultRequestHeaderFieldsTooLarge()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::RequestHeaderFieldsTooLarge_431;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>431 Request Header Fields Too Large</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::RequestHeaderFieldsTooLarge_431, "<html><body><h1>431 Request Header Fields Too Large</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultUnavailableForLegalReasons()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::UnavailableForLegalReasons_451;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>451 Unavailable For Legal Reasons</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::UnavailableForLegalReasons_451, "<html><body><h1>451 Unavailable For Legal Reasons</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultBadGateway()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::BadGateway_502;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>502 Bad Gateway</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::BadGateway_502, "<html><body><h1>502 Bad Gateway</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultGatewayTimeout()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::GatewayTimeout_504;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>504 Gateway Timeout</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::GatewayTimeout_504, "<html><body><h1>504 Gateway Timeout</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultHttpVersionNotSupported()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::HttpVersionNotSupported_505;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>505 HTTP Version Not Supported</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::HttpVersionNotSupported_505, "<html><body><h1>505 HTTP Version Not Supported</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultVariantAlsoNegotiates()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::VariantAlsoNegotiates_506;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>506 Variant Also Negotiates</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::VariantAlsoNegotiates_506, "<html><body><h1>506 Variant Also Negotiates</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultInsufficientStorage()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::InsufficientStorage_507;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>507 Insufficient Storage</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::InsufficientStorage_507, "<html><body><h1>507 Insufficient Storage</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultLoopDetected()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::LoopDetected_508;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>508 Loop Detected</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::LoopDetected_508, "<html><body><h1>508 Loop Detected</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNotExtended()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NotExtended_510;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>510 Not Extended</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NotExtended_510, "<html><body><h1>510 Not Extended</h1></body></html>");
     }
 
     HttpResponse HttpUtils::defaultNetworkAuthenticationRequired()
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::NetworkAuthenticationRequired_511;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", "text/html");
-        response.setHeader(std::move(header));
-        response.setBodyStr("<html><body><h1>511 Network Authentication Required</h1></body></html>");
-        return response;
+        return buildHtmlResponse(HttpStatusCode::NetworkAuthenticationRequired_511, "<html><body><h1>511 Network Authentication Required</h1></body></html>");
     }
 
     // 成功响应
     HttpResponse HttpUtils::defaultOk(const std::string& type, std::string&& body)
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-        header.code() = HttpStatusCode::OK_200;
-        header.version() = HttpVersion::HttpVersion_1_1;
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-        header.headerPairs().addHeaderPair("Content-Type", MimeType::convertToMimeType(type));
-        response.setHeader(std::move(header));
-        if(!body.empty()) response.setBodyStr(std::move(body));
-        return response;
+        auto builder = Http1_1ResponseBuilder()
+            .status(HttpStatusCode::OK_200)
+            .header("Server", GALAY_SERVER)
+            .header("Content-Type", MimeType::convertToMimeType(type));
+        if (!body.empty()) {
+            builder.body(std::move(body));
+        }
+        return builder.buildMove();
     }
 
 
@@ -1087,23 +572,13 @@ namespace galay::http
 
     HttpResponse HttpUtils::createWebSocketUpgradeResponse(const std::string& clientKey)
     {
-        HttpResponse response;
-        HttpResponseHeader header;
-
-        // 设置 101 Switching Protocols 状态码
-        header.code() = HttpStatusCode::SwitchingProtocol_101;
-        header.version() = HttpVersion::HttpVersion_1_1;
-
-        // 设置必需的 WebSocket 握手响应头
-        header.headerPairs().addHeaderPair("Upgrade", "websocket");
-        header.headerPairs().addHeaderPair("Connection", "Upgrade");
-        header.headerPairs().addHeaderPair("Sec-WebSocket-Accept", generateWebSocketAcceptKey(clientKey));
-        header.headerPairs().addHeaderPair("Server", GALAY_SERVER);
-
-        response.setHeader(std::move(header));
-        // WebSocket 握手响应不包含 body
-
-        return response;
+        return Http1_1ResponseBuilder()
+            .status(HttpStatusCode::SwitchingProtocol_101)
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Accept", generateWebSocketAcceptKey(clientKey))
+            .header("Server", GALAY_SERVER)
+            .buildMove();
     }
 #else
     // WebSocket 功能禁用时的占位实现

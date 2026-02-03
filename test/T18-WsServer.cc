@@ -13,6 +13,7 @@
 #include "galay-http/kernel/websocket/WsConn.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "kernel/websocket/WsWriterSetting.h"
 #include <iostream>
@@ -193,10 +194,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
     }
     else {
         // 普通 HTTP 请求
-        HttpResponse response;
-        response.header().version() = HttpVersion::HttpVersion_1_1;
-        response.header().code() = HttpStatusCode::OK_200;
-        response.header().headerPairs().addHeaderPair("Content-Type", "text/html");
+        auto response = Http1_1ResponseBuilder()
+            .status(HttpStatusCode::OK_200)
+            .header("Content-Type", "text/html")
+            .buildMove();
 
         std::string body = "<html><body><h1>WebSocket Test Server</h1><p>Connect to /ws for WebSocket</p></body></html>";
         response.setBodyStr(std::move(body));

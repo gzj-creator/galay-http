@@ -171,12 +171,12 @@ HttpResponse WsUpgrade::createUpgradeResponse(
     const std::string& accept_key,
     const std::string& subprotocol)
 {
-    HttpResponse response;
-    response.header().version() = HttpVersion::HttpVersion_1_1;
-    response.header().code() = HttpStatusCode::SwitchingProtocol_101;
-    response.header().headerPairs().addHeaderPair("Upgrade", "websocket");
-    response.header().headerPairs().addHeaderPair("Connection", "Upgrade");
-    response.header().headerPairs().addHeaderPair("Sec-WebSocket-Accept", accept_key);
+    auto response = Http1_1ResponseBuilder()
+        .status(HttpStatusCode::SwitchingProtocol_101)
+        .header("Upgrade", "websocket")
+        .header("Connection", "Upgrade")
+        .header("Sec-WebSocket-Accept", accept_key)
+        .buildMove();
 
     if (!subprotocol.empty()) {
         response.header().headerPairs().addHeaderPair("Sec-WebSocket-Protocol", subprotocol);

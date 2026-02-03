@@ -19,7 +19,11 @@ namespace galay::http
 
     std::string httpVersionToString(HttpVersion version)
     {
-        return g_HttpVersion[static_cast<int>(version)];
+        int idx = static_cast<int>(version);
+        if (idx < 0 || idx >= static_cast<int>(g_HttpVersion.size())) {
+            return g_HttpVersion.back();
+        }
+        return g_HttpVersion[idx];
     }
 
     HttpVersion stringToHttpVersion(std::string_view str)
@@ -34,7 +38,11 @@ namespace galay::http
 
     std::string httpMethodToString(HttpMethod method)
     {
-        return g_HttpMethods[static_cast<int>(method)];
+        int idx = static_cast<int>(method);
+        if (idx < 0 || idx >= static_cast<int>(g_HttpMethods.size())) {
+            return g_HttpMethods.back();
+        }
+        return g_HttpMethods[idx];
     }
 
     HttpMethod stringToHttpMethod(std::string_view str)

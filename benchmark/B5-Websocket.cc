@@ -9,6 +9,7 @@
 #include "galay-http/kernel/websocket/WsConn.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "kernel/websocket/WsWriterSetting.h"
 #include "galay-kernel/concurrency/AsyncMutex.h"
@@ -148,10 +149,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
         co_await handleWebSocketConnection(ws_conn).wait();
     } else {
         // 非 WebSocket 请求，返回 404
-        HttpResponse response;
-        response.header().version() = HttpVersion::HttpVersion_1_1;
-        response.header().code() = HttpStatusCode::NotFound_404;
-        response.setBodyStr("Not Found");
+        auto response = Http1_1ResponseBuilder()
+            .status(HttpStatusCode::NotFound_404)
+            .body("Not Found")
+            .buildMove();
 
         auto writer = conn.getWriter();
         co_await writer.sendResponse(response);

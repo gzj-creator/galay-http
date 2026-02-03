@@ -50,17 +50,8 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
 
         // 根据 URI 返回不同响应
         std::string uri = request.header().uri();
-        HttpResponse response;
-
-        if (uri == "/echo") {
-            std::string body = request.getBodyStr();
-            response = Http1_1ResponseBuilder::ok()
-                .header("Server", "Galay-HTTPS/1.0")
-                .header("Connection", keep_alive ? "keep-alive" : "close")
-                .text(body.empty() ? "Echo: (empty)" : "Echo: " + body)
-                .build();
-        } else {
-            std::string html = R"(<!DOCTYPE html>
+        std::string body = request.getBodyStr();
+        std::string html = R"(<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><title>HTTPS Server</title></head>
 <body>
@@ -70,12 +61,17 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     <pre>curl -k https://localhost:8443/echo -d "Hello"</pre>
 </body>
 </html>)";
-            response = Http1_1ResponseBuilder::ok()
+        HttpResponse response = (uri == "/echo")
+            ? Http1_1ResponseBuilder::ok()
+                .header("Server", "Galay-HTTPS/1.0")
+                .header("Connection", keep_alive ? "keep-alive" : "close")
+                .text(body.empty() ? "Echo: (empty)" : "Echo: " + body)
+                .build()
+            : Http1_1ResponseBuilder::ok()
                 .header("Server", "Galay-HTTPS/1.0")
                 .header("Connection", keep_alive ? "keep-alive" : "close")
                 .html(html)
                 .build();
-        }
 
         // 发送响应
         while (true) {
