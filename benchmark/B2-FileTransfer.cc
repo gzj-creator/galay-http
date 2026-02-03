@@ -77,8 +77,10 @@ Coroutine download_file(Runtime& runtime, const std::string& url, size_t& bytes_
         co_return;
     }
 
+    auto session = client.getSession();
+
     while (true) {
-        auto result = co_await client.get(client.url().path);
+        auto result = co_await session.get(client.url().path);
 
         if (!result) {
             std::cerr << "Request failed\n";

@@ -54,6 +54,7 @@ Coroutine singleRequest(int id) {
         }
         std::cout << "[Request " << id << "] Handshake completed" << std::endl;
 
+        auto session = client.getSession();
         // 发送请求
         std::cout << "[Request " << id << "] Sending request..." << std::endl;
         HttpRequest request;
@@ -65,7 +66,7 @@ Coroutine singleRequest(int id) {
         header.headerPairs().addHeaderPair("Connection", "close");
         request.setHeader(std::move(header));
 
-        auto& writer = client.getWriter();
+        auto& writer = session.getWriter();
         while (true) {
             auto send_result = co_await writer.sendRequest(request);
             if (!send_result) {
@@ -81,7 +82,7 @@ Coroutine singleRequest(int id) {
         // 接收响应
         std::cout << "[Request " << id << "] Receiving response..." << std::endl;
         HttpResponse response;
-        auto& reader = client.getReader();
+        auto& reader = session.getReader();
         while (true) {
             auto recv_result = co_await reader.getResponse(response);
             if (!recv_result) {

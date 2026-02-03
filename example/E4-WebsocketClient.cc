@@ -45,10 +45,18 @@ std::string generateWebSocketKey() {
  */
 Coroutine handleWebSocketClient(WsConn& ws_conn) {
     LogInfo("WebSocket connection established");
+    // 创建 WebSocket 连接
+    WsReaderSetting reader_setting;
+    reader_setting.max_frame_size = 1024 * 1024;  // 1MB
+    reader_setting.max_message_size = 10 * 1024 * 1024;  // 10MB
+
+    WsWriterSetting writer_setting;
+    // 注意：不需要手动设置 use_mask，WsConn 会根据 is_server 参数自动设置
+ 
 
     // 获取 Reader 和 Writer
-    auto& reader = ws_conn.getReader();
-    auto& writer = ws_conn.getWriter();
+    auto reader = ws_conn.getReader(reader_setting);
+    auto writer = ws_conn.getWriter(writer_setting);
 
     // 读取欢迎消息
     LogInfo("Waiting for welcome message");
@@ -237,8 +245,10 @@ Coroutine connectToWebSocket(Runtime& runtime, const std::string& host, int port
 
     LogInfo("Sending WebSocket upgrade request...");
 
+    auto session = client.getSession();
+
     // 发送升级请求
-    auto writer = client.getWriter();
+    auto writer = session.getWriter();
     auto send_result = co_await writer.sendRequest(request);
     if (!send_result) {
         LogError("Failed to send upgrade request: {}", send_result.error().message());
@@ -248,7 +258,7 @@ Coroutine connectToWebSocket(Runtime& runtime, const std::string& host, int port
     LogInfo("Upgrade request sent, waiting for response...");
 
     // 接收升级响应
-    auto reader = client.getReader();
+    auto reader = session.getReader();
     HttpResponse response;
     auto recv_result = co_await reader.getResponse(response);
     if (!recv_result) {
@@ -284,19 +294,9 @@ Coroutine connectToWebSocket(Runtime& runtime, const std::string& host, int port
     LogInfo("WebSocket upgrade successful!");
     LogInfo("Sec-WebSocket-Accept verified");
 
-    // 创建 WebSocket 连接
-    WsReaderSetting reader_setting;
-    reader_setting.max_frame_size = 1024 * 1024;  // 1MB
-    reader_setting.max_message_size = 10 * 1024 * 1024;  // 10MB
-
-    WsWriterSetting writer_setting;
-    // 注意：不需要手动设置 use_mask，WsConn 会根据 is_server 参数自动设置
-
+   
     WsConn ws_conn(
         std::move(client.socket()),
-        std::move(client.ringBuffer()),
-        reader_setting,
-        writer_setting,
         false  // is_server = false (客户端，WsConn 会自动设置 use_mask = true)
     );
 

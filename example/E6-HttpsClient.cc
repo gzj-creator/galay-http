@@ -46,9 +46,9 @@ Coroutine httpsClientExample(const std::string& url) {
             break;
         }
         std::cout << "SSL handshake completed\n";
-
-        auto& writer = client.getWriter();
-        auto& reader = client.getReader();
+        auto session = client.getSession();
+        auto& writer = session.getWriter();
+        auto& reader = session.getReader();
 
         // 发送多个请求 (Keep-Alive)
         for (int i = 1; i <= 3; i++) {

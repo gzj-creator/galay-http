@@ -37,8 +37,8 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     g_connection_count++;
     HTTP_LOG_INFO("WebSocket connection #{} established", g_connection_count.load());
 
-    auto& reader = ws_conn.getReader();
-    auto& writer = ws_conn.getWriter();
+    auto reader = ws_conn.getReader();
+    auto writer = ws_conn.getWriter();
 
     // 发送欢迎消息
     auto send_result = co_await writer.sendText("Welcome to WebSocket Test Server!");
@@ -165,8 +165,6 @@ Coroutine handleHttpRequest(HttpConn conn) {
 
         WsConn ws_conn(
             std::move(conn),
-            reader_setting,
-            writer_setting,
             true  // is_server
         );
 

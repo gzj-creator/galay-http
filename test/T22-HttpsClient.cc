@@ -61,7 +61,9 @@ Coroutine testHttpsClient() {
         header.headerPairs().addHeaderPair("Connection", "close");
         request.setHeader(std::move(header));
 
-        auto& writer = client.getWriter();
+        auto session = client.getSession();
+
+        auto& writer = session.getWriter();
         while (true) {
             auto send_result = co_await writer.sendRequest(request);
             if (!send_result) {
@@ -76,7 +78,7 @@ Coroutine testHttpsClient() {
         // 接收响应
         std::cout << "Receiving response..." << std::endl;
         HttpResponse response;
-        auto& reader = client.getReader();
+        auto& reader = session.getReader();
         int recv_attempts = 0;
         while (true) {
             recv_attempts++;

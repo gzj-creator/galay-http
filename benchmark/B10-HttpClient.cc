@@ -45,10 +45,10 @@ Coroutine shortConnectionWorker(int worker_id, const std::string& host, int port
         g_connect_time_us += std::chrono::duration_cast<std::chrono::microseconds>(connect_end - connect_start).count();
 
         auto request_start = std::chrono::steady_clock::now();
-
+        auto session = client.getSession();
         // 使用 HttpClient 的便捷方法发送 GET 请求
         while (true) {
-            auto result = co_await client.get(client.url().path, {
+            auto result = co_await session.get(client.url().path, {
                 {"Host", host},
                 {"Connection", "close"}
             });
@@ -109,12 +109,12 @@ Coroutine keepAliveWorker(int worker_id, int requests_per_conn, const std::strin
         }
 
         g_connect_time_us += std::chrono::duration_cast<std::chrono::microseconds>(connect_end - connect_start).count();
-
+        auto session = client.getSession();
         for (int i = 0; i < requests_per_conn; i++) {
             auto request_start = std::chrono::steady_clock::now();
 
             while (true) {
-                auto result = co_await client.get(client.url().path, {
+                auto result = co_await session.get(client.url().path, {
                     {"Host", host},
                     {"Connection", "keep-alive"}
                 });

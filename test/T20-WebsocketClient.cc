@@ -112,14 +112,11 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
 
     WsConn ws_conn(
         std::move(client.socket()),
-        std::move(client.ringBuffer()),
-        reader_setting,
-        writer_setting,
         false  // is_server = false (客户端)
     );
 
-    auto ws_reader = ws_conn.getReader();
-    auto ws_writer = ws_conn.getWriter();
+    auto ws_reader = ws_conn.getReader(reader_setting);
+    auto ws_writer = ws_conn.getWriter(writer_setting);
 
     // 读取欢迎消息
     std::string welcome_msg;

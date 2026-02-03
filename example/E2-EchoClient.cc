@@ -27,10 +27,10 @@ Coroutine sendEchoRequest(Runtime& runtime, const std::string& url, const std::s
     std::cout << "Connected to server successfully\n";
     std::cout << "Sending request: POST " << client.url().path << "\n";
     std::cout << "Request body: " << message << "\n";
-
+    auto session = client.getSession();
     // 使用 HttpClient 的 post 方法发送请求并接收响应
     while(true) {
-        auto result = co_await client.post(client.url().path, message, "text/plain", {
+        auto result = co_await session.post(client.url().path, message, "text/plain", {
             {"Host", client.url().host + ":" + std::to_string(client.url().port)},
             {"Connection", "close"}
         });

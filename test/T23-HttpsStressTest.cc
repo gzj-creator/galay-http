@@ -52,8 +52,10 @@ Coroutine keepAliveRequests(int conn_id, int requests_per_conn) {
             break;
         }
 
-        auto& writer = client.getWriter();
-        auto& reader = client.getReader();
+        auto session = client.getSession();
+
+        auto& writer = session.getWriter();
+        auto& reader = session.getReader();
 
         // 在同一连接上发送多个请求
         for (int i = 0; i < requests_per_conn; i++) {

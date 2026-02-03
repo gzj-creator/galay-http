@@ -38,7 +38,7 @@ Coroutine testGet(IOScheduler* scheduler)
 
     // 创建HttpClient
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     // 使用 HttpClientAwaitable API
     // 现在可以在循环中调用 client.get()，每次都会创建新的 awaitable
     int loop_count = 0;
@@ -46,7 +46,7 @@ Coroutine testGet(IOScheduler* scheduler)
         loop_count++;
         LogInfo("Loop iteration: {}", loop_count);
 
-        auto result = co_await client.get("/api/info");
+        auto result = co_await session.get("/api/info");
 
         if (!result) {
             // 错误处理
@@ -105,12 +105,12 @@ Coroutine testPost(IOScheduler* scheduler)
     // 使用 HttpClientAwaitable API 发送 POST 请求
     std::string body = R"({"name":"test","value":123})";
     int loop_count = 0;
-
+    auto session = client.getSession();
     while (true) {
         loop_count++;
         LogInfo("Loop iteration: {}", loop_count);
 
-        auto result = co_await client.post("/api/data", body, "application/json");
+        auto result = co_await session.post("/api/data", body, "application/json");
 
         if (!result) {
             LogError("Request failed: {}", result.error().message());
@@ -164,12 +164,12 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
 
     // 发送多个请求
     std::vector<std::string> uris = {"/", "/hello", "/test"};
-
+    auto session = client.getSession();
     for (const auto& uri : uris) {
         LogInfo("Requesting: {}", uri);
 
         while (true) {
-            auto result = co_await client.get(uri);
+            auto result = co_await session.get(uri);
 
             if (!result) {
                 LogError("Request failed: {}", result.error().message());

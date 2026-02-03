@@ -82,9 +82,9 @@ Coroutine benchmarkWebSocketClient(
         .header("Sec-WebSocket-Version", "13")
         .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
         .build();
-
+    auto session = client.getSession();
     // 发送升级请求
-    auto writer = client.getWriter();
+    auto writer = session.getWriter();
     auto send_result = co_await writer.sendRequest(request);
     if (!send_result) {
         LogError("[Client {}] Failed to send upgrade request: {}", client_id, send_result.error().message());
@@ -94,7 +94,7 @@ Coroutine benchmarkWebSocketClient(
     }
 
     // 读取升级响应
-    auto reader = client.getReader();
+    auto reader = session.getReader();
     HttpResponse response;
     bool complete = false;
     while (!complete) {
@@ -127,9 +127,6 @@ Coroutine benchmarkWebSocketClient(
 
     WsConn ws_conn(
         std::move(client.socket()),
-        std::move(client.ringBuffer()),
-        reader_setting,
-        writer_setting,
         false  // is_server = false (客户端)
     );
 

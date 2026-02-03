@@ -40,11 +40,11 @@ Coroutine testGetMethod(IOScheduler* scheduler)
     std::cout << "✓ Connected to server" << std::endl;
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.get("/api/data");
+        auto result = co_await session.get("/api/data");
 
         if (!result) {
             std::cout << "❌ GET request failed: " << result.error().message() << std::endl;
@@ -93,11 +93,11 @@ Coroutine testPostMethod(IOScheduler* scheduler)
     HttpClient client(std::move(socket));
 
     std::string body = R"({"name": "test", "value": 123})";
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.post("/api/data", body, "application/json");
+        auto result = co_await session.post("/api/data", body, "application/json");
 
         if (!result) {
             std::cout << "❌ POST request failed: " << result.error().message() << std::endl;
@@ -145,11 +145,11 @@ Coroutine testPutMethod(IOScheduler* scheduler)
     HttpClient client(std::move(socket));
 
     std::string body = R"({"name": "updated", "value": 456})";
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.put("/api/data/1", body, "application/json");
+        auto result = co_await session.put("/api/data/1", body, "application/json");
 
         if (!result) {
             std::cout << "❌ PUT request failed: " << result.error().message() << std::endl;
@@ -195,11 +195,11 @@ Coroutine testDeleteMethod(IOScheduler* scheduler)
     std::cout << "✓ Connected to server" << std::endl;
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.del("/api/data/1");
+        auto result = co_await session.del("/api/data/1");
 
         if (!result) {
             std::cout << "❌ DELETE request failed: " << result.error().message() << std::endl;
@@ -245,11 +245,11 @@ Coroutine testHeadMethod(IOScheduler* scheduler)
     std::cout << "✓ Connected to server" << std::endl;
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.head("/api/data");
+        auto result = co_await session.head("/api/data");
 
         if (!result) {
             std::cout << "❌ HEAD request failed: " << result.error().message() << std::endl;
@@ -296,11 +296,11 @@ Coroutine testOptionsMethod(IOScheduler* scheduler)
     std::cout << "✓ Connected to server" << std::endl;
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.options("/api/data");
+        auto result = co_await session.options("/api/data");
 
         if (!result) {
             std::cout << "❌ OPTIONS request failed: " << result.error().message() << std::endl;
@@ -355,11 +355,11 @@ Coroutine testPatchMethod(IOScheduler* scheduler)
     HttpClient client(std::move(socket));
 
     std::string body = R"({"value": 789})";
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.patch("/api/data/1", body, "application/json");
+        auto result = co_await session.patch("/api/data/1", body, "application/json");
 
         if (!result) {
             std::cout << "❌ PATCH request failed: " << result.error().message() << std::endl;
@@ -405,11 +405,11 @@ Coroutine testTraceMethod(IOScheduler* scheduler)
     std::cout << "✓ Connected to server" << std::endl;
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.trace("/api/data");
+        auto result = co_await session.trace("/api/data");
 
         if (!result) {
             std::cout << "❌ TRACE request failed: " << result.error().message() << std::endl;
@@ -455,11 +455,11 @@ Coroutine testConnectMethod(IOScheduler* scheduler)
     std::cout << "✓ Connected to server" << std::endl;
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.tunnel("example.com:443");
+        auto result = co_await session.tunnel("example.com:443");
 
         if (!result) {
             std::cout << "❌ CONNECT request failed: " << result.error().message() << std::endl;

@@ -54,12 +54,12 @@ Coroutine testServerCloseConnection(IOScheduler* scheduler)
     }
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     // 发送请求后立即关闭连接
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.get("/");
+        auto result = co_await session.get("/");
 
         if (!result) {
             LogInfo("✓ Got error after {} loops: {}", loop_count, result.error().message());
@@ -100,7 +100,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
     }
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     // 发送3个连续请求
     for (int i = 0; i < 3; i++) {
         LogInfo("Request #{}", i + 1);
@@ -108,7 +108,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
         int loop_count = 0;
         while (true) {
             loop_count++;
-            auto result = co_await client.get("/api/info");
+            auto result = co_await session.get("/api/info");
 
             if (!result) {
                 LogError("✗ Request #{} failed: {}", i + 1, result.error().message());
@@ -154,6 +154,7 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
     }
 
     HttpClient client(std::move(socket));
+    auto session = client.getSession();
 
     // 创建一个大的请求体 (10KB)
     std::string large_body(10240, 'A');
@@ -161,7 +162,7 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.post("/api/data", large_body, "text/plain");
+        auto result = co_await session.post("/api/data", large_body, "text/plain");
 
         if (!result) {
             LogInfo("Request failed (expected for large body): {}", result.error().message());
@@ -204,11 +205,11 @@ Coroutine test404NotFound(IOScheduler* scheduler)
     }
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.get("/nonexistent");
+        auto result = co_await session.get("/nonexistent");
 
         if (!result) {
             LogError("✗ Request failed: {}", result.error().message());
@@ -255,11 +256,11 @@ Coroutine testEmptyResponse(IOScheduler* scheduler)
     }
 
     HttpClient client(std::move(socket));
-
+    auto session = client.getSession();
     int loop_count = 0;
     while (true) {
         loop_count++;
-        auto result = co_await client.del("/api/resource");
+        auto result = co_await session.del("/api/resource");
 
         if (!result) {
             LogInfo("Request failed: {}", result.error().message());

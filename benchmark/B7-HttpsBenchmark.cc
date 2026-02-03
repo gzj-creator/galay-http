@@ -54,8 +54,10 @@ Coroutine keepAliveWorker(int worker_id, int requests_per_conn, const std::strin
             break;
         }
 
-        auto& writer = client.getWriter();
-        auto& reader = client.getReader();
+        auto session = client.getSession();
+
+        auto& writer = session.getWriter();
+        auto& reader = session.getReader();
 
         for (int i = 0; i < requests_per_conn; i++) {
             HttpRequest request;

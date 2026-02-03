@@ -34,8 +34,8 @@ void signalHandler(int) {
 Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     total_connections++;
 
-    auto& reader = ws_conn.getReader();
-    auto& writer = ws_conn.getWriter();
+    auto reader = ws_conn.getReader();
+    auto writer = ws_conn.getWriter();
 
     // 发送欢迎消息
     co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
@@ -126,8 +126,6 @@ Coroutine handleHttpRequest(HttpConn conn) {
 
         WsConn ws_conn(
             std::move(conn),
-            reader_setting,
-            writer_setting,
             true  // is_server
         );
 

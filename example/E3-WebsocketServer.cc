@@ -41,9 +41,17 @@ using namespace std::chrono_literals;
 Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     HTTP_LOG_INFO("WebSocket connection established");
 
+
+     // 升级到 WebSocket 连接
+     WsReaderSetting reader_setting;
+     reader_setting.max_frame_size = 1024 * 1024;  // 1MB
+     reader_setting.max_message_size = 10 * 1024 * 1024;  // 10MB
+
+     WsWriterSetting writer_setting;
+
     // 获取 Reader 和 Writer（必须在协程开始时获取，保证 ws_conn 生命周期）
-    auto& reader = ws_conn.getReader();
-    auto& writer = ws_conn.getWriter();
+    auto reader = ws_conn.getReader(reader_setting);
+    auto writer = ws_conn.getWriter(writer_setting);
 
     // 发送欢迎消息
     HTTP_LOG_INFO("Sending welcome message");
@@ -166,18 +174,9 @@ Coroutine handleHttpRequest(HttpConn conn) {
             co_return;
         }
 
-        // 升级到 WebSocket 连接
-        WsReaderSetting reader_setting;
-        reader_setting.max_frame_size = 1024 * 1024;  // 1MB
-        reader_setting.max_message_size = 10 * 1024 * 1024;  // 10MB
-
-        WsWriterSetting writer_setting;
-
         // 从 HttpConn 创建 WebSocket 连接（转移所有权）
         WsConn ws_conn(
             std::move(conn),
-            reader_setting,
-            writer_setting,
             true  // is_server
         );
 
