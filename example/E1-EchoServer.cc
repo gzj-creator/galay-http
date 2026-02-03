@@ -8,7 +8,6 @@
 #include "galay-http/kernel/http/HttpRouter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
-#include "galay-kernel/common/Log.h"
 #include <iostream>
 #include <string>
 

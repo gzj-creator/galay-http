@@ -3,7 +3,6 @@
  * @brief HttpClientAwaitable 功能测试
  */
 
-#include <iostream>
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/common/Log.h"

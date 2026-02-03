@@ -7,7 +7,6 @@
 #include "galay-http/kernel/http/HttpReader.h"
 #include "galay-http/kernel/http/HttpWriter.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/common/Log.h"
 #include <iostream>
 #include <chrono>
 

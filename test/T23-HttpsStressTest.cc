@@ -8,7 +8,6 @@
 #include <iostream>
 #include <atomic>
 #include <chrono>
-#include <vector>
 
 using namespace galay::http;
 using namespace galay::kernel;

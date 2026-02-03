@@ -3,11 +3,9 @@
  * @brief WebSocket 客户端测试程序
  */
 
-#include <iostream>
 #include <string>
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-http/kernel/websocket/WsConn.h"
-#include "galay-http/kernel/websocket/WsUpgrade.h"
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/common/Log.h"

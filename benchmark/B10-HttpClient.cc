@@ -10,7 +10,6 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
-#include <vector>
 
 using namespace galay::http;
 using namespace galay::kernel;
