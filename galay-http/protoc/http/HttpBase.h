@@ -36,6 +36,8 @@ namespace galay::http
     #define DEFAULT_LOG_URI_PEER_LIMIT      30
     #define DEFAULT_LOG_STATUS_LENGTH       20
     #define DEFAULT_LOG_STATUS_TEXT_LENGTH  50
+    #define DEFAULT_LOG_QUEUE_SIZE          8192
+    #define DEFAULT_LOG_THREADS             1
 
     enum class HttpMethod: int
     {

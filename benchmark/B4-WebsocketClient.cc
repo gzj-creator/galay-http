@@ -49,8 +49,12 @@ std::atomic<uint64_t> g_total_bytes_sent{0};
 std::atomic<uint64_t> g_total_bytes_received{0};
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_active_clients{0};
-AsyncMutex g_latency_mutex;
-std::vector<uint32_t> g_latencies_us;
+
+// 延迟统计 - 使用原子变量
+std::atomic<uint64_t> g_latency_sum_us{0};  // 总延迟（微秒）
+std::atomic<uint64_t> g_latency_count{0};   // 延迟样本数量
+std::atomic<uint32_t> g_latency_min_us{UINT32_MAX};  // 最小延迟
+std::atomic<uint32_t> g_latency_max_us{0};  // 最大延迟
 
 struct ClientGuard {
     explicit ClientGuard(std::atomic<int>& counter)
@@ -158,19 +162,32 @@ Coroutine benchmarkWebSocketClient(
         WsOpcode echo_opcode;
         while(true) {
             auto echo_result = co_await ws_reader.getMessage(echo_msg, echo_opcode);
-            if (echo_result.has_value() && echo_result.value()) {
-                g_total_messages_received.fetch_add(1);
-                g_total_bytes_received.fetch_add(echo_msg.size());
-                auto lock_result = co_await g_latency_mutex.lock();
-                if (lock_result.has_value()) {
-                    g_latencies_us.push_back(toLatencyUs(std::chrono::steady_clock::now() - round_start));
-                    g_latency_mutex.unlock();
-                }
-                break;
-            } else {
-                HTTP_LOG_ERROR("[client] [{}] [echo] [recv-fail]", client_id);
+            if (!echo_result.has_value()) {
+                // 连接错误，退出
+                HTTP_LOG_ERROR("[client] [{}] [echo] [error] [{}]", client_id, echo_result.error().message());
                 co_return;
             }
+            if (echo_result.value()) {
+                // 消息接收完成
+                g_total_messages_received.fetch_add(1);
+                g_total_bytes_received.fetch_add(echo_msg.size());
+
+                // 记录延迟统计
+                uint32_t latency_us = toLatencyUs(std::chrono::steady_clock::now() - round_start);
+                g_latency_sum_us.fetch_add(latency_us);
+                g_latency_count.fetch_add(1);
+
+                // 更新最小值
+                uint32_t old_min = g_latency_min_us.load();
+                while (latency_us < old_min && !g_latency_min_us.compare_exchange_weak(old_min, latency_us));
+
+                // 更新最大值
+                uint32_t old_max = g_latency_max_us.load();
+                while (latency_us > old_max && !g_latency_max_us.compare_exchange_weak(old_max, latency_us));
+
+                break;
+            }
+            // 返回 false 表示消息未完成，继续循环等待
         }
         
     }
@@ -187,13 +204,6 @@ void printStats(const std::chrono::steady_clock::time_point& start_time,
                 const std::chrono::steady_clock::time_point& end_time) {
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
     double duration_sec = duration / 1000.0;
-
-    std::vector<uint32_t> latencies;
-    while (!g_latency_mutex.tryLock()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    latencies = g_latencies_us;
-    g_latency_mutex.unlock();
 
     std::cout << "\n========================================\n";
     std::cout << "WebSocket Benchmark Results\n";
@@ -215,27 +225,27 @@ void printStats(const std::chrono::steady_clock::time_point& start_time,
     std::cout << "  Messages/sec:  " << (g_total_messages_sent.load() / duration_sec) << "\n";
     std::cout << "  MB/sec (sent): " << (g_total_bytes_sent.load() / 1024.0 / 1024.0 / duration_sec) << "\n";
     std::cout << "  MB/sec (recv): " << (g_total_bytes_received.load() / 1024.0 / 1024.0 / duration_sec) << "\n";
-    if (!latencies.empty()) {
-        std::sort(latencies.begin(), latencies.end());
-        uint64_t sum_us = std::accumulate(latencies.begin(), latencies.end(), uint64_t(0));
-        auto pick = [&](double p) -> uint32_t {
-            size_t idx = static_cast<size_t>(p * (latencies.size() - 1));
-            return latencies[idx];
-        };
-        double avg_ms = static_cast<double>(sum_us) / latencies.size() / 1000.0;
+
+    uint64_t latency_count = g_latency_count.load();
+    if (latency_count > 0) {
+        uint64_t latency_sum = g_latency_sum_us.load();
+        uint32_t latency_min = g_latency_min_us.load();
+        uint32_t latency_max = g_latency_max_us.load();
+        double avg_ms = static_cast<double>(latency_sum) / latency_count / 1000.0;
+
         std::cout << "\nLatency (RTT):\n";
-        std::cout << "  Count:    " << latencies.size() << "\n";
-        std::cout << "  Min:      " << (latencies.front() / 1000.0) << " ms\n";
+        std::cout << "  Count:    " << latency_count << "\n";
+        std::cout << "  Min:      " << (latency_min / 1000.0) << " ms\n";
         std::cout << "  Avg:      " << avg_ms << " ms\n";
-        std::cout << "  P50:      " << (pick(0.50) / 1000.0) << " ms\n";
-        std::cout << "  P95:      " << (pick(0.95) / 1000.0) << " ms\n";
-        std::cout << "  P99:      " << (pick(0.99) / 1000.0) << " ms\n";
-        std::cout << "  Max:      " << (latencies.back() / 1000.0) << " ms\n";
+        std::cout << "  Max:      " << (latency_max / 1000.0) << " ms\n";
     }
     std::cout << "========================================\n";
 }
 
 int main(int argc, char* argv[]) {
+    // 设置日志为文件模式
+    galay::http::HttpLogger::file("B4-WebsocketClient.log");
+
     // 解析命令行参数
     int num_clients = 10;
     double duration_sec = 10.0;
@@ -257,13 +267,6 @@ int main(int argc, char* argv[]) {
     galay::kernel::Runtime rt;
     rt.start();
 
-    // 获取 IO 调度器
-    auto* scheduler = rt.getNextIOScheduler();
-    if (!scheduler) {
-        std::cerr << "Failed to get IO scheduler\n";
-        return 1;
-    }
-
     // 生成测试消息
     std::string message_payload(message_size, 'A');
 
@@ -272,9 +275,15 @@ int main(int argc, char* argv[]) {
     auto duration = std::chrono::duration<double>(duration_sec);
     auto end_time = start_time + std::chrono::duration_cast<std::chrono::steady_clock::duration>(duration);
 
-    // 启动所有客户端
+    // 启动所有客户端，轮询分配到不同的 IO 调度器
     std::cout << "Starting " << num_clients << " clients...\n";
     for (int i = 0; i < num_clients; i++) {
+        // 每个客户端使用不同的 IO 调度器，充分利用多核
+        auto* scheduler = rt.getNextIOScheduler();
+        if (!scheduler) {
+            std::cerr << "Failed to get IO scheduler for client " << i << "\n";
+            return 1;
+        }
         scheduler->spawn(benchmarkWebSocketClient(scheduler, i, message_payload, end_time));
     }
 

@@ -2,7 +2,6 @@
 #define GALAY_HTTP_LOGGER_H
 
 #include "galay-http/protoc/http/HttpBase.h"
-#include "galay-kernel/common/Log.h"
 #include <memory>
 #include <string>
 #include <spdlog/spdlog.h>
@@ -10,8 +9,6 @@
 
 namespace galay::http
 {
-    using kernel::Logger;
-
     class HttpLogger
     {
     public:
@@ -20,14 +17,21 @@ namespace galay::http
         HttpLogger();
 
         static HttpLogger* getInstance();
-        Logger* getLogger() {
-            return m_logger.get();
+
+        // 获取底层的 spdlog logger
+        std::shared_ptr<spdlog::logger> getSpdlogger() {
+            return m_spdlogger;
         }
-        void resetLogger(std::unique_ptr<Logger> logger) {
-            m_logger = std::move(logger);
-        }
+
+        // 设置为控制台输出（彩色）
+        static void console();
+
+        // 设置为文件输出
+        // @param log_file_path 日志文件路径，默认为 "galay-http.log"
+        static void file(const std::string& log_file_path = "galay-http.log");
+
     private:
-        std::unique_ptr<Logger> m_logger;
+        std::shared_ptr<spdlog::logger> m_spdlogger;
         std::shared_ptr<spdlog::details::thread_pool> m_thread_pool;
     };
 

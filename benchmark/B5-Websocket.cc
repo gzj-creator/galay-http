@@ -41,21 +41,24 @@ void signalHandler(int) {
  * @brief WebSocket 连接处理协程
  */
 Coroutine handleWebSocketConnection(WsConn& ws_conn) {
-    total_connections++;
+    int conn_id = total_connections.fetch_add(1);
 
     auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
     uint64_t conn_messages = 0;
     uint64_t conn_bytes = 0;
-    HTTP_LOG_INFO("[ws] [welcome] [send]");
+    HTTP_LOG_INFO("[ws] [conn-{}] [start]", conn_id);
+
     // 发送欢迎消息
+    HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sending]", conn_id);
     while (true) {
         auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
         if(!res) {
-            HTTP_LOG_ERROR("[ws] [welcome] [send-fail] [{}]", res.error().message());
+            HTTP_LOG_ERROR("[ws] [conn-{}] [welcome] [send-fail] [{}]", conn_id, res.error().message());
             co_return;
         }
         if(res.value()) {
+            HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sent]", conn_id);
             break;
         }
     }
@@ -65,15 +68,18 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         std::string message;
         WsOpcode opcode;
 
+        HTTP_LOG_INFO("[ws] [conn-{}] [waiting-message]", conn_id);
         auto result = co_await reader.getMessage(message, opcode);
 
-        if (!result.has_value()) {
+        if (!result) {
             // 连接错误
+            HTTP_LOG_ERROR("[ws] [conn-{}] [read-error] [{}]", conn_id, result.error().message());
             break;
         }
 
         if (!result.value()) {
             // 消息未完成，继续读取
+            HTTP_LOG_INFO("[ws] [conn-{}] [message-incomplete]", conn_id);
             continue;
         }
 
@@ -84,30 +90,77 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
             conn_messages++;
             conn_bytes += message.size();
 
+            HTTP_LOG_INFO("[ws] [conn-{}] [recv] [opcode={}] [size={}] [total-msg={}]",
+                         conn_id, static_cast<int>(opcode), message.size(), conn_messages);
+
             // 回显消息
             if (opcode == WsOpcode::Text) {
-                co_await writer.sendText(message);
+                HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sending]", conn_id);
+                while (true) {
+                    auto send_res = co_await writer.sendText(message);
+                    if (!send_res) {
+                        HTTP_LOG_ERROR("[ws] [conn-{}] [echo-text] [send-fail] [{}]", conn_id, send_res.error().message());
+                        goto cleanup;
+                    }
+                    if (send_res.value()) {
+                        HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sent]", conn_id);
+                        break;
+                    }
+                }
             } else {
-                co_await writer.sendBinary(message);
+                HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sending]", conn_id);
+                while (true) {
+                    auto send_res = co_await writer.sendBinary(message);
+                    if (!send_res) {
+                        HTTP_LOG_ERROR("[ws] [conn-{}] [echo-binary] [send-fail] [{}]", conn_id, send_res.error().message());
+                        goto cleanup;
+                    }
+                    if (send_res.value()) {
+                        HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sent]", conn_id);
+                        break;
+                    }
+                }
             }
 
         } else if (opcode == WsOpcode::Ping) {
             // 响应 Ping
-            co_await writer.sendPong(message);
+            HTTP_LOG_INFO("[ws] [conn-{}] [ping] [responding]", conn_id);
+            while (true) {
+                auto pong_res = co_await writer.sendPong(message);
+                if (!pong_res) {
+                    HTTP_LOG_ERROR("[ws] [conn-{}] [pong] [send-fail] [{}]", conn_id, pong_res.error().message());
+                    goto cleanup;
+                }
+                if (pong_res.value()) {
+                    HTTP_LOG_INFO("[ws] [conn-{}] [pong] [sent]", conn_id);
+                    break;
+                }
+            }
 
         } else if (opcode == WsOpcode::Close) {
             // 客户端关闭连接
-            co_await writer.sendClose();
+            HTTP_LOG_INFO("[ws] [conn-{}] [close-requested]", conn_id);
+            while (true) {
+                auto close_res = co_await writer.sendClose();
+                if (!close_res) {
+                    HTTP_LOG_ERROR("[ws] [conn-{}] [close] [send-fail] [{}]", conn_id, close_res.error().message());
+                    break;
+                }
+                if (close_res.value()) {
+                    HTTP_LOG_INFO("[ws] [conn-{}] [close] [sent]", conn_id);
+                    break;
+                }
+            }
             break;
         }
     }
 
-    auto lock_result = co_await g_conn_mutex.lock();
-    if (lock_result.has_value()) {
-        g_conn_stats.emplace_back(conn_messages, conn_bytes);
-        g_conn_mutex.unlock();
-    }
+cleanup:
+    HTTP_LOG_INFO("[ws] [conn-{}] [cleanup] [messages={}] [bytes={}]", conn_id, conn_messages, conn_bytes);
 
+    auto lock_result = co_await g_conn_mutex.lock();
+    g_conn_stats.emplace_back(conn_messages, conn_bytes);
+    g_conn_mutex.unlock();
     co_await ws_conn.close();
     co_return;
 }
@@ -116,39 +169,57 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
  * @brief HTTP 请求处理协程
  */
 Coroutine handleHttpRequest(HttpConn conn) {
+    static std::atomic<int> req_id{0};
+    int current_req_id = req_id.fetch_add(1);
+
+    HTTP_LOG_INFO("[http] [req-{}] [start]", current_req_id);
+
     auto reader = conn.getReader();
     HttpRequest request;
 
+    HTTP_LOG_INFO("[http] [req-{}] [reading-request]", current_req_id);
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
+        HTTP_LOG_ERROR("[http] [req-{}] [read-fail] [{}]", current_req_id, read_result.error().message());
         co_await conn.close();
         co_return;
     }
 
+    HTTP_LOG_INFO("[http] [req-{}] [read-ok] [uri={}]", current_req_id, request.header().uri());
+
     // 检查是否是 WebSocket 升级请求
     if (request.header().uri() == "/ws" || request.header().uri() == "/") {
+        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [handling]", current_req_id);
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
+            HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [fail]", current_req_id);
             auto writer = conn.getWriter();
             co_await writer.sendResponse(upgrade_result.response);
             co_await conn.close();
             co_return;
         }
 
+        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [sending-response]", current_req_id);
         // 发送升级响应
         auto writer = conn.getWriter();
         auto send_result = co_await writer.sendResponse(upgrade_result.response);
 
         if (!send_result) {
+            HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [send-fail] [{}]", current_req_id, send_result.error().message());
             co_await conn.close();
             co_return;
         }
+
+        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [response-sent] [converting-to-ws]", current_req_id);
         WsConn ws_conn = WsConn::from(std::move(conn), true);
 
+        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [entering-ws-handler]", current_req_id);
         co_await handleWebSocketConnection(ws_conn).wait();
+        HTTP_LOG_INFO("[http] [req-{}] [ws-handler] [done]", current_req_id);
     } else {
         // 非 WebSocket 请求，返回 404
+        HTTP_LOG_INFO("[http] [req-{}] [not-ws] [404]", current_req_id);
         auto response = Http1_1ResponseBuilder()
             .status(HttpStatusCode::NotFound_404)
             .body("Not Found")
@@ -163,6 +234,9 @@ Coroutine handleHttpRequest(HttpConn conn) {
 }
 
 int main(int argc, char* argv[]) {
+    // 设置日志为文件模式
+    galay::http::HttpLogger::file("B5-Websocket.log");
+
     uint16_t port = 8080;
     if (argc >= 2) {
         port = std::atoi(argv[1]);

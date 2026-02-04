@@ -18,6 +18,16 @@ include_directories(${PROJECT_SOURCE_DIR})
 # 启用 spdlog 源代码位置捕获（用于显示文件名和行号）
 add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 
+# ========== 全局调试日志控制 ==========
+# 根据构建类型设置 ENABLE_DEBUG 宏，影响所有子项目
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "[Global] Build type: Debug - Enabling ENABLE_DEBUG macro for all targets")
+    add_compile_definitions(ENABLE_DEBUG)
+else()
+    message(STATUS "[Global] Build type: ${CMAKE_BUILD_TYPE} - Debug logs disabled for performance")
+endif()
+# ======================================
+
 add_subdirectory(galay-http)
 add_subdirectory(test)
 add_subdirectory(benchmark)

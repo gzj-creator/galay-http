@@ -1,30 +1,18 @@
-# HTTP 源文件（模板化后移除了部分 .cc 文件）
-set(HTTP_SOURCES
-    protoc/http/HttpBase.cc
-    protoc/http/HttpBody.cc
-    protoc/http/HttpError.cc
-    protoc/http/HttpHeader.cc
-    protoc/http/HttpRequest.cc
-    protoc/http/HttpResponse.cc
-    protoc/http/HttpChunk.cc
-    utils/HttpUtils.cc
-    utils/Http1_1ResponseBuilder.cc
-    utils/Http1_1RequestBuilder.cc
-    kernel/http/HttpRouter.cc
+# 自动收集源文件
+file(GLOB_RECURSE HTTP_SOURCES
+    "protoc/http/*.cc"
+    "utils/*.cc"
+    "kernel/http/*.cc"
 )
 
-# WebSocket 源文件（模板化后移除了部分 .cc 文件）
-set(WS_SOURCES
-    protoc/websocket/WebSocketFrame.cc
-    kernel/websocket/WsUpgrade.cc
-    kernel/websocket/WsHeartbeat.cc
+file(GLOB_RECURSE WS_SOURCES
+    "protoc/websocket/*.cc"
+    "kernel/websocket/*.cc"
 )
 
-# HTTP/2 源文件
-set(HTTP2_SOURCES
-    protoc/http2/Http2Base.cc
-    protoc/http2/Http2Frame.cc
-    protoc/http2/Http2Hpack.cc
+file(GLOB_RECURSE HTTP2_SOURCES
+    "protoc/http2/*.cc"
+    "kernel/http2/*.cc"
 )
 
 # 合并所有源文件
@@ -36,15 +24,6 @@ find_package(galay-kernel REQUIRED)
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
 endif()
-
-# ========== 调试日志控制 ==========
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(STATUS "Build type: Debug - Enabling ENABLE_DEBUG macro")
-    add_definitions(-DENABLE_DEBUG)
-else()
-    message(STATUS "Build type: ${CMAKE_BUILD_TYPE} - Debug logs disabled for performance")
-endif()
-# ==================================
 
 add_library(${PROJECT_NAME} SHARED ${SRC_LIST})
 

@@ -1,69 +1,64 @@
 #ifndef GALAY_HTTP_LOG_H
 #define GALAY_HTTP_LOG_H
 
+// 必须在包含 spdlog 之前定义，以启用源代码位置捕获
+#ifndef SPDLOG_ACTIVE_LEVEL
+#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_TRACE
+#endif
+
+#include "galay-http/utils/HttpLogger.h"
 #include <spdlog/spdlog.h>
-#include <spdlog/sinks/stdout_color_sinks.h>
-#include <memory>
 
-namespace galay
-{
-namespace http
-{
+// 调试日志宏 - 通过 ENABLE_DEBUG 宏控制是否编译
+// 当 ENABLE_DEBUG 未定义时，这些宏在编译时会被完全移除，零性能开销
+// 显式传递源代码位置（文件名和行号）
 
-// 日志管理类
-class HttpLogManager
-{
-public:
-    static HttpLogManager& instance() {
-        static HttpLogManager manager;
-        return manager;
-    }
-
-    std::shared_ptr<spdlog::logger> getLogger() {
-        return m_logger;
-    }
-
-private:
-    HttpLogManager() {
-        // 创建带颜色的控制台logger
-        m_logger = spdlog::stdout_color_mt("http");
-
-        // 设置日志格式：[时间] [级别] [文件:行号] 消息
-        m_logger->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%^%l%$] [%s:%#] %v");
-
-        // 设置日志级别
 #ifdef ENABLE_DEBUG
-        m_logger->set_level(spdlog::level::debug);
-#else
-        m_logger->set_level(spdlog::level::info);
-#endif
-    }
-
-    ~HttpLogManager() {
-        spdlog::drop("http");
-    }
-
-    std::shared_ptr<spdlog::logger> m_logger;
-};
-
-} // namespace http
-} // namespace galay
-
-// 日志宏定义
-#ifdef ENABLE_DEBUG
+    // Debug 模式：启用所有日志
     #define HTTP_LOG_DEBUG(...) \
-        SPDLOG_LOGGER_DEBUG(galay::http::HttpLogManager::instance().getLogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_DEBUG(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_INFO(...) \
+        SPDLOG_LOGGER_INFO(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_WARN(...) \
+        SPDLOG_LOGGER_WARN(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_ERROR(...) \
+        SPDLOG_LOGGER_ERROR(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
 #else
-    #define HTTP_LOG_DEBUG(...) ((void)0)
+    // Release 模式：移除 debug 日志，保留 info 及以上级别
+    #define HTTP_LOG_DEBUG(...) ((void)0)  // 编译时完全移除
+
+    #define HTTP_LOG_INFO(...) \
+        SPDLOG_LOGGER_INFO(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_WARN(...) \
+        SPDLOG_LOGGER_WARN(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_ERROR(...) \
+        SPDLOG_LOGGER_ERROR(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
 #endif
 
-#define HTTP_LOG_INFO(...) \
-    SPDLOG_LOGGER_INFO(galay::http::HttpLogManager::instance().getLogger(), __VA_ARGS__)
+// 格式化输出宏 - 使用 HTTP_LOG_INFO 以显示源代码位置
+#define SERVER_REQUEST_LOG(METHOD, URI) \
+    HTTP_LOG_INFO("{:<{}} {:<{}}", \
+        fmt::format("[{}{}{}]", galay::http::method_color(METHOD), galay::http::httpMethodToString(METHOD), galay::http::RESET_COLOR), galay::http::method_length(METHOD), \
+        fmt::format("[{}{}{}]", galay::http::method_color(METHOD), URI, galay::http::RESET_COLOR), galay::http::uri_length(URI))
 
-#define HTTP_LOG_WARN(...) \
-    SPDLOG_LOGGER_WARN(galay::http::HttpLogManager::instance().getLogger(), __VA_ARGS__)
+#define SERVER_RESPONSE_DURING_LOG(STATUS, DURING_MS) \
+    HTTP_LOG_INFO("{:<{}} {:<{}} [{}During: {}ms{}]", \
+        fmt::format("[{}{}{}]", galay::http::status_color(STATUS), std::to_string(static_cast<int>(STATUS)), galay::http::RESET_COLOR), galay::http::status_length(STATUS), \
+        fmt::format("[{}{}{}]", galay::http::status_color(STATUS), galay::http::httpStatusCodeToString(STATUS), galay::http::RESET_COLOR), galay::http::status_code_length(STATUS), \
+        galay::http::resp_time_color(DURING_MS), std::to_string(DURING_MS), galay::http::RESET_COLOR)
 
-#define HTTP_LOG_ERROR(...) \
-    SPDLOG_LOGGER_ERROR(galay::http::HttpLogManager::instance().getLogger(), __VA_ARGS__)
+#define SERVER_RESPONSE_LOG(STATUS) \
+    HTTP_LOG_INFO("{:<{}} {:<{}}", \
+        fmt::format("[{}{}{}]", galay::http::status_color(STATUS), std::to_string(static_cast<int>(STATUS)), galay::http::RESET_COLOR), galay::http::status_length(STATUS), \
+        fmt::format("[{}{}{}]", galay::http::status_color(STATUS), galay::http::httpStatusCodeToString(STATUS), galay::http::RESET_COLOR), galay::http::status_code_length(STATUS))
+
+#define CLIENT_REQUEST_LOG(METHOD, URI) SERVER_REQUEST_LOG(METHOD, URI)
+#define CLIENT_RESPONSE_LOG(STATUS)  SERVER_RESPONSE_LOG(STATUS)
 
 #endif // GALAY_HTTP_LOG_H
+
