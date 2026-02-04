@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstdint>
 #include <ctime>
+#include "HttpETag.h"
 
 namespace galay::http
 {
@@ -233,16 +234,9 @@ public:
      */
     static bool checkIfRange(const std::string& ifRangeHeader,
                            const std::string& etag,
-                           uint64_t lastModified)
+                           std::time_t lastModified)
     {
-        // 如果 If-Range 为 ETag
-        if (ifRangeHeader.size() > 0 && ifRangeHeader[0] == '"') {
-            return ifRangeHeader == etag;
-        }
-
-        // 如果 If-Range 为日期（HTTP-date）
-        // 简化处理：直接返回 true，让服务器更新
-        return true;
+        return ETagGenerator::matchIfRange(etag, ifRangeHeader, lastModified);
     }
 
 private:

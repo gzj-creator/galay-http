@@ -3,8 +3,12 @@
 
 #include <string>
 #include <ctime>
+#include <time.h>
 #include <cstdint>
 #include <vector>
+#include <sstream>
+#include <iomanip>
+#include <locale>
 #include <filesystem>
 #include <sys/stat.h>
 
@@ -89,15 +93,48 @@ public:
      */
     static bool match(const std::string& etag1, const std::string& etag2)
     {
-        auto normalize = [](const std::string& etag) -> std::string {
-            std::string normalized = etag;
-            // 移除弱 ETag 前缀 "W/"
-            if (normalized.size() >= 2 && normalized[0] == 'W' && normalized[1] == '/') {
-                normalized = normalized.substr(2);
-            }
-            return normalized;
-        };
-        return normalize(etag1) == normalize(etag2);
+        return normalizeEtagValue(etag1) == normalizeEtagValue(etag2);
+    }
+
+    /**
+     * @brief 检查 If-None-Match 是否匹配当前 ETag
+     */
+    static bool matchIfNoneMatch(const std::string& etag, const std::string& headerValue)
+    {
+        return matchEtagHeader(etag, headerValue);
+    }
+
+    /**
+     * @brief 检查 If-Match 是否匹配当前 ETag
+     */
+    static bool matchIfMatch(const std::string& etag, const std::string& headerValue)
+    {
+        return matchEtagHeader(etag, headerValue);
+    }
+
+    /**
+     * @brief 检查 If-Range 是否匹配当前 ETag（日期将与 lastModified 比较）
+     */
+    static bool matchIfRange(const std::string& etag, const std::string& headerValue, std::time_t lastModified)
+    {
+        const std::string headerTrim = trim(headerValue);
+        if (headerTrim.empty()) {
+            return true;
+        }
+
+        const bool looksLikeEtag = (headerTrim.front() == '"') ||
+            (headerTrim.rfind("W/", 0) == 0);
+
+        if (looksLikeEtag) {
+            return normalizeEtagValue(headerTrim) == normalizeEtagValue(etag);
+        }
+
+        std::time_t parsed = 0;
+        if (parseHttpDate(headerTrim, parsed)) {
+            return lastModified <= parsed;
+        }
+
+        return false;
     }
 
     /**
@@ -158,6 +195,119 @@ public:
     }
 
 private:
+    static bool parseWithFormat(const std::string& value, const char* format, std::tm& tm, bool twoDigitYear)
+    {
+        std::istringstream ss(value);
+        ss.imbue(std::locale::classic());
+        ss >> std::get_time(&tm, format);
+        if (ss.fail()) {
+            return false;
+        }
+        ss >> std::ws;
+        if (!ss.eof()) {
+            return false;
+        }
+        if (twoDigitYear && tm.tm_year < 70) {
+            tm.tm_year += 100;
+        }
+        return true;
+    }
+
+    static std::time_t timegmUtc(std::tm* tm)
+    {
+    #ifdef _WIN32
+        return _mkgmtime(tm);
+    #else
+        return timegm(tm);
+    #endif
+    }
+
+    static bool parseHttpDate(const std::string& value, std::time_t& out)
+    {
+        std::tm tm{};
+        if (parseWithFormat(value, "%a, %d %b %Y %H:%M:%S GMT", tm, false) ||
+            parseWithFormat(value, "%A, %d-%b-%y %H:%M:%S GMT", tm, true) ||
+            parseWithFormat(value, "%a %b %e %H:%M:%S %Y", tm, false)) {
+            const auto t = timegmUtc(&tm);
+            if (t == static_cast<std::time_t>(-1)) {
+                return false;
+            }
+            out = t;
+            return true;
+        }
+        return false;
+    }
+
+    static bool matchEtagHeader(const std::string& etag, const std::string& headerValue)
+    {
+        if (headerValue.empty()) {
+            return false;
+        }
+
+        const std::string headerTrim = trim(headerValue);
+        if (headerTrim == "*") {
+            return true;
+        }
+
+        const std::string normalized = normalizeEtagValue(etag);
+
+        auto etags = parseIfMatch(headerValue);
+        if (!etags.empty()) {
+            for (const auto& e : etags) {
+                if (normalizeEtagValue(e) == normalized) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        size_t start = 0;
+        while (start < headerValue.size()) {
+            size_t end = headerValue.find(',', start);
+            std::string token = (end == std::string::npos)
+                ? headerValue.substr(start)
+                : headerValue.substr(start, end - start);
+            token = trim(std::move(token));
+            if (!token.empty()) {
+                if (token == "*") {
+                    return true;
+                }
+                if (normalizeEtagValue(token) == normalized) {
+                    return true;
+                }
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            start = end + 1;
+        }
+        return false;
+    }
+
+    static std::string trim(std::string s)
+    {
+        const char* ws = " \t\r\n";
+        const auto start = s.find_first_not_of(ws);
+        if (start == std::string::npos) {
+            return {};
+        }
+        const auto end = s.find_last_not_of(ws);
+        return s.substr(start, end - start + 1);
+    }
+
+    static std::string normalizeEtagValue(std::string etag)
+    {
+        etag = trim(std::move(etag));
+        if (etag.rfind("W/", 0) == 0) {
+            etag = etag.substr(2);
+        }
+        etag = trim(std::move(etag));
+        if (etag.size() >= 2 && etag.front() == '"' && etag.back() == '"') {
+            etag = etag.substr(1, etag.size() - 2);
+        }
+        return etag;
+    }
+
     /**
      * @brief 获取文件的真实 inode
      * @details 使用 stat 系统调用获取文件的 inode 号

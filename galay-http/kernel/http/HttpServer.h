@@ -86,7 +86,14 @@ public:
                 auto read_result = co_await reader.getRequest(request);
 
                 if (!read_result) {
-                    HTTP_LOG_ERROR("failed to read request: {}", read_result.error().message());
+                    const auto& error = read_result.error();
+                    if (error.code() == kConnectionClose) {
+                        HTTP_LOG_INFO("client disconnected");
+                    } else if (error.code() == kRecvTimeOut || error.code() == kSendTimeOut || error.code() == kRequestTimeOut) {
+                        HTTP_LOG_WARN("request timeout: {}", error.message());
+                    } else {
+                        HTTP_LOG_ERROR("failed to read request: {}", error.message());
+                    }
                     break;
                 }
 

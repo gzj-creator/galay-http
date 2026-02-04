@@ -126,6 +126,12 @@ public:
         }
 
         if (m_request->isComplete()) {
+            auto& header = m_request->header();
+            std::string host = header.headerPairs().getValue("Host");
+            HTTP_LOG_INFO("[{}] [{}] [{}]",
+                          httpMethodToString(header.method()),
+                          header.uri(),
+                          host.empty() ? "-" : host);
             return true;
         }
 
@@ -244,6 +250,12 @@ public:
         }
 
         if (m_request->isComplete()) {
+            auto& header = m_request->header();
+            std::string host = header.headerPairs().getValue("Host");
+            HTTP_LOG_INFO("[{}] [{}] [{}]",
+                          httpMethodToString(header.method()),
+                          header.uri(),
+                          host.empty() ? "-" : host);
             return true;
         }
 

@@ -90,6 +90,7 @@ public:
 
     SendResponseAwaitableImpl<SocketType> sendResponse(HttpResponse& response) {
         if (m_remaining_bytes == 0) {
+            logResponseStatus(response.header().code());
             m_buffer = response.toString();
             m_remaining_bytes = m_buffer.size();
         }
@@ -114,6 +115,7 @@ public:
 
     SendResponseAwaitableImpl<SocketType> sendHeader(HttpResponseHeader&& header) {
         if (m_remaining_bytes == 0) {
+            logResponseStatus(header.code());
             m_buffer = header.toString();
             m_remaining_bytes = m_buffer.size();
         }
@@ -178,6 +180,17 @@ public:
     }
 
 private:
+    static void logResponseStatus(HttpStatusCode code) {
+        const int status = static_cast<int>(code);
+        if (status >= 500) {
+            HTTP_LOG_ERROR("[{}] [{}]", status, httpStatusCodeToString(code));
+        } else if (status >= 400) {
+            HTTP_LOG_WARN("[{}] [{}]", status, httpStatusCodeToString(code));
+        } else {
+            HTTP_LOG_INFO("[{}] [{}]", status, httpStatusCodeToString(code));
+        }
+    }
+
     const HttpWriterSetting* m_setting;
     SocketType* m_socket;
     std::string m_buffer;

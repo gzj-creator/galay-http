@@ -3,6 +3,11 @@
 # Automatically collect all .cc files in the example directory
 file(GLOB EXAMPLE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
 
+# Exclude SSL-dependent examples unless SSL is enabled
+if(NOT GALAY_HTTP_ENABLE_SSL)
+    list(FILTER EXAMPLE_SOURCES EXCLUDE REGEX "E13-H2Client\\.cc$")
+endif()
+
 # Create an executable for each .cc file
 foreach(EXAMPLE_SOURCE ${EXAMPLE_SOURCES})
     # Extract the filename without path and extension
