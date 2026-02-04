@@ -137,13 +137,13 @@ public:
         m_readv_awaitable.reset();
 
         if (!readv_result) {
-            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            HTTP_LOG_DEBUG("[readv] [fail] [{}]", readv_result.error().message());
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
 
         ssize_t bytes_read = readv_result.value();
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("connection closed by peer");
+            HTTP_LOG_DEBUG("[conn] [closed]");
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
 
@@ -271,13 +271,13 @@ public:
         m_recv_awaitable.reset();
         
         if (!recv_result) {
-            HTTP_LOG_DEBUG("SSL recv failed: {}", recv_result.error().message());
+            HTTP_LOG_DEBUG("[ssl] [recv-fail] [{}]", recv_result.error().message());
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
         
         ssize_t bytes_read = static_cast<ssize_t>(recv_result.value().size());
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("SSL connection closed by peer");
+            HTTP_LOG_DEBUG("[ssl] [closed]");
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
         
@@ -374,13 +374,12 @@ public:
         m_send_awaitable.reset();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Http2WriteFrameAwaitable: send failed, error: {}",
-                          send_result.error().message());
+            HTTP_LOG_ERROR("[frame] [send-fail] [{}]", send_result.error().message());
             return std::unexpected(Http2ErrorCode::InternalError);
         }
 
         m_offset += send_result.value();
-        HTTP_LOG_DEBUG("Http2WriteFrameAwaitable: sent {} bytes, total {}/{}",
+        HTTP_LOG_DEBUG("[frame] [sent] [bytes={}] [total={}/{}]",
                       send_result.value(), m_offset, m_data.size());
 
         if (m_offset >= m_data.size()) {
@@ -427,7 +426,7 @@ public:
         m_send_awaitable.reset();
         
         if (!send_result) {
-            HTTP_LOG_DEBUG("SSL send failed: {}", send_result.error().message());
+            HTTP_LOG_DEBUG("[ssl] [send-fail] [{}]", send_result.error().message());
             return std::unexpected(Http2ErrorCode::InternalError);
         }
         

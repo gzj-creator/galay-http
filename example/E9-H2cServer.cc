@@ -30,7 +30,7 @@ void signalHandler(int) {
 Coroutine h2cHandler(Http2ConnImpl<galay::async::TcpSocket>& conn, Http2Stream::ptr stream, Http2Request request) {
     g_requests++;
     
-    HTTP_LOG_INFO("H2c request: {} {} (stream {})", 
+    HTTP_LOG_INFO("[h2c] [req] [{}] [{}] [stream={}]", 
                   request.method, request.path, stream->streamId());
     
     Http2Response response;
@@ -119,32 +119,32 @@ nghttp -v http://localhost:8080/
     bool has_body = !response.body.empty();
 
     // 发送 HEADERS（循环直到完成）
-    HTTP_LOG_INFO("Sending HEADERS for stream {}, headers count: {}, end_stream: {}",
+    HTTP_LOG_INFO("[h2c] [headers] [send] [stream={}] [count={}] [end={}]",
                   stream->streamId(), headers.size(), !has_body);
     while (true) {
         auto result = co_await conn.sendHeaders(stream->streamId(), headers, !has_body, true);
         if (!result) {
-            HTTP_LOG_ERROR("failed to send headers: {}", http2ErrorCodeToString(result.error()));
+            HTTP_LOG_ERROR("[h2c] [headers] [send-fail] [{}]", http2ErrorCodeToString(result.error()));
             co_return;
         }
-        HTTP_LOG_DEBUG("sendHeaders returned: {}", result.value());
+        HTTP_LOG_DEBUG("[h2c] [headers] [sent] [done={}]", result.value());
         if (result.value()) break;
     }
-    HTTP_LOG_INFO("HEADERS sent successfully for stream {}", stream->streamId());
+    HTTP_LOG_INFO("[h2c] [headers] [sent] [stream={}]", stream->streamId());
 
     // 发送 DATA（如果有，循环直到完成）
     if (has_body) {
-        HTTP_LOG_INFO("Sending DATA for stream {}, body size: {}", stream->streamId(), response.body.size());
+        HTTP_LOG_INFO("[h2c] [data] [send] [stream={}] [size={}]", stream->streamId(), response.body.size());
         while (true) {
             auto result = co_await conn.sendDataFrame(stream->streamId(), response.body, true);
             if (!result) {
-                HTTP_LOG_ERROR("failed to send data: {}", http2ErrorCodeToString(result.error()));
+                HTTP_LOG_ERROR("[h2c] [data] [send-fail] [{}]", http2ErrorCodeToString(result.error()));
                 co_return;
             }
-            HTTP_LOG_DEBUG("sendDataFrame returned: {}", result.value());
+            HTTP_LOG_DEBUG("[h2c] [data] [sent] [done={}]", result.value());
             if (result.value()) break;
         }
-        HTTP_LOG_INFO("DATA sent successfully for stream {}", stream->streamId());
+        HTTP_LOG_INFO("[h2c] [data] [sent] [stream={}]", stream->streamId());
     }
 
     co_return;

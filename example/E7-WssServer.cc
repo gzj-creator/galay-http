@@ -39,7 +39,7 @@ void signalHandler(int) {
  * @details 由于 SslSocket 不支持 readv，这里使用 recv 直接读取数据
  */
 Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
-    HTTP_LOG_INFO("WSS connection established");
+    HTTP_LOG_INFO("[wss] [conn] [open]");
     g_connections++;
 
     // 发送欢迎消息
@@ -50,7 +50,7 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
     while (sent < welcome_data.size()) {
         auto result = co_await socket.send(welcome_data.data() + sent, welcome_data.size() - sent);
         if (!result) {
-            HTTP_LOG_ERROR("Failed to send welcome: {}", result.error().message());
+            HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", result.error().message());
             g_connections--;
             co_return;
         }
@@ -65,13 +65,13 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
     while (true) {
         auto recv_result = co_await socket.recv(buffer.data(), buffer.size());
         if (!recv_result) {
-            HTTP_LOG_DEBUG("Recv error: {}", recv_result.error().message());
+            HTTP_LOG_DEBUG("[wss] [recv-fail] [{}]", recv_result.error().message());
             break;
         }
 
         size_t bytes_received = recv_result.value().size();
         if (bytes_received == 0) {
-            HTTP_LOG_INFO("Connection closed by peer");
+            HTTP_LOG_INFO("[wss] [conn] [closed]");
             break;
         }
 
@@ -88,7 +88,7 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
                 if (parse_result.error().code() == kWsIncomplete) {
                     break;  // 需要更多数据
                 }
-                HTTP_LOG_ERROR("Frame parse error: {}", parse_result.error().message());
+                HTTP_LOG_ERROR("[wss] [frame] [parse-fail] [{}]", parse_result.error().message());
                 goto cleanup;
             }
 
@@ -97,21 +97,21 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
 
             // 处理帧
             if (frame.header.opcode == WsOpcode::Close) {
-                HTTP_LOG_INFO("Received Close frame");
+                HTTP_LOG_INFO("[wss] [close] [recv]");
                 WsFrame close_frame = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
                 std::string close_data = WsFrameParser::toBytes(close_frame, false);
                 co_await socket.send(close_data.data(), close_data.size());
                 goto cleanup;
             }
             else if (frame.header.opcode == WsOpcode::Ping) {
-                HTTP_LOG_DEBUG("Received Ping, sending Pong");
+                HTTP_LOG_DEBUG("[wss] [ping] [recv] [pong] [send]");
                 WsFrame pong_frame = WsFrameParser::createPongFrame(frame.payload);
                 std::string pong_data = WsFrameParser::toBytes(pong_frame, false);
                 co_await socket.send(pong_data.data(), pong_data.size());
             }
             else if (frame.header.opcode == WsOpcode::Text || frame.header.opcode == WsOpcode::Binary) {
                 g_messages++;
-                HTTP_LOG_DEBUG("Received message: {}", frame.payload.substr(0, 50));
+                HTTP_LOG_DEBUG("[wss] [recv] [msg={}]", frame.payload.substr(0, 50));
 
                 // 回显
                 std::string echo = "Echo: " + frame.payload;
@@ -131,7 +131,7 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
 cleanup:
     co_await socket.close();
     g_connections--;
-    HTTP_LOG_INFO("WSS connection closed");
+    HTTP_LOG_INFO("[wss] [conn] [closed]");
     co_return;
 }
 
@@ -139,7 +139,7 @@ cleanup:
  * @brief HTTPS 请求处理器（处理 WSS 升级）
  */
 Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
-    HTTP_LOG_DEBUG("httpsHandler started");
+    HTTP_LOG_DEBUG("[https] [handler] [start]");
     auto reader = conn.getReader();
     HttpRequest request;
 
@@ -147,14 +147,14 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     while (true) {
         auto r = co_await reader.getRequest(request);
         if (!r) {
-            HTTP_LOG_ERROR("Failed to read request: {}", r.error().message());
+            HTTP_LOG_ERROR("[https] [req] [read-fail] [{}]", r.error().message());
             co_await conn.close();
             co_return;
         }
         if (r.value()) break;
     }
 
-    HTTP_LOG_DEBUG("Received {} {}", httpMethodToString(request.header().method()), request.header().uri());
+    HTTP_LOG_DEBUG("[https] [req] [{}] [{}]", httpMethodToString(request.header().method()), request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
     std::string uri = request.header().uri();
@@ -162,7 +162,7 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            HTTP_LOG_ERROR("WSS upgrade failed: {}", upgrade_result.error_message);
+            HTTP_LOG_ERROR("[wss] [upgrade] [fail] [{}]", upgrade_result.error_message);
             auto writer = conn.getWriter();
             while (true) {
                 auto r = co_await writer.sendResponse(upgrade_result.response);
@@ -172,21 +172,21 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
             co_return;
         }
 
-        HTTP_LOG_INFO("WSS upgrade successful");
+        HTTP_LOG_INFO("[wss] [upgrade] [ok]");
 
         // 发送 101 Switching Protocols
         auto writer = conn.getWriter();
-        HTTP_LOG_DEBUG("Sending 101 Switching Protocols response");
+        HTTP_LOG_DEBUG("[wss] [upgrade] [101-send]");
         while (true) {
             auto r = co_await writer.sendResponse(upgrade_result.response);
             if (!r) {
-                HTTP_LOG_ERROR("Failed to send upgrade response: {}", r.error().message());
+                HTTP_LOG_ERROR("[wss] [upgrade] [send-fail] [{}]", r.error().message());
                 co_await conn.close();
                 co_return;
             }
             if (r.value()) break;
         }
-        HTTP_LOG_DEBUG("101 response sent successfully");
+        HTTP_LOG_DEBUG("[wss] [upgrade] [101-sent]");
 
         // 获取底层 socket 并处理 WebSocket 连接
         // 注意：这里需要直接访问 socket，因为 WsConn 模板不支持 SslSocket

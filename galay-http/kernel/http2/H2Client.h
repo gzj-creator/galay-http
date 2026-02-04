@@ -136,7 +136,7 @@ public:
                     if (!result) {
                         m_connect_awaitable.reset();
                         m_state = State::Invalid;
-                        HTTP_LOG_ERROR("H2Client: connect failed: {}", result.error().message());
+                        HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", result.error().message());
                         return std::unexpected(Http2ErrorCode::ConnectError);
                     }
                     m_connect_awaitable.reset();
@@ -155,7 +155,7 @@ public:
                         }
                         m_handshake_awaitable.reset();
                         m_state = State::Invalid;
-                        HTTP_LOG_ERROR("H2Client: SSL handshake failed: {}", err.message());
+                        HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", err.message());
                         return std::unexpected(Http2ErrorCode::InternalError);
                     }
                     m_handshake_awaitable.reset();
@@ -164,10 +164,10 @@ public:
                     std::string alpn = m_client.m_socket->getALPNProtocol();
                     m_client.m_alpn_protocol = alpn;
                     if (alpn != "h2") {
-                        HTTP_LOG_WARN("H2Client: ALPN negotiation failed, got '{}', expected 'h2'", alpn);
+                        HTTP_LOG_WARN("[h2] [alpn-fail] [got={}] [expect=h2]", alpn);
                     }
 
-                    HTTP_LOG_DEBUG("H2Client: TLS handshake completed, ALPN={}", alpn);
+                    HTTP_LOG_DEBUG("[h2] [handshake-ok] [alpn={}]", alpn);
 
                     // 创建 Http2Conn
                     m_client.m_conn = std::make_unique<Http2ConnImpl<SslSocket>>(
@@ -236,7 +236,7 @@ public:
                     if (!result.value()) return std::nullopt;
                     m_client.m_connected = true;
                     m_state = State::Invalid;
-                    HTTP_LOG_INFO("H2Client: connected to {}:{}", m_client.m_host, m_client.m_port);
+                    HTTP_LOG_INFO("[connect] [h2] [{}:{}]", m_client.m_host, m_client.m_port);
                     return true;
                 }
                 default:

@@ -40,7 +40,7 @@ struct WsUrl {
         std::smatch matches;
 
         if (!std::regex_match(url, matches, url_regex)) {
-            HTTP_LOG_ERROR("Invalid WebSocket URL format: {}", url);
+            HTTP_LOG_ERROR("[url] [invalid] [{}]", url);
             return std::nullopt;
         }
 
@@ -53,7 +53,7 @@ struct WsUrl {
             try {
                 result.port = std::stoi(matches[3].str());
             } catch (...) {
-                HTTP_LOG_ERROR("Invalid port number in URL: {}", url);
+                HTTP_LOG_ERROR("[url] [port-invalid] [{}]", url);
                 return std::nullopt;
             }
         } else {
@@ -224,7 +224,7 @@ bool WsUpgradeAwaitableImpl<SocketType>::await_suspend(std::coroutine_handle<> h
         upgrader.m_send_buffer = upgrader.m_upgrade_request.toString();
         upgrader.m_send_offset = 0;
 
-        HTTP_LOG_INFO("Sending WebSocket upgrade request...");
+        HTTP_LOG_INFO("[ws] [upgrade] [send]");
 
         size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
         const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
@@ -251,7 +251,7 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
         auto send_result = upgrader.m_send_awaitable->await_resume();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send upgrade request: {}", send_result.error().message());
+            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", send_result.error().message());
             return std::unexpected(WsError(kWsConnectionError,
                 "Failed to send upgrade request: " + send_result.error().message()));
         }
@@ -262,7 +262,7 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
             return false;
         }
 
-        HTTP_LOG_INFO("Upgrade request sent, waiting for response...");
+        HTTP_LOG_INFO("[ws] [upgrade] [wait]");
         upgrader.m_state = WsUpgraderImpl<SocketType>::State::Receiving;
         upgrader.m_send_awaitable.reset();
         return false;
@@ -271,7 +271,7 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
         auto recv_result = upgrader.m_recv_awaitable->await_resume();
 
         if (!recv_result) {
-            HTTP_LOG_ERROR("Failed to receive upgrade response: {}", recv_result.error().message());
+            HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", recv_result.error().message());
             return std::unexpected(WsError(kWsConnectionError,
                 "Failed to receive upgrade response: " + recv_result.error().message()));
         }
@@ -282,7 +282,7 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
             upgrader.m_ring_buffer->getReadIovecs());
 
         if (parse_result.first != HttpErrorCode::kNoError) {
-            HTTP_LOG_ERROR("Failed to parse upgrade response: error code {}",
+            HTTP_LOG_ERROR("[ws] [upgrade] [parse-fail] [code={}]",
                           static_cast<int>(parse_result.first));
             return std::unexpected(WsError(kWsProtocolError,
                 "Failed to parse upgrade response"));
@@ -292,10 +292,10 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
             return false;
         }
 
-        HTTP_LOG_INFO("Received complete upgrade response");
+        HTTP_LOG_INFO("[ws] [upgrade] [recv-ok]");
 
         if (upgrader.m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-            HTTP_LOG_ERROR("WebSocket upgrade failed. Status: {} {}",
+            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}] [{}]",
                           static_cast<int>(upgrader.m_upgrade_response.header().code()),
                           httpStatusCodeToString(upgrader.m_upgrade_response.header().code()));
             return std::unexpected(WsError(kWsUpgradeFailed,
@@ -304,7 +304,7 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
         }
 
         if (!upgrader.m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
-            HTTP_LOG_ERROR("Missing Sec-WebSocket-Accept header in response");
+            HTTP_LOG_ERROR("[ws] [upgrade] [accept-missing]");
             return std::unexpected(WsError(kWsUpgradeFailed,
                 "Missing Sec-WebSocket-Accept header"));
         }
@@ -314,12 +314,12 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
         std::string expected_accept = WsUpgrade::generateAcceptKey(upgrader.m_ws_key);
 
         if (accept_key != expected_accept) {
-            HTTP_LOG_ERROR("Invalid Sec-WebSocket-Accept value");
+            HTTP_LOG_ERROR("[ws] [upgrade] [accept-invalid]");
             return std::unexpected(WsError(kWsUpgradeFailed,
                 "Invalid Sec-WebSocket-Accept value"));
         }
 
-        HTTP_LOG_INFO("WebSocket upgrade successful!");
+        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
         size_t consumed = parse_result.second;
         upgrader.m_ring_buffer->consume(consumed);
@@ -333,12 +333,12 @@ std::expected<bool, WsError> WsUpgradeAwaitableImpl<SocketType>::await_resume() 
             false
         );
 
-        HTTP_LOG_INFO("WsConn created successfully");
+        HTTP_LOG_INFO("[ws] [conn] [ready]");
 
         return true;
 
     } else {
-        HTTP_LOG_ERROR("await_resume called in Invalid state");
+        HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
         return std::unexpected(WsError(kWsProtocolError, "Invalid state"));
     }
 }
@@ -377,7 +377,7 @@ public:
             }
         }
 
-        HTTP_LOG_INFO("Connecting to WebSocket server at {}:{}{}",
+        HTTP_LOG_INFO("[connect] [ws] [{}:{}{}]",
                      m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<SocketType>(IPType::IPV4);

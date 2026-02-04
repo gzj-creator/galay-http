@@ -47,12 +47,12 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
     uint64_t conn_messages = 0;
     uint64_t conn_bytes = 0;
-    HTTP_LOG_INFO("Send Hello To client");
+    HTTP_LOG_INFO("[ws] [welcome] [send]");
     // 发送欢迎消息
     while (true) {
         auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
         if(!res) {
-            HTTP_LOG_ERROR("send Hello failed: {}", res.error().message());
+            HTTP_LOG_ERROR("[ws] [welcome] [send-fail] [{}]", res.error().message());
             co_return;
         }
         if(res.value()) {
@@ -189,7 +189,7 @@ int main(int argc, char* argv[]) {
 
         HttpServer server(config);
 
-        HTTP_LOG_INFO("WebSocket benchmark server starting on {}:{}", config.host, config.port);
+        HTTP_LOG_INFO("[server] [listen] [ws] [{}:{}]", config.host, config.port);
 
         server.start(handleHttpRequest);
 

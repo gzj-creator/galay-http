@@ -51,7 +51,7 @@ public:
     std::expected<bool, HttpError> await_resume() {
         auto send_result = m_send_awaitable.await_resume();
         if (!send_result) {
-            HTTP_LOG_DEBUG("send failed: {}", send_result.error().message());
+            HTTP_LOG_DEBUG("[send] [fail] [{}]", send_result.error().message());
             return std::unexpected(HttpError(kSendError, send_result.error().message()));
         }
 

@@ -29,7 +29,7 @@ void HttpRouter::addHandlerInternal(HttpMethod method, const std::string& path, 
     std::string error;
     if (!validatePath(path, error)) {
         // 路径格式错误，记录日志并返回
-        HTTP_LOG_ERROR("Invalid route path '{}': {}", path, error);
+        HTTP_LOG_ERROR("[route] [invalid] [{}] [{}]", path, error);
         return;
     }
 
@@ -50,8 +50,8 @@ void HttpRouter::addHandlerInternal(HttpMethod method, const std::string& path, 
         bool isNewRoute = !methodRoutes.count(path);
 
         if (!isNewRoute) {
-            HTTP_LOG_WARN("Route '{}' for method {} already exists, will be overwritten",
-                         path, static_cast<int>(method));
+            HTTP_LOG_WARN("[route] [overwrite] [{}] [{}]",
+                         static_cast<int>(method), path);
         }
 
         methodRoutes[path] = handler;
@@ -166,7 +166,7 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
                 child->paramName = paramName;  // 保存参数名在节点上
             } else if (child->paramName != paramName) {
                 // 检测冲突：同一位置有不同的参数名
-                HTTP_LOG_WARN("Parameter name conflict at same position: '{}' vs '{}', using '{}'",
+                HTTP_LOG_WARN("[route] [param-conflict] [{}] [{}] [use={}]",
                              child->paramName, paramName, child->paramName);
             }
             node = child.get();
@@ -358,7 +358,7 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
 
     // 验证目录是否存在
     if (!fs::exists(dirPath) || !fs::is_directory(dirPath)) {
-        HTTP_LOG_ERROR("Mount failed: directory '{}' does not exist", dirPath);
+        HTTP_LOG_ERROR("[mount] [fail] [{}]", dirPath);
         return;
     }
 
@@ -378,7 +378,7 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
     // 为 GET 和 HEAD 方法注册路由
     addHandler<HttpMethod::GET, HttpMethod::HEAD>(wildcardPath, handler);
 
-    HTTP_LOG_INFO("Mounted directory '{}' to route '{}'", dirPath, routePrefix);
+    HTTP_LOG_INFO("[mount] [{}] [{}]", dirPath, routePrefix);
 }
 
 void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& dirPath,
@@ -388,14 +388,14 @@ void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& 
 
     // 验证目录是否存在
     if (!fs::exists(dirPath) || !fs::is_directory(dirPath)) {
-        HTTP_LOG_ERROR("MountHardly failed: directory '{}' does not exist", dirPath);
+        HTTP_LOG_ERROR("[mount-hard] [fail] [{}]", dirPath);
         return;
     }
 
     // 递归遍历目录并注册所有文件
     registerFilesRecursively(routePrefix, dirPath, config, "");
 
-    HTTP_LOG_INFO("Mounted directory '{}' to route '{}' (static mode)", dirPath, routePrefix);
+    HTTP_LOG_INFO("[mount-hard] [{}] [{}]", dirPath, routePrefix);
 }
 
 HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePrefix,
@@ -453,7 +453,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
                                               canonicalFile.begin());
         if (dirIt != canonicalDir.end()) {
             // 路径遍历攻击
-            HTTP_LOG_WARN("Path traversal attempt: {}", requestPath);
+            HTTP_LOG_WARN("[path] [traversal] [{}]", requestPath);
             auto response = Http1_1ResponseBuilder()
                 .status(HttpStatusCode::Forbidden_403)
                 .body("403 Forbidden")
@@ -468,7 +468,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
 
         // 检查文件是否存在且是普通文件
         if (!fs::exists(canonicalFile) || !fs::is_regular_file(canonicalFile)) {
-            HTTP_LOG_WARN("File not found or not regular: {}", canonicalFile.string());
+            HTTP_LOG_WARN("[file] [missing] [{}]", canonicalFile.string());
             auto response = Http1_1ResponseBuilder()
                 .status(HttpStatusCode::NotFound_404)
                 .body("404 Not Found")
@@ -488,7 +488,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         std::string extension = canonicalFile.extension().string();
         std::string ext = extension.empty() ? "" : extension.substr(1);
         std::string mimeType = MimeType::convertToMimeType(ext);
-        HTTP_LOG_DEBUG("Static file: {} -> {} ({} bytes, {})",
+        HTTP_LOG_DEBUG("[static] [{}] [{}] [{}] [{}]",
                        requestPath,
                        canonicalFile.string(),
                        fileSize,
@@ -534,7 +534,7 @@ void HttpRouter::registerFilesRecursively(const std::string& routePrefix,
             }
         }
     } catch (const fs::filesystem_error& e) {
-        HTTP_LOG_ERROR("Error reading directory '{}': {}", fullPath.string(), e.what());
+        HTTP_LOG_ERROR("[dir] [read-fail] [{}] [{}]", fullPath.string(), e.what());
     }
 }
 
@@ -713,17 +713,14 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
         .header("Last-Modified", lastModifiedStr)
         .header("Accept-Ranges", "bytes")
         .buildMove();
-    HTTP_LOG_DEBUG("sendFileContent: file={}, size={}, mode={}",
-                   filePath,
-                   fileSize,
-                   static_cast<int>(mode));
+    HTTP_LOG_DEBUG("[send] [{}] [{}] [mode={}]", filePath, fileSize, static_cast<int>(mode));
 
     switch (mode) {
         case FileTransferMode::MEMORY: {
             // 内存模式：将文件完整读入内存后发送
             std::ifstream file(filePath, std::ios::binary);
             if (!file) {
-                HTTP_LOG_ERROR("Failed to open file: {}", filePath);
+                HTTP_LOG_ERROR("[file] [open-fail] [{}]", filePath);
                 auto error_response = Http1_1ResponseBuilder()
                     .status(HttpStatusCode::InternalServerError_500)
                     .body("500 Internal Server Error")
@@ -739,7 +736,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             while (true) {
                 auto result = co_await writer.sendResponse(response);
                 if (!result) {
-                    HTTP_LOG_ERROR("Failed to send response: {}", result.error().message());
+                    HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
                     break;
                 }
                 if (result.value()) {
@@ -757,7 +754,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             HttpResponseHeader header = response.header();
             auto headerResult = co_await writer.sendHeader(std::move(header));
             if (!headerResult) {
-                HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+                HTTP_LOG_ERROR("[send] [header-fail] [{}]", headerResult.error().message());
                 co_return;
             }
 
@@ -768,7 +765,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                 fd.open(filePath.c_str(), O_RDONLY);
                 openSuccess = true;
             } catch (const std::system_error& e) {
-                HTTP_LOG_ERROR("Failed to open file for CHUNK mode: {} - {}", filePath, e.what());
+                HTTP_LOG_ERROR("[file] [open-fail] [chunk] [{}] [{}]", filePath, e.what());
             }
 
             if (!openSuccess) {
@@ -787,7 +784,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                 std::string chunk(buffer.data(), bytesRead);
                 auto result = co_await writer.sendChunk(chunk, false);
                 if (!result) {
-                    HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
+                    HTTP_LOG_ERROR("[send] [chunk-fail] [{}]", result.error().message());
                     hasError = true;
                     break;
                 }
@@ -795,7 +792,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
 
             // 检查读取错误
             if (bytesRead < 0) {
-                HTTP_LOG_ERROR("Failed to read file: {}", strerror(errno));
+                HTTP_LOG_ERROR("[file] [read-fail] [{}]", strerror(errno));
                 hasError = true;
             }
 
@@ -816,7 +813,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             HttpResponseHeader header = response.header();
             auto headerResult = co_await writer.sendHeader(std::move(header));
             if (!headerResult) {
-                HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+                HTTP_LOG_ERROR("[send] [header-fail] [{}]", headerResult.error().message());
                 co_return;
             }
 
@@ -825,7 +822,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
             try {
                 fd.open(filePath.c_str(), O_RDONLY);
             } catch (const std::system_error& e) {
-                HTTP_LOG_ERROR("Failed to open file for SENDFILE mode: {} - {}", filePath, e.what());
+                HTTP_LOG_ERROR("[file] [open-fail] [sendfile] [{}] [{}]", filePath, e.what());
                 co_return;
             }
 
@@ -839,13 +836,13 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
                 auto result = co_await conn.socket().sendfile(fd.get(), offset, toSend);
 
                 if (!result) {
-                    HTTP_LOG_ERROR("Sendfile failed: {}", result.error().message());
+                    HTTP_LOG_ERROR("[sendfile] [fail] [{}]", result.error().message());
                     break;
                 }
 
                 size_t sent = result.value();
                 if (sent == 0) {
-                    HTTP_LOG_WARN("Sendfile returned 0, connection may be closed");
+                    HTTP_LOG_WARN("[sendfile] [zero]");
                     break;
                 }
 
@@ -859,7 +856,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
 
         case FileTransferMode::AUTO:
             // AUTO 模式应该在 decideTransferMode 中已经被转换为具体模式
-            HTTP_LOG_ERROR("AUTO mode should not reach here");
+            HTTP_LOG_ERROR("[mode] [auto] [invalid]");
             break;
     }
 
@@ -895,7 +892,7 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
     HttpResponseHeader header = response.header();
     auto headerResult = co_await writer.sendHeader(std::move(header));
     if (!headerResult) {
-        HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+        HTTP_LOG_ERROR("[send] [header-fail] [{}]", headerResult.error().message());
         co_return;
     }
 
@@ -904,7 +901,7 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
     try {
         fd.open(filePath.c_str(), O_RDONLY);
     } catch (const std::system_error& e) {
-        HTTP_LOG_ERROR("Failed to open file for Range request: {} - {}", filePath, e.what());
+        HTTP_LOG_ERROR("[file] [open-fail] [range] [{}] [{}]", filePath, e.what());
         co_return;
     }
 
@@ -922,13 +919,13 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
             auto result = co_await conn.socket().sendfile(fd.get(), offset, toSend);
 
             if (!result) {
-                HTTP_LOG_ERROR("Sendfile failed: {}", result.error().message());
+                HTTP_LOG_ERROR("[sendfile] [fail] [{}]", result.error().message());
                 break;
             }
 
             size_t sent = result.value();
             if (sent == 0) {
-                HTTP_LOG_WARN("Sendfile returned 0, connection may be closed");
+                HTTP_LOG_WARN("[sendfile] [zero]");
                 break;
             }
 
@@ -939,7 +936,7 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
         // 使用普通读取方式发送范围内容
         // 定位到起始位置
         if (lseek(fd.get(), range.start, SEEK_SET) == -1) {
-            HTTP_LOG_ERROR("Failed to seek file: {}", strerror(errno));
+            HTTP_LOG_ERROR("[file] [seek-fail] [{}]", strerror(errno));
             co_return;
         }
 
@@ -953,7 +950,7 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
             ssize_t bytesRead = read(fd.get(), buffer.data(), toRead);
 
             if (bytesRead < 0) {
-                HTTP_LOG_ERROR("Failed to read file: {}", strerror(errno));
+                HTTP_LOG_ERROR("[file] [read-fail] [{}]", strerror(errno));
                 break;
             }
 
@@ -964,7 +961,7 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
             std::string chunk(buffer.data(), bytesRead);
             auto result = co_await writer.send(std::move(chunk));
             if (!result) {
-                HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
+                HTTP_LOG_ERROR("[send] [chunk-fail] [{}]", result.error().message());
                 break;
             }
 
@@ -1023,7 +1020,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
     HttpResponseHeader header = response.header();
     auto headerResult = co_await writer.sendHeader(std::move(header));
     if (!headerResult) {
-        HTTP_LOG_ERROR("Failed to send response header: {}", headerResult.error().message());
+        HTTP_LOG_ERROR("[send] [header-fail] [{}]", headerResult.error().message());
         co_return;
     }
 
@@ -1032,7 +1029,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
     try {
         fd.open(filePath.c_str(), O_RDONLY);
     } catch (const std::system_error& e) {
-        HTTP_LOG_ERROR("Failed to open file for multipart Range request: {} - {}", filePath, e.what());
+        HTTP_LOG_ERROR("[file] [open-fail] [range-multi] [{}] [{}]", filePath, e.what());
         co_return;
     }
 
@@ -1042,7 +1039,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
         std::string boundaryLine = "--" + boundary + "\r\n";
         auto boundaryResult = co_await writer.send(std::move(boundaryLine));
         if (!boundaryResult) {
-            HTTP_LOG_ERROR("Failed to send boundary: {}", boundaryResult.error().message());
+            HTTP_LOG_ERROR("[send] [boundary-fail] [{}]", boundaryResult.error().message());
             co_return;
         }
 
@@ -1050,7 +1047,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
         std::string contentTypeHeader = "Content-Type: " + mimeType + "\r\n";
         auto ctResult = co_await writer.send(std::move(contentTypeHeader));
         if (!ctResult) {
-            HTTP_LOG_ERROR("Failed to send Content-Type header: {}", ctResult.error().message());
+            HTTP_LOG_ERROR("[send] [ctype-fail] [{}]", ctResult.error().message());
             co_return;
         }
 
@@ -1059,7 +1056,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
             HttpRangeParser::makeContentRange(range, fileSize) + "\r\n";
         auto crResult = co_await writer.send(std::move(contentRangeHeader));
         if (!crResult) {
-            HTTP_LOG_ERROR("Failed to send Content-Range header: {}", crResult.error().message());
+            HTTP_LOG_ERROR("[send] [crange-fail] [{}]", crResult.error().message());
             co_return;
         }
 
@@ -1067,13 +1064,13 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
         std::string emptyLine = "\r\n";
         auto emptyLineResult = co_await writer.send(std::move(emptyLine));
         if (!emptyLineResult) {
-            HTTP_LOG_ERROR("Failed to send empty line: {}", emptyLineResult.error().message());
+            HTTP_LOG_ERROR("[send] [emptyline-fail] [{}]", emptyLineResult.error().message());
             co_return;
         }
 
         // 定位到起始位置
         if (lseek(fd.get(), range.start, SEEK_SET) == -1) {
-            HTTP_LOG_ERROR("Failed to seek file: {}", strerror(errno));
+            HTTP_LOG_ERROR("[file] [seek-fail] [{}]", strerror(errno));
             co_return;
         }
 
@@ -1087,7 +1084,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
             ssize_t bytesRead = read(fd.get(), buffer.data(), toRead);
 
             if (bytesRead < 0) {
-                HTTP_LOG_ERROR("Failed to read file: {}", strerror(errno));
+                HTTP_LOG_ERROR("[file] [read-fail] [{}]", strerror(errno));
                 co_return;
             }
 
@@ -1098,7 +1095,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
             std::string chunk(buffer.data(), bytesRead);
             auto result = co_await writer.send(std::move(chunk));
             if (!result) {
-                HTTP_LOG_ERROR("Failed to send chunk: {}", result.error().message());
+                HTTP_LOG_ERROR("[send] [chunk-fail] [{}]", result.error().message());
                 co_return;
             }
 
@@ -1109,7 +1106,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
         std::string newline = "\r\n";
         auto newlineResult = co_await writer.send(std::move(newline));
         if (!newlineResult) {
-            HTTP_LOG_ERROR("Failed to send newline: {}", newlineResult.error().message());
+            HTTP_LOG_ERROR("[send] [newline-fail] [{}]", newlineResult.error().message());
             co_return;
         }
     }
@@ -1118,7 +1115,7 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
     std::string finalBoundary = "--" + boundary + "--\r\n";
     auto finalResult = co_await writer.send(std::move(finalBoundary));
     if (!finalResult) {
-        HTTP_LOG_ERROR("Failed to send final boundary: {}", finalResult.error().message());
+        HTTP_LOG_ERROR("[send] [final-boundary-fail] [{}]", finalResult.error().message());
     }
 
     co_return;

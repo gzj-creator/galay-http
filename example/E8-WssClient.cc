@@ -46,14 +46,14 @@ std::string generateWsKey() {
  * @brief WSS 客户端协程
  */
 Coroutine wssClientCoroutine(const std::string& host, int port, const std::string& path, int message_count) {
-    HTTP_LOG_INFO("Connecting to wss://{}:{}{}", host, port, path);
+    HTTP_LOG_INFO("[connect] [wss] [{}:{}{}]", host, port, path);
 
     // 创建 SSL 上下文
     galay::ssl::SslContext ssl_ctx(galay::ssl::SslMethod::TLS_Client);
     ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);  // 跳过证书验证（用于自签名证书）
 
     if (!ssl_ctx.isValid()) {
-        HTTP_LOG_ERROR("Failed to create SSL context");
+        HTTP_LOG_ERROR("[ssl] [context] [create-fail]");
         g_done = true;
         co_return;
     }
@@ -66,12 +66,12 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
     Host server_host(IPType::IPV4, host, port);
     auto connect_result = co_await socket.connect(server_host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("Connect failed: {}", connect_result.error().message());
+        HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
         g_done = true;
         co_return;
     }
 
-    HTTP_LOG_INFO("TCP connected, performing SSL handshake...");
+    HTTP_LOG_INFO("[ssl] [handshake] [start]");
 
     // 2. SSL 握手
     while (!socket.isHandshakeCompleted()) {
@@ -82,14 +82,14 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
                 err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
                 continue;
             }
-            HTTP_LOG_ERROR("SSL handshake failed: {}", err.message());
+            HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", err.message());
             g_done = true;
             co_return;
         }
         break;
     }
 
-    HTTP_LOG_INFO("SSL handshake completed, sending WebSocket upgrade request...");
+    HTTP_LOG_INFO("[ssl] [handshake-ok]");
 
     // 3. 发送 WebSocket 升级请求
     std::string ws_key = generateWsKey();
@@ -106,14 +106,14 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
     while (sent < request_data.size()) {
         auto result = co_await socket.send(request_data.data() + sent, request_data.size() - sent);
         if (!result) {
-            HTTP_LOG_ERROR("Failed to send upgrade request: {}", result.error().message());
+            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", result.error().message());
             g_done = true;
             co_return;
         }
         sent += result.value();
     }
 
-    HTTP_LOG_INFO("Upgrade request sent, waiting for response...");
+    HTTP_LOG_INFO("[ws] [upgrade] [wait]");
 
     // 4. 接收升级响应
     std::vector<char> buffer(4096);
@@ -128,14 +128,14 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
             if (err.sslError() == SSL_ERROR_WANT_READ || err.sslError() == SSL_ERROR_WANT_WRITE) {
                 continue;  // 重试
             }
-            HTTP_LOG_ERROR("Failed to receive upgrade response: {}", err.message());
+            HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", err.message());
             g_done = true;
             co_return;
         }
 
         size_t bytes = recv_result.value().size();
         if (bytes == 0) {
-            HTTP_LOG_ERROR("Connection closed during upgrade");
+            HTTP_LOG_ERROR("[ws] [upgrade] [conn-closed]");
             g_done = true;
             co_return;
         }
@@ -156,7 +156,7 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
     }
 
     if (response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-        HTTP_LOG_ERROR("Upgrade failed with status: {}", static_cast<int>(response.header().code()));
+        HTTP_LOG_ERROR("[ws] [upgrade] [fail] [code={}]", static_cast<int>(response.header().code()));
         g_done = true;
         co_return;
     }
@@ -165,12 +165,12 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
     std::string accept_key = response.header().headerPairs().getValue("Sec-WebSocket-Accept");
     std::string expected_accept = WsUpgrade::generateAcceptKey(ws_key);
     if (accept_key != expected_accept) {
-        HTTP_LOG_ERROR("Invalid Sec-WebSocket-Accept");
+        HTTP_LOG_ERROR("[ws] [upgrade] [accept-invalid]");
         g_done = true;
         co_return;
     }
 
-    HTTP_LOG_INFO("WebSocket upgrade successful!");
+    HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
     // 5. 接收欢迎消息
     std::string accumulated;
@@ -181,7 +181,7 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
             if (err.sslError() == SSL_ERROR_WANT_READ || err.sslError() == SSL_ERROR_WANT_WRITE) {
                 continue;
             }
-            HTTP_LOG_ERROR("Failed to receive welcome: {}", err.message());
+            HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", err.message());
             g_done = true;
             co_return;
         }
@@ -197,12 +197,12 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
             if (parse_result.error().code() == kWsIncomplete) {
                 continue;
             }
-            HTTP_LOG_ERROR("Frame parse error");
+            HTTP_LOG_ERROR("[ws] [frame] [parse-fail]");
             g_done = true;
             co_return;
         }
 
-        HTTP_LOG_INFO("Received: {}", frame.payload);
+        HTTP_LOG_INFO("[ws] [recv] [msg={}]", frame.payload);
         accumulated.erase(0, parse_result.value());
         break;
     }
@@ -219,13 +219,13 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
         while (frame_sent < frame_data.size()) {
             auto result = co_await socket.send(frame_data.data() + frame_sent, frame_data.size() - frame_sent);
             if (!result) {
-                HTTP_LOG_ERROR("Send failed");
+                HTTP_LOG_ERROR("[ws] [send-fail]");
                 g_done = true;
                 co_return;
             }
             frame_sent += result.value();
         }
-        HTTP_LOG_INFO("Sent: {}", msg);
+        HTTP_LOG_INFO("[ws] [send] [msg={}]", msg);
 
         // 接收回显
         while (true) {
@@ -235,7 +235,7 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
                 if (err.sslError() == SSL_ERROR_WANT_READ || err.sslError() == SSL_ERROR_WANT_WRITE) {
                     continue;
                 }
-                HTTP_LOG_ERROR("Receive failed: {}", err.message());
+                HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", err.message());
                 g_done = true;
                 co_return;
             }
@@ -251,25 +251,25 @@ Coroutine wssClientCoroutine(const std::string& host, int port, const std::strin
                 if (parse_result.error().code() == kWsIncomplete) {
                     continue;
                 }
-                HTTP_LOG_ERROR("Frame parse error");
+                HTTP_LOG_ERROR("[ws] [frame] [parse-fail]");
                 g_done = true;
                 co_return;
             }
 
-            HTTP_LOG_INFO("Received: {}", recv_frame.payload);
+            HTTP_LOG_INFO("[ws] [recv] [msg={}]", recv_frame.payload);
             accumulated.erase(0, parse_result.value());
             break;
         }
     }
 
     // 7. 发送关闭帧
-    HTTP_LOG_INFO("Sending close frame...");
+    HTTP_LOG_INFO("[ws] [close] [send]");
     WsFrame close_frame = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
     std::string close_data = WsFrameParser::toBytes(close_frame, true);
     co_await socket.send(close_data.data(), close_data.size());
 
     co_await socket.close();
-    HTTP_LOG_INFO("Connection closed");
+    HTTP_LOG_INFO("[ws] [conn] [closed]");
     g_done = true;
     co_return;
 }

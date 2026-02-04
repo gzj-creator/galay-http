@@ -76,13 +76,13 @@ public:
         }
         
         m_running.store(false);
-        HTTP_LOG_INFO("H2c server stopping...");
+        HTTP_LOG_INFO("[h2c] [server] [stopping]");
       if (m_listener) {
             m_listener.reset();
         }
         
         m_runtime.stop();
-        HTTP_LOG_INFO("H2c server stopped");
+        HTTP_LOG_INFO("[h2c] [server] [stopped]");
     }
     
     bool isRunning() const {
@@ -96,12 +96,12 @@ public:
 private:
     bool startInternal() {
         if (m_running.load()) {
-            HTTP_LOG_WARN("server already running");
+            HTTP_LOG_WARN("[server] [already-running]");
             return false;
         }
         
         if (!m_handler) {
-            HTTP_LOG_ERROR("handler not set");
+            HTTP_LOG_ERROR("[handler] [missing]");
             return false;
         }
         
@@ -109,7 +109,7 @@ private:
         
         auto* scheduler = m_runtime.getNextIOScheduler();
         if (!scheduler) {
-            HTTP_LOG_ERROR("no IO scheduler available");
+            HTTP_LOG_ERROR("[scheduler] [io] [missing]");
             m_runtime.stop();
             return false;
         }
@@ -118,14 +118,14 @@ private:
         
         auto reuse_result = m_listener->option().handleReuseAddr();
         if (!reuse_result) {
-            HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
             m_runtime.stop();
             return false;
         }
         
         auto nonblock_result = m_listener->option().handleNonBlock();
         if (!nonblock_result) {
-            HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
+            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
             m_runtime.stop();
             return false;
         }
@@ -133,20 +133,20 @@ private:
         Host bind_host(IPType::IPV4, m_config.host, m_config.port);
         auto bind_result = m_listener->bind(bind_host);
         if (!bind_result) {
-            HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
+            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
             m_runtime.stop();
             return false;
         }
         
         auto listen_result = m_listener->listen(m_config.backlog);
         if (!listen_result) {
-            HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
+            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
             m_runtime.stop();
             return false;
         }
         
         m_running.store(true);
-        HTTP_LOG_INFO("H2c server started on {}:{}", m_config.host, m_config.port);
+        HTTP_LOG_INFO("[server] [listen] [h2c] [{}:{}]", m_config.host, m_config.port);
         
         scheduler->spawn(serverLoop());
         
@@ -160,23 +160,23 @@ private:
             
             if (!accept_result) {
                 if (m_running.load()) {
-                    HTTP_LOG_ERROR("accept failed: {}", accept_result.error().message());
+                    HTTP_LOG_ERROR("[accept] [fail] [{}]", accept_result.error().message());
                 }
                 continue;
             }
             
-            HTTP_LOG_INFO("H2c client connected from {}:{}", client_host.ip(), client_host.port());
+            HTTP_LOG_INFO("[connect] [h2c] [{}:{}]", client_host.ip(), client_host.port());
             
             auto* scheduler = m_runtime.getNextIOScheduler();
             if (!scheduler) {
-                HTTP_LOG_ERROR("no IO scheduler available");
+                HTTP_LOG_ERROR("[scheduler] [io] [missing]");
                 continue;
             }
             
             TcpSocket client_socket(accept_result.value());
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
-                HTTP_LOG_ERROR("failed to set client socket non-block: {}", nonblock_result.error().message());
+                HTTP_LOG_ERROR("[socket] [nonblock-fail] [client] [{}]", nonblock_result.error().message());
                 continue;
             }
             
@@ -203,7 +203,7 @@ private:
         bool detect_success = false;
         co_await detectProtocol(conn, detect_success).wait();
         if (!detect_success) {
-            HTTP_LOG_ERROR("protocol detection failed");
+            HTTP_LOG_ERROR("[protocol] [detect-fail]");
             co_await conn.close();
             co_return;
         }
@@ -243,7 +243,7 @@ private:
         // 检查是否是 HTTP/2 Connection Preface
         if (preface_data.size() >= kHttp2ConnectionPrefaceLength &&
             std::memcmp(preface_data.data(), kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) == 0) {
-            HTTP_LOG_DEBUG("HTTP/2 Prior Knowledge detected");
+            HTTP_LOG_DEBUG("[h2] [prior-knowledge]");
 
             // 将多余的数据（Connection Preface 之后的数据）放入 RingBuffer
             if (preface_data.size() > kHttp2ConnectionPrefaceLength) {
@@ -270,7 +270,7 @@ private:
              preface_data.substr(0, 5) == "POST " ||
              preface_data.substr(0, 4) == "PUT " ||
              preface_data.substr(0, 4) == "HEAD")) {
-            HTTP_LOG_DEBUG("HTTP/1.1 request detected, checking for Upgrade");
+            HTTP_LOG_DEBUG("[h1] [upgrade] [detect]");
 
             // 继续读取直到找到完整的 HTTP 头部
             while (preface_data.find("\r\n\r\n") == std::string::npos && preface_data.size() < 8192) {
@@ -286,7 +286,7 @@ private:
             // 解析 HTTP 请求头
             size_t header_end = preface_data.find("\r\n\r\n");
             if (header_end == std::string::npos) {
-                HTTP_LOG_ERROR("HTTP header too large or incomplete");
+                HTTP_LOG_ERROR("[header] [invalid] [too-large]");
                 co_return;
             }
 
@@ -299,7 +299,7 @@ private:
                                      header_str.find("http2-settings:") != std::string::npos;
 
             if (has_upgrade && has_http2_settings) {
-                HTTP_LOG_DEBUG("HTTP/1.1 Upgrade to h2c detected");
+                HTTP_LOG_DEBUG("[h1] [upgrade] [h2c]");
 
                 // 发送 101 Switching Protocols 响应
                 std::string upgrade_response =
@@ -316,13 +316,13 @@ private:
                         upgrade_response.size() - sent
                     );
                     if (!send_result) {
-                        HTTP_LOG_ERROR("failed to send upgrade response");
+                        HTTP_LOG_ERROR("[upgrade] [send-fail]");
                         co_return;
                     }
                     sent += send_result.value();
                 }
 
-                HTTP_LOG_DEBUG("sent 101 Switching Protocols response");
+                HTTP_LOG_DEBUG("[upgrade] [101-sent]");
 
                 // 现在期望接收 HTTP/2 Connection Preface
                 std::string preface_buf;
@@ -338,7 +338,7 @@ private:
                     char temp_buf[128];
                     auto result = co_await conn.socket().recv(temp_buf, sizeof(temp_buf));
                     if (!result || result.value().size() == 0) {
-                        HTTP_LOG_ERROR("failed to receive connection preface");
+                        HTTP_LOG_ERROR("[preface] [recv-fail]");
                         co_return;
                     }
                     auto& bytes = result.value();
@@ -347,11 +347,11 @@ private:
 
                 // 验证 Connection Preface
                 if (std::memcmp(preface_buf.data(), kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
-                    HTTP_LOG_ERROR("invalid HTTP/2 connection preface after upgrade");
+                    HTTP_LOG_ERROR("[preface] [invalid] [after-upgrade]");
                     co_return;
                 }
 
-                HTTP_LOG_DEBUG("HTTP/2 connection preface verified");
+                HTTP_LOG_DEBUG("[preface] [ok]");
 
                 // 将多余的数据放入 RingBuffer
                 if (preface_buf.size() > kHttp2ConnectionPrefaceLength) {
@@ -373,7 +373,7 @@ private:
             }
         }
 
-        HTTP_LOG_WARN("neither HTTP/2 Prior Knowledge nor HTTP/1.1 Upgrade detected");
+        HTTP_LOG_WARN("[protocol] [unknown] [h2c]");
         co_return;
     }
 
@@ -393,7 +393,7 @@ private:
                 if (frame_result.error() == Http2ErrorCode::NoError) {
                     continue;
                 }
-                HTTP_LOG_ERROR("frame read error: {}", http2ErrorCodeToString(frame_result.error()));
+                HTTP_LOG_ERROR("[frame] [read-fail] [{}]", http2ErrorCodeToString(frame_result.error()));
                 co_await conn.sendGoaway(frame_result.error());
                 break;
             }
@@ -401,7 +401,7 @@ private:
             auto& frame = *frame_result;
             uint32_t stream_id = frame->streamId();
 
-            HTTP_LOG_DEBUG("received frame: type={}, stream={}, flags=0x{:02x}",
+            HTTP_LOG_DEBUG("[frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
                           http2FrameTypeToString(frame->type()), stream_id, frame->header().flags);
             
             // 处理 CONTINUATION 状态
@@ -417,7 +417,7 @@ private:
                 case Http2FrameType::Settings: {
                     auto* settings = static_cast<Http2SettingsFrame*>(frame.get());
                     if (settings->isAck()) {
-                        HTTP_LOG_DEBUG("SETTINGS ACK received");
+                        HTTP_LOG_DEBUG("[settings] [ack]");
                     } else {
                         // 应用对端设置
                         conn.peerSettings().applySettings(*settings);
@@ -433,7 +433,7 @@ private:
                         
                         if (!first_settings_received) {
                             first_settings_received = true;
-                            HTTP_LOG_DEBUG("initial SETTINGS exchange completed");
+                            HTTP_LOG_DEBUG("[settings] [init-ok]");
                         }
                     }
                     break;
@@ -664,7 +664,7 @@ private:
                     auto stream = conn.getStream(stream_id);
                     if (stream) {
                         stream->onRstStreamReceived();
-                        HTTP_LOG_DEBUG("stream {} reset with error: {}", 
+                        HTTP_LOG_DEBUG("[stream] [rst] [id={}] [err={}]",
                                       stream_id, http2ErrorCodeToString(rst->errorCode()));
                     }
                     break;
@@ -673,7 +673,7 @@ private:
                 case Http2FrameType::GoAway: {
                     auto* goaway = static_cast<Http2GoAwayFrame*>(frame.get());
                     conn.setGoawayReceived();
-                    HTTP_LOG_INFO("GOAWAY received: last_stream={}, error={}, debug={}",
+                    HTTP_LOG_INFO("[goaway] [recv] [last={}] [err={}] [debug={}]",
                                  goaway->lastStreamId(),
                                  http2ErrorCodeToString(goaway->errorCode()),
                                  goaway->debugData());
@@ -682,7 +682,7 @@ private:
                 
                 case Http2FrameType::Priority: {
                     // 优先级帧，可以忽略
-                    HTTP_LOG_DEBUG("PRIORITY frame received (ignored)");
+                    HTTP_LOG_DEBUG("[priority] [recv] [ignored]");
                     break;
                 }
                 
@@ -693,7 +693,7 @@ private:
                 }
                 
                 default:
-                    HTTP_LOG_WARN("unknown frame type: {}", static_cast<int>(frame->type()));
+                    HTTP_LOG_WARN("[frame] [unknown] [type={}]", static_cast<int>(frame->type()));
                     break;
             }
         }

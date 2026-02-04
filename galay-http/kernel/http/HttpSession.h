@@ -62,7 +62,7 @@ public:
     std::expected<std::optional<HttpResponse>, HttpError> await_resume() {
         if (!m_result.has_value()) {
             auto& io_error = m_result.error();
-            HTTP_LOG_DEBUG("request failed with IO error: {}", io_error.message());
+            HTTP_LOG_DEBUG("[req] [io-error] [{}]", io_error.message());
 
             HttpErrorCode http_error_code;
             if (io_error.code() == kTimeout) {
@@ -81,7 +81,7 @@ public:
             auto sendResult = m_send_awaitable->await_resume();
 
             if (!sendResult) {
-                HTTP_LOG_DEBUG("send request failed: {}", sendResult.error().message());
+                HTTP_LOG_DEBUG("[req] [send-fail] [{}]", sendResult.error().message());
                 reset();
                 return std::unexpected(sendResult.error());
             }
@@ -97,7 +97,7 @@ public:
             auto recvResult = m_recv_awaitable->await_resume();
 
             if (!recvResult) {
-                HTTP_LOG_DEBUG("receive response failed: {}", recvResult.error().message());
+                HTTP_LOG_DEBUG("[resp] [recv-fail] [{}]", recvResult.error().message());
                 reset();
                 return std::unexpected(recvResult.error());
             }
@@ -110,7 +110,7 @@ public:
             reset();
             return response;
         } else {
-            HTTP_LOG_ERROR("await_resume called in Invalid state");
+            HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
             reset();
             return std::unexpected(HttpError(kInternalError, "HttpSessionAwaitable in Invalid state"));
         }

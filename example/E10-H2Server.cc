@@ -96,7 +96,7 @@ public:
         m_listener->listen(m_config.backlog);
         
         m_running = true;
-        HTTP_LOG_INFO("H2 server started on https://{}:{}", m_config.host, m_config.port);
+        HTTP_LOG_INFO("[server] [listen] [h2] [https://{}:{}]", m_config.host, m_config.port);
         
         m_runtime.getNextIOScheduler()->spawn(serverLoop());
     }
@@ -114,13 +114,13 @@ private:
         
         auto cert_result = m_ssl_ctx.loadCertificate(m_config.cert_path);
         if (!cert_result) {
-            HTTP_LOG_ERROR("Failed to load certificate: {}", m_config.cert_path);
+            HTTP_LOG_ERROR("[ssl] [cert] [load-fail] [{}]", m_config.cert_path);
             return false;
         }
         
         auto key_result = m_ssl_ctx.loadPrivateKey(m_config.key_path);
         if (!key_result) {
-            HTTP_LOG_ERROR("Failed to load private key: {}", m_config.key_path);
+            HTTP_LOG_ERROR("[ssl] [key] [load-fail] [{}]", m_config.key_path);
             return false;
         }
         
@@ -137,12 +137,12 @@ private:
             
             if (!accept_result) {
                 if (m_running) {
-                    HTTP_LOG_ERROR("accept failed");
+                    HTTP_LOG_ERROR("[accept] [fail]");
                 }
                 continue;
             }
             
-            HTTP_LOG_INFO("H2 client connected from {}:{}", client_host.ip(), client_host.port());
+            HTTP_LOG_INFO("[connect] [h2] [{}:{}]", client_host.ip(), client_host.port());
             
             SslSocket ssl_socket(&m_ssl_ctx, accept_result.value());
             ssl_socket.option().handleNonBlock();
@@ -162,7 +162,7 @@ private:
                     err.code() == SslErrorCode::kHandshakeWantWrite) {
                     continue;
                 }
-                HTTP_LOG_ERROR("SSL handshake failed");
+                HTTP_LOG_ERROR("[ssl] [handshake-fail]");
                 co_await socket.close();
                 co_return;
             }
@@ -172,11 +172,11 @@ private:
         // 检查 ALPN 协商结果
         std::string alpn = socket.getALPNProtocol();
         if (alpn != "h2") {
-            HTTP_LOG_WARN("ALPN negotiated '{}', expected 'h2'", alpn);
+            HTTP_LOG_WARN("[ssl] [alpn] [mismatch] [got={}] [expect=h2]", alpn);
             // 可以回退到 HTTP/1.1，这里简化处理
         }
         
-        HTTP_LOG_DEBUG("SSL handshake completed, ALPN: {}", alpn);
+        HTTP_LOG_DEBUG("[ssl] [handshake-ok] [alpn={}]", alpn);
         
         Http2ConnImpl<SslSocket> conn(std::move(socket));
         
@@ -193,7 +193,7 @@ private:
         }
         
         if (std::memcmp(preface, kHttp2ConnectionPreface.data(), 24) != 0) {
-            HTTP_LOG_ERROR("Invalid HTTP/2 connection preface");
+            HTTP_LOG_ERROR("[preface] [invalid]");
             co_await conn.close();
             co_return;
         }
@@ -313,7 +313,7 @@ private:
 
 // 请求处理器
 Coroutine h2Handler(Http2ConnImpl<SslSocket>& conn, Http2Stream::ptr stream, Http2Request request) {
-    HTTP_LOG_INFO("H2 request: {} {} (stream {})", request.method, request.path, stream->streamId());
+    HTTP_LOG_INFO("[h2] [req] [{}] [{}] [stream={}]", request.method, request.path, stream->streamId());
     
     Http2Response response;
     response.setStatus(200);

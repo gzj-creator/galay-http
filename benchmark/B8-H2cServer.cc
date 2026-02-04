@@ -46,7 +46,7 @@ Coroutine handleRequest(Http2ConnImpl<TcpSocket>& conn, Http2Stream::ptr stream,
     while (true) {
         auto result = co_await conn.sendHeaders(stream->streamId(), headers, false, true);
         if (!result) {
-            HTTP_LOG_ERROR("Failed to send headers");
+            HTTP_LOG_ERROR("[h2c] [headers] [send-fail]");
             co_return;
         }
         if (result.value()) break;
@@ -56,7 +56,7 @@ Coroutine handleRequest(Http2ConnImpl<TcpSocket>& conn, Http2Stream::ptr stream,
     while (true) {
         auto result = co_await conn.sendDataFrame(stream->streamId(), response.body, true);
         if (!result) {
-            HTTP_LOG_ERROR("Failed to send data");
+            HTTP_LOG_ERROR("[h2c] [data] [send-fail]");
             co_return;
         }
         if (result.value()) break;

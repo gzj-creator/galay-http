@@ -87,7 +87,7 @@ Coroutine sendResponse(Http2ConnImpl<galay::async::TcpSocket>& conn, uint32_t st
 
 // HTTP/2 请求处理器（带 Server Push）
 Coroutine h2cPushHandler(Http2ConnImpl<galay::async::TcpSocket>& conn, Http2Stream::ptr stream, Http2Request request) {
-    HTTP_LOG_INFO("Request: {} {} (stream {})", request.method, request.path, stream->streamId());
+    HTTP_LOG_INFO("[h2c] [req] [{}] [{}] [stream={}]", request.method, request.path, stream->streamId());
 
     if (request.path == "/style.css") {
         // CSS 资源
@@ -105,7 +105,7 @@ Coroutine h2cPushHandler(Http2ConnImpl<galay::async::TcpSocket>& conn, Http2Stre
             stream->streamId(), "GET", "/style.css", request.authority, "http");
 
         if (css_push_awaitable) {
-            HTTP_LOG_INFO("Pushing /style.css on stream {}", css_stream_id);
+            HTTP_LOG_INFO("[h2c] [push] [/style.css] [stream={}]", css_stream_id);
             while (true) {
                 auto result = co_await *css_push_awaitable;
                 if (!result || result.value()) break;
@@ -120,7 +120,7 @@ Coroutine h2cPushHandler(Http2ConnImpl<galay::async::TcpSocket>& conn, Http2Stre
             stream->streamId(), "GET", "/script.js", request.authority, "http");
 
         if (js_push_awaitable) {
-            HTTP_LOG_INFO("Pushing /script.js on stream {}", js_stream_id);
+            HTTP_LOG_INFO("[h2c] [push] [/script.js] [stream={}]", js_stream_id);
             while (true) {
                 auto result = co_await *js_push_awaitable;
                 if (!result || result.value()) break;

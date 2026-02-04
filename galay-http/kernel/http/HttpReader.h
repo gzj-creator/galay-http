@@ -83,17 +83,17 @@ public:
         auto readv_result = m_readv_awaitable->await_resume();
         if (!readv_result) {
             if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
-                HTTP_LOG_DEBUG("connection closed by peer (disconnect error)");
+                HTTP_LOG_DEBUG("[conn] [closed]");
                 return std::unexpected(HttpError(kConnectionClose));
             }
-            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            HTTP_LOG_DEBUG("[readv] [fail] [{}]", readv_result.error().message());
             return std::unexpected(HttpError(kRecvError, readv_result.error().message()));
         }
 
         ssize_t bytes_read = readv_result.value();
 
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("connection closed by peer");
+            HTTP_LOG_DEBUG("[conn] [closed]");
             return std::unexpected(HttpError(kConnectionClose));
         }
 
@@ -113,7 +113,7 @@ public:
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
             if (m_total_received >= m_setting->getMaxHeaderSize() && !m_request->isComplete()) {
-                HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
+                HTTP_LOG_DEBUG("[header] [too-large] [recv={}] [max={}]",
                             m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
@@ -121,7 +121,7 @@ public:
         }
 
         if (error_code != kNoError) {
-            HTTP_LOG_DEBUG("parse error: {}", static_cast<int>(error_code));
+            HTTP_LOG_DEBUG("[parse] [error] [{}]", static_cast<int>(error_code));
             return std::unexpected(HttpError(error_code));
         }
 
@@ -193,20 +193,20 @@ public:
 
         if (!recv_result) {
             auto& error = recv_result.error();
-            HTTP_LOG_DEBUG("SSL recv failed (request): code={}, ssl_error={}, message={}",
+            HTTP_LOG_DEBUG("[ssl] [recv-fail] [code={}] [ssl={}] [{}]",
                           static_cast<int>(error.code()),
                           error.sslError(),
                           error.message());
 
             // 检查是否是正常的连接关闭
             if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
-                HTTP_LOG_DEBUG("SSL connection closed by peer");
+                HTTP_LOG_DEBUG("[ssl] [closed]");
                 return std::unexpected(HttpError(kConnectionClose));
             }
 
             // 检查是否是需要重试的情况 (SSL_ERROR_WANT_READ = 2, SSL_ERROR_WANT_WRITE = 3)
             if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                HTTP_LOG_DEBUG("SSL recv needs retry (want read/write)");
+                HTTP_LOG_DEBUG("[ssl] [retry]");
                 return false;  // 返回 false 表示需要继续读取
             }
 
@@ -214,10 +214,10 @@ public:
         }
 
         ssize_t bytes_read = static_cast<ssize_t>(recv_result.value().size());
-        HTTP_LOG_DEBUG("SSL recv succeeded (request): {} bytes", bytes_read);
+        HTTP_LOG_DEBUG("[ssl] [recv] [bytes={}]", bytes_read);
 
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("SSL connection closed by peer (0 bytes)");
+            HTTP_LOG_DEBUG("[ssl] [closed]");
             return std::unexpected(HttpError(kConnectionClose));
         }
 
@@ -237,7 +237,7 @@ public:
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
             if (m_total_received >= m_setting->getMaxHeaderSize() && !m_request->isComplete()) {
-                HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
+                HTTP_LOG_DEBUG("[header] [too-large] [recv={}] [max={}]",
                             m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
@@ -245,7 +245,7 @@ public:
         }
 
         if (error_code != kNoError) {
-            HTTP_LOG_DEBUG("parse error: {}", static_cast<int>(error_code));
+            HTTP_LOG_DEBUG("[parse] [error] [{}]", static_cast<int>(error_code));
             return std::unexpected(HttpError(error_code));
         }
 
@@ -316,17 +316,17 @@ public:
         auto readv_result = m_readv_awaitable->await_resume();
         if (!readv_result) {
             if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
-                HTTP_LOG_DEBUG("connection closed by peer (disconnect error)");
+                HTTP_LOG_DEBUG("[conn] [closed]");
                 return std::unexpected(HttpError(kConnectionClose));
             }
-            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            HTTP_LOG_DEBUG("[readv] [fail] [{}]", readv_result.error().message());
             return std::unexpected(HttpError(kRecvError, readv_result.error().message()));
         }
 
         ssize_t bytes_read = readv_result.value();
 
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("connection closed by peer");
+            HTTP_LOG_DEBUG("[conn] [closed]");
             return std::unexpected(HttpError(kConnectionClose));
         }
 
@@ -346,7 +346,7 @@ public:
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
             if (m_total_received >= m_setting->getMaxHeaderSize() && !m_response->isComplete()) {
-                HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
+                HTTP_LOG_DEBUG("[header] [too-large] [recv={}] [max={}]",
                             m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
@@ -354,7 +354,7 @@ public:
         }
 
         if (error_code != kNoError) {
-            HTTP_LOG_DEBUG("parse error: {}", static_cast<int>(error_code));
+            HTTP_LOG_DEBUG("[parse] [error] [{}]", static_cast<int>(error_code));
             return std::unexpected(HttpError(error_code));
         }
 
@@ -420,20 +420,20 @@ public:
 
         if (!recv_result) {
             auto& error = recv_result.error();
-            HTTP_LOG_DEBUG("SSL recv failed: code={}, ssl_error={}, message={}",
+            HTTP_LOG_DEBUG("[ssl] [recv-fail] [code={}] [ssl={}] [{}]",
                           static_cast<int>(error.code()),
                           error.sslError(),
                           error.message());
 
             // 检查是否是正常的连接关闭
             if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
-                HTTP_LOG_DEBUG("SSL connection closed by peer");
+                HTTP_LOG_DEBUG("[ssl] [closed]");
                 return std::unexpected(HttpError(kConnectionClose));
             }
 
             // 检查是否是需要重试的情况 (SSL_ERROR_WANT_READ = 2, SSL_ERROR_WANT_WRITE = 3)
             if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                HTTP_LOG_DEBUG("SSL recv needs retry (want read/write)");
+                HTTP_LOG_DEBUG("[ssl] [retry]");
                 return false;  // 返回 false 表示需要继续读取
             }
 
@@ -441,10 +441,10 @@ public:
         }
 
         ssize_t bytes_read = static_cast<ssize_t>(recv_result.value().size());
-        HTTP_LOG_DEBUG("SSL recv succeeded: {} bytes", bytes_read);
+        HTTP_LOG_DEBUG("[ssl] [recv] [bytes={}]", bytes_read);
 
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("SSL connection closed by peer (0 bytes)");
+            HTTP_LOG_DEBUG("[ssl] [closed]");
             return std::unexpected(HttpError(kConnectionClose));
         }
 
@@ -464,7 +464,7 @@ public:
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
             if (m_total_received >= m_setting->getMaxHeaderSize() && !m_response->isComplete()) {
-                HTTP_LOG_DEBUG("header too large: received {} bytes, max: {}",
+                HTTP_LOG_DEBUG("[header] [too-large] [recv={}] [max={}]",
                             m_total_received, m_setting->getMaxHeaderSize());
                 return std::unexpected(HttpError(kHeaderTooLarge));
             }
@@ -472,7 +472,7 @@ public:
         }
 
         if (error_code != kNoError) {
-            HTTP_LOG_DEBUG("parse error: {}", static_cast<int>(error_code));
+            HTTP_LOG_DEBUG("[parse] [error] [{}]", static_cast<int>(error_code));
             return std::unexpected(HttpError(error_code));
         }
 
@@ -536,17 +536,17 @@ public:
         auto readv_result = m_readv_awaitable->await_resume();
         if (!readv_result) {
             if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
-                HTTP_LOG_DEBUG("connection closed by peer (disconnect error)");
+                HTTP_LOG_DEBUG("[conn] [closed]");
                 return std::unexpected(HttpError(kConnectionClose));
             }
-            HTTP_LOG_DEBUG("readv failed: {}", readv_result.error().message());
+            HTTP_LOG_DEBUG("[readv] [fail] [{}]", readv_result.error().message());
             return std::unexpected(HttpError(kRecvError, readv_result.error().message()));
         }
 
         ssize_t bytes_read = readv_result.value();
 
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("connection closed by peer");
+            HTTP_LOG_DEBUG("[conn] [closed]");
             return std::unexpected(HttpError(kConnectionClose));
         }
 
@@ -564,7 +564,7 @@ public:
             if (error.code() == kIncomplete) {
                 return false;
             }
-            HTTP_LOG_DEBUG("chunk parse error: {}", error.message());
+            HTTP_LOG_DEBUG("[chunk] [parse-fail] [{}]", error.message());
             return std::unexpected(error);
         }
 
@@ -628,14 +628,14 @@ public:
     std::expected<bool, HttpError> await_resume() {
         auto recv_result = m_recv_awaitable->await_resume();
         if (!recv_result) {
-            HTTP_LOG_DEBUG("recv failed: {}", recv_result.error().message());
+            HTTP_LOG_DEBUG("[recv] [fail] [{}]", recv_result.error().message());
             return std::unexpected(HttpError(kRecvError, recv_result.error().message()));
         }
 
         ssize_t bytes_read = static_cast<ssize_t>(recv_result.value().size());
 
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("connection closed by peer");
+            HTTP_LOG_DEBUG("[conn] [closed]");
             return std::unexpected(HttpError(kConnectionClose));
         }
 
@@ -653,7 +653,7 @@ public:
             if (error.code() == kIncomplete) {
                 return false;
             }
-            HTTP_LOG_DEBUG("chunk parse error: {}", error.message());
+            HTTP_LOG_DEBUG("[chunk] [parse-fail] [{}]", error.message());
             return std::unexpected(error);
         }
 

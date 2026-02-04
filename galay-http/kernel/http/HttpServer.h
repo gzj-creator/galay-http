@@ -75,36 +75,36 @@ public:
         m_router = std::move(router);
 
         m_handler = [this](HttpConnImpl<SocketType> conn) -> Coroutine {
-            HTTP_LOG_DEBUG("Handler started");
+            HTTP_LOG_DEBUG("[handler] [start]");
             bool keep_alive = true;
 
             while (keep_alive) {
-                HTTP_LOG_DEBUG("Creating reader from conn");
+                HTTP_LOG_DEBUG("[reader] [create]");
                 auto reader = conn.getReader();
-                HTTP_LOG_DEBUG("Reader created, about to read request");
+                HTTP_LOG_DEBUG("[reader] [ready]");
                 HttpRequest request;
                 auto read_result = co_await reader.getRequest(request);
 
                 if (!read_result) {
                     const auto& error = read_result.error();
                     if (error.code() == kConnectionClose) {
-                        HTTP_LOG_INFO("client disconnected");
+                        HTTP_LOG_INFO("[disconnect]");
                     } else if (error.code() == kRecvTimeOut || error.code() == kSendTimeOut || error.code() == kRequestTimeOut) {
-                        HTTP_LOG_WARN("request timeout: {}", error.message());
+                        HTTP_LOG_WARN("[timeout] [request] [{}]", error.message());
                     } else {
-                        HTTP_LOG_ERROR("failed to read request: {}", error.message());
+                        HTTP_LOG_ERROR("[recv] [fail] [{}]", error.message());
                     }
                     break;
                 }
 
-                HTTP_LOG_DEBUG("Request read successfully");
+                HTTP_LOG_DEBUG("[req] [read-ok]");
                 keep_alive = request.header().isKeepAlive() && !request.header().isConnectionClose();
 
                 auto match = m_router->findHandler(request.header().method(), request.header().uri());
 
                 if (!match.handler) {
-                    HTTP_LOG_WARN("no handler found for {} {}",
-                                 static_cast<int>(request.header().method()),
+                    HTTP_LOG_WARN("[route] [miss] [{}] [{}]",
+                                 httpMethodToString(request.header().method()),
                                  request.header().uri());
 
                     auto response = Http1_1ResponseBuilder()
@@ -125,14 +125,14 @@ public:
                     continue;
                 }
 
-                HTTP_LOG_DEBUG("Found handler, calling it with conn reference");
+                HTTP_LOG_DEBUG("[handler] [call]");
                 if constexpr (std::is_same_v<SocketType, TcpSocket>) {
                     co_await (*match.handler)(conn, std::move(request)).wait();
                 } else {
-                    HTTP_LOG_ERROR("Router mode not supported for HTTPS yet");
+                    HTTP_LOG_ERROR("[router] [https] [unsupported]");
                     break;
                 }
-                HTTP_LOG_DEBUG("Handler completed");
+                HTTP_LOG_DEBUG("[handler] [done]");
 
                 if (!keep_alive) {
                     break;
@@ -152,7 +152,7 @@ public:
         }
 
         m_running.store(false);
-        HTTP_LOG_INFO("HTTP server stopping...");
+        HTTP_LOG_INFO("[server] [stopping]");
 
         if (m_listener) {
             m_listener.reset();
@@ -160,7 +160,7 @@ public:
 
         m_runtime.stop();
 
-        HTTP_LOG_INFO("HTTP server stopped");
+        HTTP_LOG_INFO("[server] [stopped]");
     }
 
     bool isRunning() const {
@@ -174,27 +174,27 @@ public:
 protected:
     virtual bool startInternal() {
         if (m_running.load()) {
-            HTTP_LOG_WARN("server already running");
+            HTTP_LOG_WARN("[server] [already-running]");
             return false;
         }
 
         if (!m_handler) {
-            HTTP_LOG_ERROR("handler not set");
+            HTTP_LOG_ERROR("[server] [handler-missing]");
             return false;
         }
 
-        HTTP_LOG_INFO("starting runtime with {} IO schedulers and {} compute schedulers",
+        HTTP_LOG_INFO("[runtime] [start] [io={}] [compute={}]",
                       m_config.io_scheduler_count == 0 ? "auto" : std::to_string(m_config.io_scheduler_count),
                       m_config.compute_scheduler_count == 0 ? "auto" : std::to_string(m_config.compute_scheduler_count));
 
         m_runtime.start();
 
-        HTTP_LOG_INFO("runtime started with {} IO schedulers and {} compute schedulers",
+        HTTP_LOG_INFO("[runtime] [started] [io={}] [compute={}]",
                       m_runtime.getIOSchedulerCount(),
                       m_runtime.getComputeSchedulerCount());
 
         m_running.store(true);
-        HTTP_LOG_INFO("HTTP server started on {}:{}", m_config.host, m_config.port);
+        HTTP_LOG_INFO("[server] [listen] [{}:{}]", m_config.host, m_config.port);
 
         // 在每个 IO 调度器上启动一个 serverLoop，每个 serverLoop 创建自己的 listener
         // 利用 SO_REUSEPORT 实现多线程 accept
@@ -213,41 +213,41 @@ protected:
         // 每个 serverLoop 创建自己的 listener socket
         TcpSocket listener(IPType::IPV4);
 
-        HTTP_LOG_DEBUG("ServerLoop starting, creating listener socket");
+        HTTP_LOG_DEBUG("[loop] [start]");
 
         auto reuse_result = listener.option().handleReuseAddr();
         if (!reuse_result) {
-            HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
             co_return;
         }
 
         // 设置 SO_REUSEPORT 以支持多线程 accept
         auto reuse_port_result = listener.option().handleReusePort();
         if (!reuse_port_result) {
-            HTTP_LOG_ERROR("failed to set reuse port: {}", reuse_port_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseport-fail] [{}]", reuse_port_result.error().message());
             co_return;
         }
 
         auto nonblock_result = listener.option().handleNonBlock();
         if (!nonblock_result) {
-            HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
+            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
             co_return;
         }
 
         Host bind_host(IPType::IPV4, m_config.host, m_config.port);
         auto bind_result = listener.bind(bind_host);
         if (!bind_result) {
-            HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
+            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
-            HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
+            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
             co_return;
         }
 
-        HTTP_LOG_DEBUG("ServerLoop listener ready, starting accept loop");
+        HTTP_LOG_DEBUG("[loop] [ready]");
 
         while (m_running.load()) {
             Host client_host;
@@ -255,35 +255,35 @@ protected:
 
             if (!accept_result) {
                 if (m_running.load()) {
-                    HTTP_LOG_ERROR("accept failed: {}", accept_result.error().message());
+                    HTTP_LOG_ERROR("[accept] [fail] [{}]", accept_result.error().message());
                 }
                 continue;
             }
 
-            HTTP_LOG_INFO("client connected from {}:{}", client_host.ip(), client_host.port());
+            HTTP_LOG_INFO("[connect] [{}:{}]", client_host.ip(), client_host.port());
 
             auto client_socket_opt = createClientSocket(accept_result.value());
             if (!client_socket_opt) {
-                HTTP_LOG_ERROR("failed to create client socket");
+                HTTP_LOG_ERROR("[socket] [create-fail]");
                 continue;
             }
 
-            HTTP_LOG_DEBUG("Client socket created, setting non-block");
+            HTTP_LOG_DEBUG("[socket] [nonblock]");
 
             SocketType client_socket = std::move(*client_socket_opt);
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
-                HTTP_LOG_ERROR("failed to set client socket non-block: {}", nonblock_result.error().message());
+                HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
                 continue;
             }
 
-            HTTP_LOG_DEBUG("Creating HttpConn");
+            HTTP_LOG_DEBUG("[conn] [create]");
             HttpConnImpl<SocketType> conn(std::move(client_socket));
-            HTTP_LOG_DEBUG("HttpConn created, spawning handler");
+            HTTP_LOG_DEBUG("[handler] [spawn]");
 
             // 在当前调度器上处理连接
             scheduler->spawn(m_handler(std::move(conn)));
-            HTTP_LOG_DEBUG("Handler spawned");
+            HTTP_LOG_DEBUG("[handler] [spawned]");
         }
 
         co_return;
@@ -357,7 +357,7 @@ protected:
     bool startInternal() override {
         // 初始化 SSL 上下文
         if (!initSslContext()) {
-            HTTP_LOG_ERROR("Failed to initialize SSL context");
+            HTTP_LOG_ERROR("[ssl] [context] [init-fail]");
             return false;
         }
 
@@ -366,7 +366,7 @@ protected:
 
     std::optional<galay::ssl::SslSocket> createClientSocket(GHandle fd) override {
         if (!m_ssl_ctx.isValid()) {
-            HTTP_LOG_ERROR("SSL context not initialized");
+            HTTP_LOG_ERROR("[ssl] [context] [missing]");
             return std::nullopt;
         }
 
@@ -379,33 +379,33 @@ protected:
 
         auto reuse_result = listener.option().handleReuseAddr();
         if (!reuse_result) {
-            HTTP_LOG_ERROR("failed to set reuse addr: {}", reuse_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
             co_return;
         }
 
         // 设置 SO_REUSEPORT 以支持多线程 accept
         auto reuse_port_result = listener.option().handleReusePort();
         if (!reuse_port_result) {
-            HTTP_LOG_ERROR("failed to set reuse port: {}", reuse_port_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseport-fail] [{}]", reuse_port_result.error().message());
             co_return;
         }
 
         auto nonblock_result = listener.option().handleNonBlock();
         if (!nonblock_result) {
-            HTTP_LOG_ERROR("failed to set non-block: {}", nonblock_result.error().message());
+            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
             co_return;
         }
 
         Host bind_host(IPType::IPV4, m_config.host, m_config.port);
         auto bind_result = listener.bind(bind_host);
         if (!bind_result) {
-            HTTP_LOG_ERROR("failed to bind {}:{}: {}", m_config.host, m_config.port, bind_result.error().message());
+            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
-            HTTP_LOG_ERROR("failed to listen: {}", listen_result.error().message());
+            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
             co_return;
         }
 
@@ -415,23 +415,23 @@ protected:
 
             if (!accept_result) {
                 if (m_running.load()) {
-                    HTTP_LOG_ERROR("accept failed: {}", accept_result.error().message());
+                    HTTP_LOG_ERROR("[accept] [fail] [{}]", accept_result.error().message());
                 }
                 continue;
             }
 
-            HTTP_LOG_INFO("HTTPS client connected from {}:{}", client_host.ip(), client_host.port());
+            HTTP_LOG_INFO("[connect] [https] [{}:{}]", client_host.ip(), client_host.port());
 
             auto client_socket_opt = createClientSocket(accept_result.value());
             if (!client_socket_opt) {
-                HTTP_LOG_ERROR("failed to create client SSL socket");
+                HTTP_LOG_ERROR("[socket] [create-fail] [ssl]");
                 continue;
             }
 
             galay::ssl::SslSocket client_socket = std::move(*client_socket_opt);
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
-                HTTP_LOG_ERROR("failed to set client socket non-block: {}", nonblock_result.error().message());
+                HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
                 continue;
             }
 
@@ -455,14 +455,14 @@ private:
                     continue;
                 }
                 // 其他错误则退出
-                HTTP_LOG_ERROR("SSL handshake failed: {}", err.message());
+                HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", err.message());
                 co_await socket.close();
                 co_return;
             }
             break;  // 握手成功
         }
 
-        HTTP_LOG_DEBUG("SSL handshake completed");
+        HTTP_LOG_DEBUG("[ssl] [handshake-ok]");
 
         // 创建连接并调用处理器
         HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket));
@@ -481,7 +481,7 @@ private:
 
     bool initSslContext() {
         if (!m_ssl_ctx.isValid()) {
-            HTTP_LOG_ERROR("Failed to create SSL context");
+            HTTP_LOG_ERROR("[ssl] [context] [create-fail]");
             return false;
         }
 
@@ -489,44 +489,44 @@ private:
         if (!m_https_config.cert_path.empty()) {
             auto result = m_ssl_ctx.loadCertificate(m_https_config.cert_path);
             if (!result) {
-                HTTP_LOG_ERROR("Failed to load certificate: {} - {}",
+                HTTP_LOG_ERROR("[ssl] [cert] [load-fail] [{}] [{}]",
                               m_https_config.cert_path, result.error().message());
                 return false;
             }
-            HTTP_LOG_INFO("Loaded certificate: {}", m_https_config.cert_path);
+            HTTP_LOG_INFO("[ssl] [cert] [{}]", m_https_config.cert_path);
         }
 
         // 加载私钥
         if (!m_https_config.key_path.empty()) {
             auto result = m_ssl_ctx.loadPrivateKey(m_https_config.key_path);
             if (!result) {
-                HTTP_LOG_ERROR("Failed to load private key: {} - {}",
+                HTTP_LOG_ERROR("[ssl] [key] [load-fail] [{}] [{}]",
                               m_https_config.key_path, result.error().message());
                 return false;
             }
-            HTTP_LOG_INFO("Loaded private key: {}", m_https_config.key_path);
+            HTTP_LOG_INFO("[ssl] [key] [{}]", m_https_config.key_path);
         }
 
         // 加载 CA 证书
         if (!m_https_config.ca_path.empty()) {
             auto result = m_ssl_ctx.loadCACertificate(m_https_config.ca_path);
             if (!result) {
-                HTTP_LOG_ERROR("Failed to load CA certificate: {}", m_https_config.ca_path);
+                HTTP_LOG_ERROR("[ssl] [ca] [load-fail] [{}]", m_https_config.ca_path);
                 return false;
             }
-            HTTP_LOG_INFO("Loaded CA certificate: {}", m_https_config.ca_path);
+            HTTP_LOG_INFO("[ssl] [ca] [{}]", m_https_config.ca_path);
         }
 
         // 设置验证模式
         if (m_https_config.verify_peer) {
             m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::Peer);
             m_ssl_ctx.setVerifyDepth(m_https_config.verify_depth);
-            HTTP_LOG_INFO("Client certificate verification enabled");
+            HTTP_LOG_INFO("[ssl] [verify-client] [enabled]");
         } else {
             m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);
         }
 
-        HTTP_LOG_INFO("SSL context initialized successfully");
+        HTTP_LOG_INFO("[ssl] [context] [ready]");
         return true;
     }
 

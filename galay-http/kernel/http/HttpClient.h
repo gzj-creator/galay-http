@@ -37,7 +37,7 @@ struct HttpUrl {
         std::smatch matches;
 
         if (!std::regex_match(url, matches, url_regex)) {
-            HTTP_LOG_ERROR("Invalid HTTP URL format: {}", url);
+            HTTP_LOG_ERROR("[url] [invalid] [{}]", url);
             return std::nullopt;
         }
 
@@ -50,7 +50,7 @@ struct HttpUrl {
             try {
                 result.port = std::stoi(matches[3].str());
             } catch (...) {
-                HTTP_LOG_ERROR("Invalid port number in URL: {}", url);
+                HTTP_LOG_ERROR("[url] [port-invalid] [{}]", url);
                 return std::nullopt;
             }
         } else {
@@ -109,7 +109,7 @@ public:
     std::expected<std::optional<HttpResponse>, HttpError> await_resume() {
         if (!m_result.has_value()) {
             auto& io_error = m_result.error();
-            HTTP_LOG_DEBUG("request failed with IO error: {}", io_error.message());
+            HTTP_LOG_DEBUG("[req] [io-error] [{}]", io_error.message());
 
             HttpErrorCode http_error_code;
             if (io_error.code() == kTimeout) {
@@ -128,7 +128,7 @@ public:
             auto sendResult = m_send_awaitable->await_resume();
 
             if (!sendResult) {
-                HTTP_LOG_DEBUG("send request failed: {}", sendResult.error().message());
+                HTTP_LOG_DEBUG("[req] [send-fail] [{}]", sendResult.error().message());
                 reset();
                 return std::unexpected(sendResult.error());
             }
@@ -144,7 +144,7 @@ public:
             auto recvResult = m_recv_awaitable->await_resume();
 
             if (!recvResult) {
-                HTTP_LOG_DEBUG("receive response failed: {}", recvResult.error().message());
+                HTTP_LOG_DEBUG("[resp] [recv-fail] [{}]", recvResult.error().message());
                 reset();
                 return std::unexpected(recvResult.error());
             }
@@ -157,7 +157,7 @@ public:
             reset();
             return response;
         } else {
-            HTTP_LOG_ERROR("await_resume called in Invalid state");
+            HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
             reset();
             return std::unexpected(HttpError(kInternalError, "HttpClientAwaitable in Invalid state"));
         }
@@ -241,7 +241,7 @@ public:
             }
         }
 
-        HTTP_LOG_INFO("Connecting to server at {}:{}{}", m_url.host, m_url.port, m_url.path);
+        HTTP_LOG_INFO("[connect] [http] [{}:{}{}]", m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<SocketType>(IPType::IPV4);
 
@@ -332,10 +332,10 @@ public:
         m_url = parsed_url.value();
 
         if (!m_url.is_secure) {
-            HTTP_LOG_WARN("Using HttpsClient for non-HTTPS URL, upgrading to HTTPS");
+            HTTP_LOG_WARN("[https] [upgrade] [forced]");
         }
 
-        HTTP_LOG_INFO("Connecting to HTTPS server at {}:{}{}", m_url.host, m_url.port, m_url.path);
+        HTTP_LOG_INFO("[connect] [https] [{}:{}{}]", m_url.host, m_url.port, m_url.path);
 
         // 正确的 SslSocket 构造方式
         m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
@@ -348,7 +348,7 @@ public:
         // 设置 SNI (Server Name Indication)
         auto sni_result = m_socket->setHostname(m_url.host);
         if (!sni_result) {
-            HTTP_LOG_WARN("Failed to set SNI hostname: {}", sni_result.error().message());
+            HTTP_LOG_WARN("[sni] [fail] [{}]", sni_result.error().message());
         }
 
         Host server_host(IPType::IPV4, m_url.host, m_url.port);
@@ -379,7 +379,7 @@ private:
         if (!m_https_config.ca_path.empty()) {
             auto result = m_ssl_ctx.loadCACertificate(m_https_config.ca_path);
             if (!result) {
-                HTTP_LOG_WARN("Failed to load CA certificate: {}", m_https_config.ca_path);
+                HTTP_LOG_WARN("[ssl] [ca] [load-fail] [{}]", m_https_config.ca_path);
             }
         }
 

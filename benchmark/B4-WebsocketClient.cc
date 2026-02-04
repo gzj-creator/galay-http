@@ -89,7 +89,7 @@ Coroutine benchmarkWebSocketClient(
 
     auto connect_result = co_await client.connect("ws://127.0.0.1:8080/ws");
     if (!connect_result) {
-        HTTP_LOG_ERROR("[Client {}] Failed to connect: {}", client_id, connect_result.error().message());
+        HTTP_LOG_ERROR("[client] [{}] [connect-fail] [{}]", client_id, connect_result.error().message());
         g_failed_connections.fetch_add(1);
         co_return;
     }
@@ -99,7 +99,7 @@ Coroutine benchmarkWebSocketClient(
     while(true) {
         auto res = co_await upgrader();
         if(!res) {
-            HTTP_LOG_ERROR("upgrade failed: {}", res.error().message());
+            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", res.error().message());
             co_return;
         }
         if(res.value()) {
@@ -107,7 +107,7 @@ Coroutine benchmarkWebSocketClient(
         } 
     }
 
-    HTTP_LOG_INFO("Upgrade Success!");
+    HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
     g_successful_connections.fetch_add(1);
 
@@ -119,7 +119,7 @@ Coroutine benchmarkWebSocketClient(
     while(true) {
         auto welcome_result = co_await ws_reader.getMessage(welcome_msg, welcome_opcode);
         if(!welcome_result) {
-            HTTP_LOG_ERROR("Recv Hello from Server failed: {}", welcome_result.error().message());
+            HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", welcome_result.error().message());
             co_return;
         }
         if(welcome_result.value()) {
@@ -144,7 +144,7 @@ Coroutine benchmarkWebSocketClient(
         while(true) {
             auto send_result = co_await ws_writer.sendFrame(frame);
             if (!send_result) {
-                HTTP_LOG_ERROR("[Client {}] Failed to send message: {}", client_id, send_result.error().message());
+                HTTP_LOG_ERROR("[client] [{}] [send-fail] [{}]", client_id, send_result.error().message());
                 co_return;
             }
             if(send_result.value()) {
@@ -168,7 +168,7 @@ Coroutine benchmarkWebSocketClient(
                 }
                 break;
             } else {
-                HTTP_LOG_ERROR("[Client {}] Failed to read echo message", client_id);
+                HTTP_LOG_ERROR("[client] [{}] [echo] [recv-fail]", client_id);
                 co_return;
             }
         }

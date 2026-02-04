@@ -182,7 +182,7 @@ public:
         m_host = host;
         m_port = port;
 
-        HTTP_LOG_INFO("Connecting to {}:{}", host, port);
+        HTTP_LOG_INFO("[connect] [h2c] [{}:{}]", host, port);
 
         m_socket = std::make_unique<TcpSocket>(IPType::IPV4);
         m_ring_buffer = std::make_unique<RingBuffer>(m_ring_buffer_size);
@@ -328,7 +328,7 @@ inline bool H2cUpgradeAwaitable::await_suspend(std::coroutine_handle<> handle) {
         m_send_buffer = m_upgrade_request.toString();
         m_send_offset = 0;
 
-        HTTP_LOG_INFO("Sending HTTP/2 upgrade request...");
+        HTTP_LOG_INFO("[h2c] [upgrade] [send]");
     }
 
     if (m_state == State::SendingUpgrade) {
@@ -364,7 +364,7 @@ inline bool H2cUpgradeAwaitable::await_suspend(std::coroutine_handle<> handle) {
 
     if (m_state == State::SendingSettingsAck) {
         // 使用socket发送SETTINGS ACK（此时还没有创建Http2Conn）
-        HTTP_LOG_DEBUG("SendingSettingsAck: await_suspend called, sending {} bytes", m_settings_frame.size() - m_send_offset);
+        HTTP_LOG_DEBUG("[h2c] [settings-ack] [send] [bytes={}]", m_settings_frame.size() - m_send_offset);
         const char* ack_ptr = m_settings_frame.data() + m_send_offset;
         size_t remaining = m_settings_frame.size() - m_send_offset;
         m_send_awaitable.emplace(m_client->m_socket->send(ack_ptr, remaining));
@@ -375,7 +375,7 @@ inline bool H2cUpgradeAwaitable::await_suspend(std::coroutine_handle<> handle) {
 }
 
 inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::await_resume() {
-    HTTP_LOG_DEBUG("H2cUpgradeAwaitable::await_resume() called, state={}", static_cast<int>(m_state));
+    HTTP_LOG_DEBUG("[h2c] [upgrade] [resume] [state={}]", static_cast<int>(m_state));
 
     if (m_result.has_value() && !m_result->has_value()) {
         reset();
@@ -386,7 +386,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         auto send_result = m_send_awaitable->await_resume();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send upgrade request: {}", send_result.error().message());
+            HTTP_LOG_ERROR("[h2c] [upgrade] [send-fail] [{}]", send_result.error().message());
             reset();
             return std::unexpected(Http2ErrorCode::InternalError);
         }
@@ -397,7 +397,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
             return std::nullopt;  // 继续发送
         }
 
-        HTTP_LOG_INFO("Upgrade request sent, waiting for response...");
+        HTTP_LOG_INFO("[h2c] [upgrade] [wait]");
         m_state = State::ReceivingUpgradeResponse;
         m_send_awaitable.reset();
         m_send_offset = 0;
@@ -407,7 +407,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         auto recv_result = m_recv_awaitable->await_resume();
 
         if (!recv_result) {
-            HTTP_LOG_ERROR("Failed to receive upgrade response: {}", recv_result.error().message());
+            HTTP_LOG_ERROR("[h2c] [upgrade] [recv-fail] [{}]", recv_result.error().message());
             reset();
             return std::unexpected(Http2ErrorCode::InternalError);
         }
@@ -418,7 +418,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
             m_client->m_ring_buffer->getReadIovecs());
 
         if (parse_result.first != HttpErrorCode::kNoError) {
-            HTTP_LOG_ERROR("Failed to parse upgrade response: error code {}",
+            HTTP_LOG_ERROR("[h2c] [upgrade] [parse-fail] [code={}]",
                           static_cast<int>(parse_result.first));
             reset();
             return std::unexpected(Http2ErrorCode::ProtocolError);
@@ -428,10 +428,10 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
             return std::nullopt;  // 继续接收
         }
 
-        HTTP_LOG_INFO("Received complete upgrade response");
+        HTTP_LOG_INFO("[h2c] [upgrade] [recv-ok]");
 
         if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-            HTTP_LOG_ERROR("HTTP/2 upgrade failed. Status: {} {}",
+            HTTP_LOG_ERROR("[h2c] [upgrade] [fail] [{}] [{}]",
                           static_cast<int>(m_upgrade_response.header().code()),
                           httpStatusCodeToString(m_upgrade_response.header().code()));
             reset();
@@ -440,24 +440,24 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
 
         // 检查 Upgrade 头部
         if (!m_upgrade_response.header().headerPairs().hasKey("Upgrade")) {
-            HTTP_LOG_ERROR("Missing Upgrade header in response");
+            HTTP_LOG_ERROR("[h2c] [upgrade] [upgrade-missing]");
             reset();
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
 
         std::string upgrade_value = m_upgrade_response.header().headerPairs().getValue("Upgrade");
         if (upgrade_value != "h2c") {
-            HTTP_LOG_ERROR("Invalid Upgrade value: {}", upgrade_value);
+            HTTP_LOG_ERROR("[h2c] [upgrade] [upgrade-invalid] [value={}]", upgrade_value);
             reset();
             return false;
         }
 
-        HTTP_LOG_INFO("HTTP/2 upgrade successful!");
+        HTTP_LOG_INFO("[h2c] [upgrade] [ok]");
 
         size_t consumed = parse_result.second;
         m_client->m_ring_buffer->consume(consumed);
 
-        HTTP_LOG_INFO("HTTP/2 upgrade successful!");
+        HTTP_LOG_INFO("[h2c] [upgrade] [ok]");
 
         // 开始发送 HTTP/2 连接前言
         m_state = State::SendingPreface;
@@ -469,7 +469,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         auto send_result = m_send_awaitable->await_resume();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send connection preface: {}", send_result.error().message());
+            HTTP_LOG_ERROR("[h2c] [preface] [send-fail] [{}]", send_result.error().message());
             reset();
             return std::unexpected(Http2ErrorCode::InternalError);
         }
@@ -480,7 +480,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
             return std::nullopt;  // 继续发送
         }
 
-        HTTP_LOG_INFO("Connection preface sent");
+        HTTP_LOG_INFO("[h2c] [preface] [sent]");
 
         // 准备发送 SETTINGS 帧
         Http2SettingsFrame settings;
@@ -498,7 +498,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         auto send_result = m_send_awaitable->await_resume();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send SETTINGS frame: {}", send_result.error().message());
+            HTTP_LOG_ERROR("[h2c] [settings] [send-fail] [{}]", send_result.error().message());
             reset();
             return std::unexpected(Http2ErrorCode::InternalError);
         }
@@ -509,7 +509,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
             return std::nullopt;  // 继续发送
         }
 
-        HTTP_LOG_INFO("SETTINGS frame sent, waiting for server SETTINGS...");
+        HTTP_LOG_INFO("[h2c] [settings] [sent] [wait]");
 
         m_state = State::ReceivingSettings;
         m_send_awaitable.reset();
@@ -520,7 +520,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         auto recv_result = m_recv_awaitable->await_resume();
 
         if (!recv_result) {
-            HTTP_LOG_ERROR("Failed to receive SETTINGS: {}", recv_result.error().message());
+            HTTP_LOG_ERROR("[h2c] [settings] [recv-fail] [{}]", recv_result.error().message());
             reset();
             return std::unexpected(Http2ErrorCode::InternalError);
         }
@@ -555,13 +555,13 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         }
 
         if (frame_header.type != Http2FrameType::Settings) {
-            HTTP_LOG_ERROR("Expected SETTINGS frame, got {}",
+            HTTP_LOG_ERROR("[h2c] [settings] [unexpected] [type={}]",
                           http2FrameTypeToString(frame_header.type));
             reset();
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
 
-        HTTP_LOG_INFO("Received SETTINGS frame from server");
+        HTTP_LOG_INFO("[h2c] [settings] [recv-ok]");
 
         // 消费 SETTINGS 帧
         m_client->m_ring_buffer->consume(kHttp2FrameHeaderLength + frame_header.length);
@@ -576,28 +576,28 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         m_settings_frame = ack_frame.serialize();
         m_send_offset = 0;
 
-        HTTP_LOG_INFO("Prepared SETTINGS ACK, will send {} bytes", m_settings_frame.size());
+        HTTP_LOG_INFO("[h2c] [settings-ack] [prepared] [bytes={}]", m_settings_frame.size());
         return std::nullopt;
 
     } else if (m_state == State::SendingSettingsAck) {
-        HTTP_LOG_DEBUG("SendingSettingsAck: await_resume called");
+        HTTP_LOG_DEBUG("[h2c] [settings-ack] [resume]");
         auto send_result = m_send_awaitable->await_resume();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send SETTINGS ACK: {}", send_result.error().message());
+            HTTP_LOG_ERROR("[h2c] [settings-ack] [send-fail] [{}]", send_result.error().message());
             reset();
             return std::unexpected(Http2ErrorCode::InternalError);
         }
 
         m_send_offset += send_result.value();
-        HTTP_LOG_DEBUG("SendingSettingsAck: sent {} bytes, total offset {}/{}",
+        HTTP_LOG_DEBUG("[h2c] [settings-ack] [sent] [bytes={}] [total={}/{}]",
                       send_result.value(), m_send_offset, m_settings_frame.size());
 
         if (m_send_offset < m_settings_frame.size()) {
             return std::nullopt;  // 继续发送
         }
 
-        HTTP_LOG_INFO("SETTINGS ACK sent, creating Http2Conn");
+        HTTP_LOG_INFO("[h2c] [settings-ack] [sent] [conn-create]");
 
         // 现在所有握手都完成了，创建 HTTP/2 连接对象
         m_client->m_conn = std::make_unique<Http2ConnImpl<TcpSocket>>(
@@ -611,7 +611,7 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         m_client->m_conn->localSettings().max_frame_size = m_client->m_config.max_frame_size;
         m_client->m_conn->localSettings().enable_push = 0;
 
-        HTTP_LOG_INFO("Http2Conn created successfully");
+        HTTP_LOG_INFO("[h2c] [conn] [ready]");
 
         m_client->m_socket.reset();
         m_client->m_ring_buffer.reset();
@@ -623,11 +623,11 @@ inline std::expected<std::optional<bool>, Http2ErrorCode> H2cUpgradeAwaitable::a
         // 注意：不要在这里 reset m_upgrade_awaitable，因为我们还在它的 await_resume() 中
         // 调用者会在使用完毕后自动销毁它
 
-        HTTP_LOG_INFO("H2cClient: upgrade completed, next stream ID will be {}", m_client->m_next_stream_id);
+        HTTP_LOG_INFO("[h2c] [upgrade] [done] [next-stream={}]", m_client->m_next_stream_id);
         return std::optional<bool>(true);  // 升级完成
 
     } else {
-        HTTP_LOG_ERROR("await_resume called in Invalid state");
+        HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
         reset();
         return std::unexpected(Http2ErrorCode::ProtocolError);
     }

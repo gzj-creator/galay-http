@@ -126,7 +126,7 @@ int main(int argc, char* argv[]) {
 
         HttpServer server(config);
 
-        HTTP_LOG_INFO("HTTP benchmark server starting on {}:{}", config.host, config.port);
+        HTTP_LOG_INFO("[server] [listen] [http] [{}:{}]", config.host, config.port);
 
         server.start(handleHttpRequest);
 
