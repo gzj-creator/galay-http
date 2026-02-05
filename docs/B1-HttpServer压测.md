@@ -118,51 +118,76 @@ Transfer/sec:      6.20MB
 ### 测试环境
 
 - **操作系统**: macOS (Darwin 24.6.0)
-- **CPU**: Apple Silicon / Intel
-- **编译器**: Clang 14+
-- **优化级别**: -O2
+- **CPU**: Apple Silicon (ARM64)
+- **编译器**: Clang (Apple)
+- **优化级别**: -O3
+- **IO 线程数**: 4
+- **日志**: 已禁用
+- **SIMD**: 已启用 (ARM NEON)
 
 ### 性能数据
 
 | 测试场景 | 线程数 | 连接数 | 持续时间 | QPS | 平均延迟 | P99延迟 |
 |---------|--------|--------|----------|-----|----------|---------|
-| 短时高并发 | 4 | 100 | 10s | **126,618** | 791μs | 1.27ms |
-| 中等强度 | 4 | 100 | 30s | 87,804 | 1.17ms | 2.34ms |
-| 高强度 | 8 | 500 | 30s | 86,997 | 5.80ms | 9.43ms |
+| 中等强度 | 4 | 100 | 30s | **82,862** | 1.24ms | 2.93ms |
+| 高强度 | 8 | 500 | 30s | **72,292** | 6.92ms | 13.89ms |
+
+### 性能优化历程
+
+| 优化阶段 | 4线程 100连接 QPS | 8线程 500连接 QPS | 主要优化 |
+|---------|------------------|------------------|----------|
+| 基准版本 | 79,044 | 60,492 | 禁用日志 |
+| **writev 优化** | **82,862 (+4.8%)** | **72,292 (+19.5%)** | 批量 IO，零拷贝 |
 
 ### 关键特性
 
-✅ **无 "bad file descriptor" 错误**: 经过超过 520 万次请求的压测，没有出现任何文件描述符相关错误
+✅ **批量 IO**: 读取端使用 `readv`，写入端使用 `writev`，减少系统调用次数
+
+✅ **零拷贝**: writev 避免 header 和 body 的内存拷贝，直接发送原始 buffer
 
 ✅ **稳定的 Keep-Alive 支持**: 连接复用率高，减少连接建立开销
 
-✅ **低延迟**: P99 延迟在高并发场景下仍保持在 10ms 以下
+✅ **低延迟**: P99 延迟在高并发场景下保持在 14ms 以下
 
-✅ **高吞吐量**: 单机 QPS 可达 12 万+
+✅ **高吞吐量**: 单机 QPS 可达 8 万+
 
 ## 实现细节
 
 ### 核心代码
 
 ```cpp
-Coroutine handleHttpRequest(HttpConn& conn, HttpRequest req) {
-    g_request_count++;
+Coroutine handleHttpRequest(HttpConn conn) {
+    while(true) {
+        auto reader = conn.getReader();
+        HttpRequest request;
 
-    // 使用 Builder 构造响应
-    auto response = Http1_1ResponseBuilder::ok()
-        .header("Server", "Galay-HTTP-Benchmark/1.0")
-        .text("OK")
-        .build();
-
-    // 发送响应
-    auto writer = conn.getWriter();
-    while (true) {
-        auto result = co_await writer.sendResponse(response);
-        if (!result) {
-            g_error_count++;
-            break;
+        // 读取请求（使用 readv 批量读取）
+        while (true) {
+            auto read_result = co_await reader.getRequest(request);
+            if (!read_result) {
+                co_return;
+            }
+            if (read_result.value()) break;
         }
-        if (result.value()) break;
+
+        // 构建响应
+        auto response = Http1_1ResponseBuilder()
+            .status(HttpStatusCode::OK_200)
+            .header("Content-Type", "text/plain")
+            .header("Connection", "keep-alive")
+            .body("OK")
+            .buildMove();
+
+        auto writer = conn.getWriter();
+
+        // 发送响应（TcpSocket 使用 writev 批量发送）
+        while (true) {
+            auto result = co_await writer.sendResponse(response);
+            if (!result) {
+                break;
+            }
+            if (result.value()) break;
+        }
     }
 
     co_return;
@@ -172,6 +197,9 @@ Coroutine handleHttpRequest(HttpConn& conn, HttpRequest req) {
 ### 服务器配置
 
 ```cpp
+// 禁用日志以获得最佳性能
+galay::http::HttpLogger::disable();
+
 HttpServerConfig config;
 config.host = "0.0.0.0";
 config.port = port;
@@ -179,35 +207,63 @@ config.io_scheduler_count = 4;      // 4个IO调度器
 config.compute_scheduler_count = 0; // 不使用计算调度器
 
 HttpServer server(config);
+server.start(handleHttpRequest);
 ```
 
-### 使用 HttpRouter
+### writev 优化实现
 
-B9-HttpServer 使用 `HttpRouter` 来管理路由和 Keep-Alive 连接，这是实现高性能的关键：
+**位置**: `galay-http/kernel/http/HttpWriter.h`
+
+HttpWriter 使用编译时分支（`if constexpr`）自动选择最优的发送方式：
 
 ```cpp
-HttpRouter router;
-router.addHandler<HttpMethod::GET>("/", handleHttpRequest);
+auto sendResponse(HttpResponse& response) {
+    if (m_remaining_bytes == 0) {
+        logResponseStatus(response.header().code());
 
-server.start(std::move(router));
+        if constexpr (is_tcp_socket_v<SocketType>) {
+            // TcpSocket: 使用 writev 避免内存拷贝
+            m_body_buffer = response.getBodyStr();
+
+            if(!response.header().isChunked()) {
+                response.header().headerPairs().addHeaderPairIfNotExist(
+                    "Content-Length", std::to_string(m_body_buffer.size()));
+            }
+
+            m_buffer = response.header().toString();
+
+            // 准备 iovec 数组
+            m_iovecs.clear();
+            m_iovecs.push_back({m_buffer.data(), m_buffer.size()});
+            if (!m_body_buffer.empty()) {
+                m_iovecs.push_back({m_body_buffer.data(), m_body_buffer.size()});
+            }
+
+            m_remaining_bytes = m_buffer.size() + m_body_buffer.size();
+        } else {
+            // SslSocket: 使用 send
+            m_buffer = response.toString();
+            m_remaining_bytes = m_buffer.size();
+        }
+    }
+
+    if constexpr (is_tcp_socket_v<SocketType>) {
+        return SendResponseWritevAwaitableImpl<SocketType>(*this, m_socket->writev(m_iovecs));
+    } else {
+        size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
+        const char* send_ptr = m_buffer.data() + sent_bytes;
+        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+    }
+}
 ```
 
-**为什么使用 HttpRouter？**
+**优化要点**:
 
-- **Keep-Alive 支持**: HttpRouter 自动管理连接复用，避免频繁建立/关闭连接
-- **高效路由**: O(1) 精确匹配，性能开销极小
-- **连接管理**: 自动处理连接生命周期
-
-## 对比测试
-
-### 直接 Handler vs HttpRouter
-
-| 实现方式 | QPS | 说明 |
-|---------|-----|------|
-| 直接传递 handler | 9.92 | 每个请求后关闭连接 |
-| 使用 HttpRouter | **126,618** | Keep-Alive 连接复用 |
-
-**性能提升**: 使用 HttpRouter 后性能提升了 **12,760 倍**！
+1. **编译时分支**: 使用 `if constexpr` 根据 Socket 类型选择最优实现
+2. **零拷贝**: writev 直接发送 header 和 body 的原始 buffer，避免合并拷贝
+3. **批量发送**: 一次 writev 系统调用发送多个 buffer
+4. **内存复用**: `m_buffer` 存储 header，`m_body_buffer` 存储 body
+5. **类型安全**: 使用类型萃取 `is_tcp_socket_v` 在编译时判断
 
 ## 故障排查
 
@@ -303,9 +359,53 @@ SIMD 优化主要在以下场景下有显著效果：
 
 ## 总结
 
-B1-HttpServer 是一个高性能的 HTTP 服务器基准测试程序，展示了 Galay-HTTP 框架在高并发场景下的优秀性能。通过使用 HttpRouter 和 Keep-Alive 连接复用，可以实现 12 万+ QPS 的吞吐量，同时保持低延迟和高稳定性。
+B1-HttpServer 是一个高性能的 HTTP 服务器基准测试程序，展示了 Galay-HTTP 框架在高并发场景下的优秀性能。
 
-框架已集成 SIMD 优化，在 Chunked 编码和大文件传输等场景下可获得 5-8x 的性能提升。
+### 核心优化
+
+1. **批量 IO 优化**
+   - 读取端：使用 `readv` 批量读取
+   - 写入端：使用 `writev` 批量发送（TcpSocket）
+   - 减少系统调用次数，降低上下文切换开销
+
+2. **零拷贝技术**
+   - writev 直接发送 header 和 body 的原始 buffer
+   - 避免内存拷贝，减少 CPU 开销
+
+3. **SIMD 优化**
+   - ARM NEON / x86 SSE2 加速协议解析
+   - 在 Chunked 编码场景下可获得 5-8x 性能提升
+
+4. **协程架构**
+   - 基于 C++20 协程实现
+   - 高效的异步 IO 处理
+   - Keep-Alive 连接复用
+
+### 性能表现
+
+- **单线程性能**: ~31,000 QPS
+- **4线程性能**: 82,862 QPS
+- **8线程 500连接**: 72,292 QPS
+- **P99 延迟**: 2.93ms (100连接) / 13.89ms (500连接)
+
+### 与主流框架对比
+
+| 框架 | 单线程 QPS | 4线程 QPS | 架构特点 |
+|------|-----------|-----------|----------|
+| **galay-http** | **31,041** | **82,862** | 协程 + readv/writev |
+| cinatra | 40,000 | 150,000 | C++20 协程 |
+| drogon | 5,625 | 90,000 | 多线程 + 协程 |
+| photon | 100,000 | - | 高性能协程 |
+
+**galay-http 的优势**:
+- ✅ 单线程性能优于 drogon (31K vs 5.6K)
+- ✅ 读写两端都使用批量 IO
+- ✅ 代码清晰，协程模型简洁
+- ✅ SIMD 优化默认启用
+
+**改进空间**:
+- 多线程扩展性仍需优化
+- 与 cinatra/photon 仍有差距
 
 ## 相关文档
 
