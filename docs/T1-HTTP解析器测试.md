@@ -230,5 +230,5 @@ Test Results: 28 passed, 0 failed
 ---
 
 **测试日期**：2026-01-29
-**测试人员**：galay-http 开发团队
+**测试人员**：galay
 **文档版本**：v1.0

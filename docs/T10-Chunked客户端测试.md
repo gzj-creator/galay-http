@@ -446,5 +446,5 @@ Echo: Hello from chunked client!\r\n
 ---
 
 **测试日期**：2026-01-29
-**测试人员**：galay-http 开发团队
+**测试人员**：galay
 **文档版本**：v1.0
