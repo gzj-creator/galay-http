@@ -206,6 +206,58 @@ std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
     return result;
 }
 
+std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, uint8_t masking_key[4])
+{
+    std::string result;
+
+    // 第一个字节: FIN + RSV + Opcode
+    uint8_t byte1 = 0;
+    if (frame.header.fin) byte1 |= 0x80;
+    if (frame.header.rsv1) byte1 |= 0x40;
+    if (frame.header.rsv2) byte1 |= 0x20;
+    if (frame.header.rsv3) byte1 |= 0x10;
+    byte1 |= static_cast<uint8_t>(frame.header.opcode) & 0x0F;
+    result.push_back(byte1);
+
+    // 第二个字节: MASK + Payload length
+    uint8_t byte2 = 0;
+    if (use_mask) byte2 |= 0x80;
+
+    uint64_t payload_len = frame.payload.size();
+
+    if (payload_len < 126) {
+        byte2 |= static_cast<uint8_t>(payload_len);
+        result.push_back(byte2);
+    } else if (payload_len <= 0xFFFF) {
+        byte2 |= 126;
+        result.push_back(byte2);
+        // 16位扩展长度（大端序）
+        result.push_back((payload_len >> 8) & 0xFF);
+        result.push_back(payload_len & 0xFF);
+    } else {
+        byte2 |= 127;
+        result.push_back(byte2);
+        // 64位扩展长度（大端序）
+        for (int i = 7; i >= 0; --i) {
+            result.push_back((payload_len >> (i * 8)) & 0xFF);
+        }
+    }
+
+    // 掩码密钥
+    if (use_mask) {
+        // 生成随机掩码
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> dis(0, 255);
+        for (int i = 0; i < 4; ++i) {
+            masking_key[i] = dis(gen);
+            result.push_back(masking_key[i]);
+        }
+    }
+
+    return result;
+}
+
 WsFrame WsFrameParser::createCloseFrame(WsCloseCode code, const std::string& reason)
 {
     std::string payload;

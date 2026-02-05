@@ -38,6 +38,15 @@ public:
     static std::string toBytes(const WsFrame& frame, bool use_mask = false);
 
     /**
+     * @brief 生成WebSocket帧的header部分（用于writev优化）
+     * @param frame 要编码的帧
+     * @param use_mask 是否使用掩码
+     * @param masking_key 输出的掩码密钥（如果use_mask为true）
+     * @return header字节流
+     */
+    static std::string toBytesHeader(const WsFrame& frame, bool use_mask, uint8_t masking_key[4]);
+
+    /**
      * @brief 创建文本帧
      * @param text 文本数据
      * @param fin 是否是最后一个分片
