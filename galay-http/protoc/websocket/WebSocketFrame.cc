@@ -2,6 +2,15 @@
 #include <cstring>
 #include <random>
 
+// SIMD 支持检测
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #include <immintrin.h>
+    #define GALAY_WS_SIMD_X86
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    #include <arm_neon.h>
+    #define GALAY_WS_SIMD_NEON
+#endif
+
 namespace galay::websocket
 {
 
@@ -211,24 +220,122 @@ WsFrame WsFrameParser::createCloseFrame(WsCloseCode code, const std::string& rea
 
 void WsFrameParser::applyMask(std::string& data, const uint8_t masking_key[4])
 {
-    for (size_t i = 0; i < data.size(); ++i) {
-        data[i] ^= masking_key[i % 4];
+    size_t len = data.size();
+    if (len == 0) return;
+
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(data.data());
+    size_t i = 0;
+
+#if defined(GALAY_WS_SIMD_NEON)
+    // ARM NEON 优化：一次处理 16 字节
+    if (len >= 16) {
+        // 构造 16 字节的掩码向量 (重复 4 次 4 字节掩码)
+        uint8_t mask_array[16];
+        for (int j = 0; j < 16; j++) {
+            mask_array[j] = masking_key[j % 4];
+        }
+        uint8x16_t mask_vec = vld1q_u8(mask_array);
+
+        // 处理 16 字节对齐的块
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t data_vec = vld1q_u8(ptr + i);
+            uint8x16_t result = veorq_u8(data_vec, mask_vec);
+            vst1q_u8(ptr + i, result);
+        }
+    }
+#elif defined(GALAY_WS_SIMD_X86)
+    // x86 SSE2 优化：一次处理 16 字节
+    if (len >= 16) {
+        // 构造 16 字节的掩码向量
+        uint8_t mask_array[16];
+        for (int j = 0; j < 16; j++) {
+            mask_array[j] = masking_key[j % 4];
+        }
+        __m128i mask_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_array));
+
+        // 处理 16 字节对齐的块
+        for (; i + 16 <= len; i += 16) {
+            __m128i data_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i result = _mm_xor_si128(data_vec, mask_vec);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(ptr + i), result);
+        }
+    }
+#endif
+
+    // 处理 8 字节块（使用 uint64_t）
+    if (i + 8 <= len) {
+        // 构造 8 字节掩码
+        uint64_t mask64;
+        std::memcpy(&mask64, masking_key, 4);
+        std::memcpy(reinterpret_cast<uint8_t*>(&mask64) + 4, masking_key, 4);
+
+        for (; i + 8 <= len; i += 8) {
+            uint64_t* data64 = reinterpret_cast<uint64_t*>(ptr + i);
+            *data64 ^= mask64;
+        }
+    }
+
+    // 处理 4 字节块（使用 uint32_t）
+    if (i + 4 <= len) {
+        uint32_t mask32;
+        std::memcpy(&mask32, masking_key, 4);
+        uint32_t* data32 = reinterpret_cast<uint32_t*>(ptr + i);
+        *data32 ^= mask32;
+        i += 4;
+    }
+
+    // 处理剩余字节
+    for (; i < len; ++i) {
+        ptr[i] ^= masking_key[i % 4];
     }
 }
 
 bool WsFrameParser::isValidUtf8(const std::string& data)
 {
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data.data());
+    size_t len = data.size();
     size_t i = 0;
-    while (i < data.size()) {
-        uint8_t byte = static_cast<uint8_t>(data[i]);
+
+#if defined(GALAY_WS_SIMD_NEON)
+    // ARM NEON 优化：快速检测 ASCII 字符（0x00-0x7F）
+    if (len >= 16) {
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t chunk = vld1q_u8(ptr + i);
+            // 检查是否所有字节都是 ASCII (最高位为 0)
+            uint8x16_t high_bits = vandq_u8(chunk, vdupq_n_u8(0x80));
+            // 如果有任何非 ASCII 字符，跳出 SIMD 处理
+            uint64x2_t result = vreinterpretq_u64_u8(high_bits);
+            if (vgetq_lane_u64(result, 0) != 0 || vgetq_lane_u64(result, 1) != 0) {
+                break;
+            }
+        }
+    }
+#elif defined(GALAY_WS_SIMD_X86)
+    // x86 SSE2 优化：快速检测 ASCII 字符
+    if (len >= 16) {
+        __m128i high_bit_mask = _mm_set1_epi8(0x80);
+        for (; i + 16 <= len; i += 16) {
+            __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i high_bits = _mm_and_si128(chunk, high_bit_mask);
+            // 如果有任何非 ASCII 字符，跳出 SIMD 处理
+            if (_mm_movemask_epi8(high_bits) != 0) {
+                break;
+            }
+        }
+    }
+#endif
+
+    // 标量处理剩余字节和多字节 UTF-8 序列
+    while (i < len) {
+        uint8_t byte = ptr[i];
 
         if (byte <= 0x7F) {
             // 单字节字符 (0xxxxxxx)
             i++;
         } else if ((byte & 0xE0) == 0xC0) {
             // 双字节字符 (110xxxxx 10xxxxxx)
-            if (i + 1 >= data.size()) return false;
-            uint8_t byte2 = static_cast<uint8_t>(data[i + 1]);
+            if (i + 1 >= len) return false;
+            uint8_t byte2 = ptr[i + 1];
             if ((byte2 & 0xC0) != 0x80) return false;
 
             // 检查过长编码：双字节序列的最小值是 0x80
@@ -238,9 +345,9 @@ bool WsFrameParser::isValidUtf8(const std::string& data)
             i += 2;
         } else if ((byte & 0xF0) == 0xE0) {
             // 三字节字符 (1110xxxx 10xxxxxx 10xxxxxx)
-            if (i + 2 >= data.size()) return false;
-            uint8_t byte2 = static_cast<uint8_t>(data[i + 1]);
-            uint8_t byte3 = static_cast<uint8_t>(data[i + 2]);
+            if (i + 2 >= len) return false;
+            uint8_t byte2 = ptr[i + 1];
+            uint8_t byte3 = ptr[i + 2];
             if ((byte2 & 0xC0) != 0x80) return false;
             if ((byte3 & 0xC0) != 0x80) return false;
 
@@ -254,10 +361,10 @@ bool WsFrameParser::isValidUtf8(const std::string& data)
             i += 3;
         } else if ((byte & 0xF8) == 0xF0) {
             // 四字节字符 (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-            if (i + 3 >= data.size()) return false;
-            uint8_t byte2 = static_cast<uint8_t>(data[i + 1]);
-            uint8_t byte3 = static_cast<uint8_t>(data[i + 2]);
-            uint8_t byte4 = static_cast<uint8_t>(data[i + 3]);
+            if (i + 3 >= len) return false;
+            uint8_t byte2 = ptr[i + 1];
+            uint8_t byte3 = ptr[i + 2];
+            uint8_t byte4 = ptr[i + 3];
             if ((byte2 & 0xC0) != 0x80) return false;
             if ((byte3 & 0xC0) != 0x80) return false;
             if ((byte4 & 0xC0) != 0x80) return false;

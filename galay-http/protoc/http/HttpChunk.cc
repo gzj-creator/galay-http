@@ -1,6 +1,15 @@
 #include "HttpChunk.h"
 #include <sstream>
 #include <iomanip>
+
+// SIMD 支持检测
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #include <immintrin.h>
+    #define GALAY_HTTP_SIMD_X86
+#elif defined(__ARM_NEON) || defined(__aarch64__)
+    #include <arm_neon.h>
+    #define GALAY_HTTP_SIMD_NEON
+#endif
 #include <algorithm>
 
 namespace galay::http
@@ -190,8 +199,56 @@ bool Chunk::findCRLF(const std::vector<iovec>& iovecs,
     while (iov_idx < iovecs.size()) {
         const char* data = static_cast<const char*>(iovecs[iov_idx].iov_base);
         size_t len = iovecs[iov_idx].iov_len;
+        size_t i = byte_idx;
 
-        for (size_t i = byte_idx; i < len; ++i) {
+#if defined(GALAY_HTTP_SIMD_NEON)
+        // ARM NEON 优化：一次扫描 16 字节查找 \r
+        if (len - i >= 16) {
+            uint8x16_t cr_vec = vdupq_n_u8('\r');
+
+            for (; i + 16 <= len; i += 16) {
+                uint8x16_t chunk = vld1q_u8(reinterpret_cast<const uint8_t*>(data + i));
+                uint8x16_t cmp = vceqq_u8(chunk, cr_vec);
+
+                // 检查是否有匹配
+                uint64x2_t result = vreinterpretq_u64_u8(cmp);
+                uint64_t low = vgetq_lane_u64(result, 0);
+                uint64_t high = vgetq_lane_u64(result, 1);
+
+                if (low != 0 || high != 0) {
+                    // 找到 \r，回退到标量处理
+                    break;
+                }
+
+                // 没有 \r，批量添加到 buffer
+                buffer.append(data + i, 16);
+                consumed += 16;
+            }
+        }
+#elif defined(GALAY_HTTP_SIMD_X86)
+        // x86 SSE2 优化：一次扫描 16 字节查找 \r
+        if (len - i >= 16) {
+            __m128i cr_vec = _mm_set1_epi8('\r');
+
+            for (; i + 16 <= len; i += 16) {
+                __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(data + i));
+                __m128i cmp = _mm_cmpeq_epi8(chunk, cr_vec);
+                int mask = _mm_movemask_epi8(cmp);
+
+                if (mask != 0) {
+                    // 找到 \r，回退到标量处理
+                    break;
+                }
+
+                // 没有 \r，批量添加到 buffer
+                buffer.append(data + i, 16);
+                consumed += 16;
+            }
+        }
+#endif
+
+        // 标量处理剩余字节和 \r\n 验证
+        for (; i < len; ++i) {
             char c = data[i];
             consumed++;
 
