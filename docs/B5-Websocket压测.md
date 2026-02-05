@@ -6,8 +6,8 @@
 
 ## 测试架构
 
-- **服务器程序**：`benchmark/B5-Websocket.cc`
-- **客户端程序**：`benchmark/B4-WebsocketClient.cc`
+- **服务器程序**：`benchmark/B5-WebsocketServer.cc`
+- **客户端程序**：`benchmark/B6-WebsocketClient.cc`
 - **测试模式**：Echo Server（回显服务器）
 - **协议**：WebSocket over HTTP/1.1
 
@@ -97,10 +97,10 @@ Close 帧 → 发送 Close 响应 → 关闭连接
 
 ```bash
 # 服务器
-./benchmark/B5-Websocket 8080
+./benchmark/B5-WebsocketServer 8080
 
 # 客户端
-./benchmark/B4-WebsocketClient 10 5 20
+./benchmark/B6-WebsocketClient 10 5 20
 ```
 
 | 指标 | 数值 |
@@ -315,33 +315,33 @@ thread_local uint64_t local_bytes = 0;
 ```bash
 cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
-make B5-Websocket B4-WebsocketClient
+make B5-WebsocketServer B6-WebsocketClient
 ```
 
 ### 启动服务器
 
 ```bash
 # 默认端口 8080
-./benchmark/B5-Websocket
+./benchmark/B5-WebsocketServer
 
 # 自定义端口
-./benchmark/B5-Websocket 9090
+./benchmark/B5-WebsocketServer 9090
 ```
 
 ### 运行客户端压测
 
 ```bash
 # 基准测试：10 客户端，10 秒，1KB 消息
-./benchmark/B4-WebsocketClient 10 10 1024
+./benchmark/B6-WebsocketClient 10 10 1024
 
 # 高并发测试：100 客户端，30 秒，1KB 消息
-./benchmark/B4-WebsocketClient 100 30 1024
+./benchmark/B6-WebsocketClient 100 30 1024
 
 # 小消息高频：50 客户端，10 秒，256B 消息
-./benchmark/B4-WebsocketClient 50 10 256
+./benchmark/B6-WebsocketClient 50 10 256
 
 # 大消息传输：20 客户端，10 秒，4KB 消息
-./benchmark/B4-WebsocketClient 20 10 4096
+./benchmark/B6-WebsocketClient 20 10 4096
 ```
 
 ### 服务器输出示例
@@ -440,5 +440,5 @@ Server stopped.
 
 **测试日期**：2026-02-04
 **测试人员**：galay-http 开发团队
-**文档版本**：v2.0
-**对应代码**：benchmark/B5-Websocket.cc
+**文档版本**：v2.2
+**对应代码**：benchmark/B5-WebsocketServer.cc (服务器) + benchmark/B6-WebsocketClient.cc (客户端)

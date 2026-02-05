@@ -14,6 +14,10 @@
 #include <optional>
 #include <coroutine>
 
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/SslSocket.h"
+#endif
+
 namespace galay::websocket
 {
 
@@ -31,7 +35,7 @@ class WsSessionImpl;
 template<typename SocketType>
 class WsSessionUpgraderImpl;
 
-template<typename SocketType>
+template<typename SocketType, bool IsSsl = is_ssl_socket_v<SocketType>>
 class WsSessionUpgradeAwaitableImpl;
 
 /**
@@ -43,7 +47,6 @@ class WsSessionUpgraderImpl
 {
 public:
     using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
 
     WsSessionUpgraderImpl(WsSessionImpl<SocketType>* session)
         : m_session(session)
@@ -60,7 +63,11 @@ public:
         return WsSessionUpgradeAwaitableImpl<SocketType>(this);
     }
 
-    friend class WsSessionUpgradeAwaitableImpl<SocketType>;
+    friend class WsSessionUpgradeAwaitableImpl<SocketType, false>;
+#ifdef GALAY_HTTP_SSL_ENABLED
+    friend class WsSessionUpgradeAwaitableImpl<SocketType, true>;
+#endif
+    friend class WsSessionUpgraderImpl<SocketType>;
 
 private:
     enum class State {
@@ -73,7 +80,6 @@ private:
     State m_state;
 
     std::optional<SendAwaitableType> m_send_awaitable;
-    std::optional<ReadvAwaitableType> m_recv_awaitable;
 
     std::string m_send_buffer;
     size_t m_send_offset;
@@ -82,12 +88,14 @@ private:
 };
 
 /**
- * @brief WebSocket Session 升级等待体
+ * @brief WebSocket Session 升级等待体 - TcpSocket 版本（使用 readv）
  */
 template<typename SocketType>
-class WsSessionUpgradeAwaitableImpl
+class WsSessionUpgradeAwaitableImpl<SocketType, false>
 {
 public:
+    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+
     WsSessionUpgradeAwaitableImpl(WsSessionUpgraderImpl<SocketType>* upgrader)
         : m_upgrader(upgrader)
     {
@@ -99,7 +107,33 @@ public:
 
 private:
     WsSessionUpgraderImpl<SocketType>* m_upgrader;
+    std::optional<ReadvAwaitableType> m_recv_awaitable;
 };
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+/**
+ * @brief WebSocket Session 升级等待体 - SslSocket 版本（使用 recv）
+ */
+template<typename SocketType>
+class WsSessionUpgradeAwaitableImpl<SocketType, true>
+{
+public:
+    using RecvAwaitableType = decltype(std::declval<SocketType>().recv(std::declval<char*>(), std::declval<size_t>()));
+
+    WsSessionUpgradeAwaitableImpl(WsSessionUpgraderImpl<SocketType>* upgrader)
+        : m_upgrader(upgrader)
+    {
+    }
+
+    bool await_ready() const noexcept { return false; }
+    bool await_suspend(std::coroutine_handle<> handle);
+    std::expected<bool, WsError> await_resume();
+
+private:
+    WsSessionUpgraderImpl<SocketType>* m_upgrader;
+    std::optional<RecvAwaitableType> m_recv_awaitable;
+};
+#endif
 
 /**
  * @brief WebSocket会话模板类
@@ -110,7 +144,6 @@ class WsSessionImpl
 {
 public:
     using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
 
     WsSessionImpl(SocketType& socket,
                   const WsUrl& url,
@@ -181,7 +214,10 @@ public:
         return m_reader.getFrame(frame);
     }
 
-    friend class WsSessionUpgradeAwaitableImpl<SocketType>;
+    friend class WsSessionUpgradeAwaitableImpl<SocketType, false>;
+#ifdef GALAY_HTTP_SSL_ENABLED
+    friend class WsSessionUpgradeAwaitableImpl<SocketType, true>;
+#endif
     friend class WsSessionUpgraderImpl<SocketType>;
 
 private:
@@ -193,9 +229,9 @@ private:
     bool m_upgraded;
 };
 
-// WsSessionUpgradeAwaitableImpl 的实现
+// WsSessionUpgradeAwaitableImpl<SocketType, false> 的实现 - TcpSocket 版本
 template<typename SocketType>
-bool WsSessionUpgradeAwaitableImpl<SocketType>::await_suspend(std::coroutine_handle<> handle) {
+bool WsSessionUpgradeAwaitableImpl<SocketType, false>::await_suspend(std::coroutine_handle<> handle) {
     auto& upgrader = *m_upgrader;
     auto& session = *upgrader.m_session;
 
@@ -231,13 +267,13 @@ bool WsSessionUpgradeAwaitableImpl<SocketType>::await_suspend(std::coroutine_han
         return upgrader.m_send_awaitable->await_suspend(handle);
 
     } else {
-        upgrader.m_recv_awaitable.emplace(session.m_socket.readv(session.m_ring_buffer.getWriteIovecs()));
-        return upgrader.m_recv_awaitable->await_suspend(handle);
+        m_recv_awaitable.emplace(session.m_socket.readv(session.m_ring_buffer.getWriteIovecs()));
+        return m_recv_awaitable->await_suspend(handle);
     }
 }
 
 template<typename SocketType>
-std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType>::await_resume() {
+std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType, false>::await_resume() {
     auto& upgrader = *m_upgrader;
     auto& session = *upgrader.m_session;
 
@@ -263,8 +299,8 @@ std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType>::await_re
         return false;  // 继续接收响应
 
     } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Receiving) {
-        auto recv_result = upgrader.m_recv_awaitable->await_resume();
-        upgrader.m_recv_awaitable.reset();
+        auto recv_result = m_recv_awaitable->await_resume();
+        m_recv_awaitable.reset();
 
         if (!recv_result) {
             HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", recv_result.error().message());
@@ -336,6 +372,165 @@ std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType>::await_re
         return std::unexpected(WsError(kWsProtocolError, "Invalid state"));
     }
 }
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+// WsSessionUpgradeAwaitableImpl<SocketType, true> 的实现 - SslSocket 版本
+template<typename SocketType>
+bool WsSessionUpgradeAwaitableImpl<SocketType, true>::await_suspend(std::coroutine_handle<> handle) {
+    auto& upgrader = *m_upgrader;
+    auto& session = *upgrader.m_session;
+
+    if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Invalid) {
+        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Sending;
+
+        // 生成WebSocket Key
+        upgrader.m_ws_key = generateWebSocketKey();
+
+        // 构建升级请求
+        auto request = Http1_1RequestBuilder::get(session.m_url.path)
+            .header("Host", session.m_url.host + ":" + std::to_string(session.m_url.port))
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", upgrader.m_ws_key)
+            .header("Sec-WebSocket-Version", "13")
+            .build();
+
+        upgrader.m_send_buffer = request.toString();
+        upgrader.m_send_offset = 0;
+
+        HTTP_LOG_INFO("[ws] [upgrade] [send]");
+
+        size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
+        const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
+        upgrader.m_send_awaitable.emplace(session.m_socket.send(send_ptr, remaining));
+        return upgrader.m_send_awaitable->await_suspend(handle);
+
+    } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Sending) {
+        size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
+        const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
+        upgrader.m_send_awaitable.emplace(session.m_socket.send(send_ptr, remaining));
+        return upgrader.m_send_awaitable->await_suspend(handle);
+
+    } else {
+        if (!m_recv_awaitable) {
+            auto write_iovecs = session.m_ring_buffer.getWriteIovecs();
+            if (!write_iovecs.empty()) {
+                m_recv_awaitable.emplace(session.m_socket.recv(
+                    static_cast<char*>(write_iovecs[0].iov_base),
+                    write_iovecs[0].iov_len));
+            }
+        }
+        return m_recv_awaitable->await_suspend(handle);
+    }
+}
+
+template<typename SocketType>
+std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType, true>::await_resume() {
+    auto& upgrader = *m_upgrader;
+    auto& session = *upgrader.m_session;
+
+    if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Sending) {
+        auto send_result = upgrader.m_send_awaitable->await_resume();
+        upgrader.m_send_awaitable.reset();
+
+        if (!send_result) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", send_result.error().message());
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsConnectionClosed, "Failed to send upgrade request"));
+        }
+
+        size_t bytes_sent = send_result.value();
+        upgrader.m_send_offset += bytes_sent;
+
+        if (upgrader.m_send_offset < upgrader.m_send_buffer.size()) {
+            return false;  // 继续发送
+        }
+
+        HTTP_LOG_INFO("[ws] [upgrade] [sent]");
+        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Receiving;
+        return false;  // 继续接收响应
+
+    } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Receiving) {
+        auto recv_result = m_recv_awaitable->await_resume();
+        m_recv_awaitable.reset();
+
+        if (!recv_result) {
+            auto& error = recv_result.error();
+            // SSL_ERROR_WANT_READ (2) 或 SSL_ERROR_WANT_WRITE (3) 表示需要重试
+            if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
+                HTTP_LOG_DEBUG("[ssl] [retry]");
+                return false;  // 返回 false 表示需要继续读取
+            }
+            HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", recv_result.error().message());
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsConnectionClosed, "Failed to read upgrade response"));
+        }
+
+        size_t bytes_read = recv_result.value().size();
+        if (bytes_read == 0) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [conn-closed]");
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsConnectionClosed, "Connection closed"));
+        }
+
+        session.m_ring_buffer.produce(bytes_read);
+
+        auto iovecs = session.m_ring_buffer.getReadIovecs();
+        auto [error_code, consumed] = upgrader.m_upgrade_response.fromIOVec(iovecs);
+
+        if (consumed > 0) {
+            session.m_ring_buffer.consume(consumed);
+        }
+
+        if (error_code == kIncomplete || error_code == kHeaderInComplete) {
+            return false;  // 需要更多数据
+        }
+
+        if (error_code != kNoError) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [parse-fail] [code={}]",
+                          static_cast<int>(error_code));
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsProtocolError, "Failed to parse upgrade response"));
+        }
+
+        // 验证升级响应
+        if (upgrader.m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}] [{}]",
+                          static_cast<int>(upgrader.m_upgrade_response.header().code()),
+                          httpStatusCodeToString(upgrader.m_upgrade_response.header().code()));
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsUpgradeFailed,
+                "Upgrade failed with status " +
+                std::to_string(static_cast<int>(upgrader.m_upgrade_response.header().code()))));
+        }
+
+        if (!upgrader.m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [accept-missing]");
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsUpgradeFailed, "Missing Sec-WebSocket-Accept header"));
+        }
+
+        std::string accept_key = upgrader.m_upgrade_response.header().headerPairs().getValue("Sec-WebSocket-Accept");
+        std::string expected_accept = WsUpgrade::generateAcceptKey(upgrader.m_ws_key);
+
+        if (accept_key != expected_accept) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [accept-invalid]");
+            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+            return std::unexpected(WsError(kWsUpgradeFailed, "Invalid Sec-WebSocket-Accept value"));
+        }
+
+        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
+        session.m_upgraded = true;
+        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
+
+        return true;  // 升级完成
+
+    } else {
+        HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
+        return std::unexpected(WsError(kWsProtocolError, "Invalid state"));
+    }
+}
+#endif
 
 // 类型别名 - WebSocket over TCP
 using WsSessionUpgradeAwaitable = WsSessionUpgradeAwaitableImpl<TcpSocket>;

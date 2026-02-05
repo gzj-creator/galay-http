@@ -1,9 +1,11 @@
-# B8-H2c (HTTP/2 Cleartext) 压力测试
+# B3-H2c (HTTP/2 Cleartext) 压力测试
 
 ## 测试环境
 
 - **平台**: macOS Darwin 24.6.0
 - **CPU**: Apple Silicon
+- **服务器程序**: `benchmark/B3-H2cServer.cc`
+- **客户端程序**: `benchmark/B4-H2cClient.cc`
 - **服务器配置**: 4 IO 调度器
 - **客户端配置**: 4 IO 调度器
 - **协议**: HTTP/2 over cleartext (h2c)
@@ -75,10 +77,10 @@
 
 ```bash
 # 启动 H2c 服务器
-./build/example/E9-H2cServer 9080
+./build/benchmark/B3-H2cServer 9080
 
-# 运行压力测试
-./build/benchmark/B8-H2cBenchmark
+# 运行客户端压测
+./build/benchmark/B4-H2cClient
 ```
 
 ## 实现说明

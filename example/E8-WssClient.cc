@@ -1,296 +1,169 @@
 /**
  * @file E8-WssClient.cc
  * @brief WSS (WebSocket Secure) 客户端示例
- * @details 演示如何连接到 WSS 服务器
+ * @details 演示如何使用 WssClient 连接到 WSS 服务器
  */
 
 #include <iostream>
 #include <chrono>
 #include "galay-http/kernel/http/HttpLog.h"
-#include "galay-http/kernel/websocket/WsUpgrade.h"
+#include "galay-http/kernel/websocket/WsClient.h"
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
-#include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/protoc/http/HttpResponse.h"
-#include "galay-http/utils/Http1_1RequestBuilder.h"
+#include "galay-kernel/kernel/Runtime.h"
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-
-#include "galay-kernel/kernel/Runtime.h"
-#include "galay-ssl/SslSocket.h"
-#include "galay-ssl/SslContext.h"
-#include <galay-utils/algorithm/Base64.hpp>
-#include <random>
 
 using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
-using namespace std::chrono_literals;
 
 static std::atomic<bool> g_done{false};
-
-// 生成 WebSocket Key
-std::string generateWsKey() {
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(0, 255);
-
-    unsigned char random_bytes[16];
-    for (int i = 0; i < 16; i++) {
-        random_bytes[i] = static_cast<unsigned char>(dis(gen));
-    }
-
-    return galay::utils::Base64Util::Base64Encode(random_bytes, 16);
-}
 
 /**
  * @brief WSS 客户端协程
  */
-Coroutine wssClientCoroutine(const std::string& host, int port, const std::string& path, int message_count) {
-    HTTP_LOG_INFO("[connect] [wss] [{}:{}{}]", host, port, path);
+Coroutine wssClientCoroutine(const std::string& url, int message_count) {
+    try {
+        // 1. 创建 WssClient
+        WssClientConfig config;
+        config.verify_peer = false;  // 跳过证书验证（用于自签名证书）
 
-    // 创建 SSL 上下文
-    galay::ssl::SslContext ssl_ctx(galay::ssl::SslMethod::TLS_Client);
-    ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);  // 跳过证书验证（用于自签名证书）
+        WssClient client(config);
 
-    if (!ssl_ctx.isValid()) {
-        HTTP_LOG_ERROR("[ssl] [context] [create-fail]");
-        g_done = true;
-        co_return;
-    }
-
-    // 创建 SSL Socket
-    galay::ssl::SslSocket socket(&ssl_ctx, IPType::IPV4);
-    socket.option().handleNonBlock();
-
-    // 1. TCP 连接
-    Host server_host(IPType::IPV4, host, port);
-    auto connect_result = co_await socket.connect(server_host);
-    if (!connect_result) {
-        HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
-        g_done = true;
-        co_return;
-    }
-
-    HTTP_LOG_INFO("[ssl] [handshake] [start]");
-
-    // 2. SSL 握手
-    while (!socket.isHandshakeCompleted()) {
-        auto handshake_result = co_await socket.handshake();
-        if (!handshake_result) {
-            auto& err = handshake_result.error();
-            if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                continue;
-            }
-            HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", err.message());
+        // 2. TCP 连接
+        auto connect_result = co_await client.connect(url);
+        if (!connect_result) {
+            HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
             g_done = true;
             co_return;
         }
-        break;
-    }
+        HTTP_LOG_INFO("[connect] [ok]");
 
-    HTTP_LOG_INFO("[ssl] [handshake-ok]");
-
-    // 3. 发送 WebSocket 升级请求
-    std::string ws_key = generateWsKey();
-    HttpRequest upgrade_request = Http1_1RequestBuilder::get(path)
-        .host(host + ":" + std::to_string(port))
-        .header("Connection", "Upgrade")
-        .header("Upgrade", "websocket")
-        .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", ws_key)
-        .build();
-
-    std::string request_data = upgrade_request.toString();
-    size_t sent = 0;
-    while (sent < request_data.size()) {
-        auto result = co_await socket.send(request_data.data() + sent, request_data.size() - sent);
-        if (!result) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", result.error().message());
-            g_done = true;
-            co_return;
-        }
-        sent += result.value();
-    }
-
-    HTTP_LOG_INFO("[ws] [upgrade] [wait]");
-
-    // 4. 接收升级响应
-    std::vector<char> buffer(4096);
-    std::string response_data;
-    HttpResponse response;
-
-    while (true) {
-        auto recv_result = co_await socket.recv(buffer.data(), buffer.size());
-        if (!recv_result) {
-            auto& err = recv_result.error();
-            // SSL_ERROR_WANT_READ (2) 或 SSL_ERROR_WANT_WRITE (3) 表示需要重试
-            if (err.sslError() == SSL_ERROR_WANT_READ || err.sslError() == SSL_ERROR_WANT_WRITE) {
-                continue;  // 重试
-            }
-            HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", err.message());
-            g_done = true;
-            co_return;
-        }
-
-        size_t bytes = recv_result.value().size();
-        if (bytes == 0) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [conn-closed]");
-            g_done = true;
-            co_return;
-        }
-
-        response_data.append(buffer.data(), bytes);
-
-        std::vector<iovec> iovecs;
-        iovecs.push_back({const_cast<char*>(response_data.data()), response_data.size()});
-
-        auto parse_result = response.fromIOVec(iovecs);
-        if (parse_result.first != HttpErrorCode::kNoError) {
-            continue;  // 需要更多数据
-        }
-
-        if (response.isComplete()) {
-            break;
-        }
-    }
-
-    if (response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-        HTTP_LOG_ERROR("[ws] [upgrade] [fail] [code={}]", static_cast<int>(response.header().code()));
-        g_done = true;
-        co_return;
-    }
-
-    // 验证 Sec-WebSocket-Accept
-    std::string accept_key = response.header().headerPairs().getValue("Sec-WebSocket-Accept");
-    std::string expected_accept = WsUpgrade::generateAcceptKey(ws_key);
-    if (accept_key != expected_accept) {
-        HTTP_LOG_ERROR("[ws] [upgrade] [accept-invalid]");
-        g_done = true;
-        co_return;
-    }
-
-    HTTP_LOG_INFO("[ws] [upgrade] [ok]");
-
-    // 5. 接收欢迎消息
-    std::string accumulated;
-    while (true) {
-        auto recv_result = co_await socket.recv(buffer.data(), buffer.size());
-        if (!recv_result) {
-            auto& err = recv_result.error();
-            if (err.sslError() == SSL_ERROR_WANT_READ || err.sslError() == SSL_ERROR_WANT_WRITE) {
-                continue;
-            }
-            HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", err.message());
-            g_done = true;
-            co_return;
-        }
-
-        accumulated.append(buffer.data(), recv_result.value().size());
-
-        WsFrame frame;
-        std::vector<iovec> iovecs;
-        iovecs.push_back({const_cast<char*>(accumulated.data()), accumulated.size()});
-
-        auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, false);
-        if (!parse_result) {
-            if (parse_result.error().code() == kWsIncomplete) {
-                continue;
-            }
-            HTTP_LOG_ERROR("[ws] [frame] [parse-fail]");
-            g_done = true;
-            co_return;
-        }
-
-        HTTP_LOG_INFO("[ws] [recv] [msg={}]", frame.payload);
-        accumulated.erase(0, parse_result.value());
-        break;
-    }
-
-    // 6. 发送和接收消息
-    for (int i = 0; i < message_count; i++) {
-        std::string msg = "Hello WSS #" + std::to_string(i + 1);
-
-        // 发送消息（客户端必须使用掩码）
-        WsFrame send_frame = WsFrameParser::createTextFrame(msg);
-        std::string frame_data = WsFrameParser::toBytes(send_frame, true);  // use_mask = true
-
-        size_t frame_sent = 0;
-        while (frame_sent < frame_data.size()) {
-            auto result = co_await socket.send(frame_data.data() + frame_sent, frame_data.size() - frame_sent);
-            if (!result) {
-                HTTP_LOG_ERROR("[ws] [send-fail]");
+        // 3. SSL 握手
+        while (!client.isHandshakeCompleted()) {
+            auto handshake_result = co_await client.handshake();
+            if (!handshake_result) {
+                auto& err = handshake_result.error();
+                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
+                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
+                    continue;
+                }
+                HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", err.message());
                 g_done = true;
+                co_await client.close();
                 co_return;
             }
-            frame_sent += result.value();
+            break;
         }
-        HTTP_LOG_INFO("[ws] [send] [msg={}]", msg);
+        HTTP_LOG_INFO("[ssl] [handshake-ok]");
 
-        // 接收回显
+        // 4. 获取 Session 并升级 WebSocket
+        auto session = client.getSession(WsWriterSetting::byClient());
+        auto upgrader = session.upgrade();
+
         while (true) {
-            auto recv_result = co_await socket.recv(buffer.data(), buffer.size());
-            if (!recv_result) {
-                auto& err = recv_result.error();
-                if (err.sslError() == SSL_ERROR_WANT_READ || err.sslError() == SSL_ERROR_WANT_WRITE) {
-                    continue;
-                }
-                HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", err.message());
+            auto upgrade_result = co_await upgrader();
+            if (!upgrade_result) {
+                HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error().message());
                 g_done = true;
+                co_await client.close();
                 co_return;
             }
-
-            accumulated.append(buffer.data(), recv_result.value().size());
-
-            WsFrame recv_frame;
-            std::vector<iovec> iovecs;
-            iovecs.push_back({const_cast<char*>(accumulated.data()), accumulated.size()});
-
-            auto parse_result = WsFrameParser::fromIOVec(iovecs, recv_frame, false);
-            if (!parse_result) {
-                if (parse_result.error().code() == kWsIncomplete) {
-                    continue;
-                }
-                HTTP_LOG_ERROR("[ws] [frame] [parse-fail]");
-                g_done = true;
-                co_return;
+            if (upgrade_result.value()) {
+                break;  // 升级完成
             }
-
-            HTTP_LOG_INFO("[ws] [recv] [msg={}]", recv_frame.payload);
-            accumulated.erase(0, parse_result.value());
-            break;
         }
+        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
+
+        // 5. 接收欢迎消息
+        std::string welcome_msg;
+        WsOpcode welcome_opcode;
+        while (true) {
+            auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode);
+            if (!recv_result) {
+                HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", recv_result.error().message());
+                g_done = true;
+                co_await client.close();
+                co_return;
+            }
+            if (recv_result.value()) {
+                break;
+            }
+        }
+        HTTP_LOG_INFO("[ws] [recv] [msg={}]", welcome_msg);
+
+        // 6. 发送和接收消息
+        for (int i = 0; i < message_count; i++) {
+            std::string msg = "Hello WSS #" + std::to_string(i + 1);
+
+            // 发送文本消息
+            while (true) {
+                auto send_result = co_await session.sendText(msg);
+                if (!send_result) {
+                    HTTP_LOG_ERROR("[ws] [send-fail] [{}]", send_result.error().message());
+                    g_done = true;
+                    co_await client.close();
+                    co_return;
+                }
+                if (send_result.value()) {
+                    break;
+                }
+            }
+            HTTP_LOG_INFO("[ws] [send] [msg={}]", msg);
+
+            // 接收回显
+            std::string echo_msg;
+            WsOpcode echo_opcode;
+            while (true) {
+                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode);
+                if (!recv_result) {
+                    HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", recv_result.error().message());
+                    g_done = true;
+                    co_await client.close();
+                    co_return;
+                }
+                if (recv_result.value()) {
+                    break;
+                }
+            }
+            HTTP_LOG_INFO("[ws] [recv] [msg={}]", echo_msg);
+        }
+
+        // 7. 发送关闭帧
+        HTTP_LOG_INFO("[ws] [close] [send]");
+        while (true) {
+            auto close_result = co_await session.sendClose(WsCloseCode::Normal);
+            if (!close_result) {
+                HTTP_LOG_ERROR("[ws] [close-fail] [{}]", close_result.error().message());
+                break;
+            }
+            if (close_result.value()) {
+                break;
+            }
+        }
+
+        co_await client.close();
+        HTTP_LOG_INFO("[ws] [conn] [closed]");
+
+    } catch (const std::exception& e) {
+        HTTP_LOG_ERROR("[exception] [{}]", e.what());
     }
 
-    // 7. 发送关闭帧
-    HTTP_LOG_INFO("[ws] [close] [send]");
-    WsFrame close_frame = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
-    std::string close_data = WsFrameParser::toBytes(close_frame, true);
-    co_await socket.send(close_data.data(), close_data.size());
-
-    co_await socket.close();
-    HTTP_LOG_INFO("[ws] [conn] [closed]");
     g_done = true;
     co_return;
 }
 
 int main(int argc, char* argv[]) {
-    std::string host = "localhost";
-    int port = 8443;
-    std::string path = "/ws";
+    std::string url = "wss://localhost:8443/ws";
     int message_count = 5;
 
-    if (argc > 1) host = argv[1];
-    if (argc > 2) port = std::atoi(argv[2]);
-    if (argc > 3) path = argv[3];
-    if (argc > 4) message_count = std::atoi(argv[4]);
+    if (argc > 1) url = argv[1];
+    if (argc > 2) message_count = std::atoi(argv[2]);
 
     std::cout << "========================================\n";
     std::cout << "WSS (WebSocket Secure) Client Example\n";
     std::cout << "========================================\n";
-    std::cout << "Host: " << host << "\n";
-    std::cout << "Port: " << port << "\n";
-    std::cout << "Path: " << path << "\n";
+    std::cout << "URL: " << url << "\n";
     std::cout << "Messages: " << message_count << "\n";
     std::cout << "========================================\n";
 
@@ -304,7 +177,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        scheduler->spawn(wssClientCoroutine(host, port, path, message_count));
+        scheduler->spawn(wssClientCoroutine(url, message_count));
 
         // 等待完成
         while (!g_done) {

@@ -12,13 +12,9 @@
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "kernel/websocket/WsWriterSetting.h"
-#include "galay-kernel/concurrency/AsyncMutex.h"
 #include <iostream>
 #include <atomic>
-#include <vector>
 #include <thread>
-#include <algorithm>
-#include <numeric>
 #include <signal.h>
 
 using namespace galay::http;
@@ -26,12 +22,10 @@ using namespace galay::websocket;
 using namespace galay::kernel;
 
 // 统计信息
-std::atomic<int> total_connections{0};
-std::atomic<int> total_messages{0};
-std::atomic<long long> total_bytes{0};
+std::atomic<uint64_t> total_connections{0};
+std::atomic<uint64_t> total_messages{0};
+std::atomic<uint64_t> total_bytes{0};
 std::atomic<bool> g_running{true};
-AsyncMutex g_conn_mutex;
-std::vector<std::pair<uint64_t, uint64_t>> g_conn_stats;
 
 void signalHandler(int) {
     g_running = false;
@@ -41,24 +35,19 @@ void signalHandler(int) {
  * @brief WebSocket 连接处理协程
  */
 Coroutine handleWebSocketConnection(WsConn& ws_conn) {
-    int conn_id = total_connections.fetch_add(1);
+    total_connections.fetch_add(1, std::memory_order_relaxed);
 
     auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
-    uint64_t conn_messages = 0;
-    uint64_t conn_bytes = 0;
-    HTTP_LOG_INFO("[ws] [conn-{}] [start]", conn_id);
 
     // 发送欢迎消息
-    HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sending]", conn_id);
     while (true) {
         auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
         if(!res) {
-            HTTP_LOG_ERROR("[ws] [conn-{}] [welcome] [send-fail] [{}]", conn_id, res.error().message());
+            HTTP_LOG_ERROR("[ws] [welcome] [send-fail] [{}]", res.error().message());
             co_return;
         }
         if(res.value()) {
-            HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sent]", conn_id);
             break;
         }
     }
@@ -68,55 +57,44 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         std::string message;
         WsOpcode opcode;
 
-        HTTP_LOG_INFO("[ws] [conn-{}] [waiting-message]", conn_id);
         auto result = co_await reader.getMessage(message, opcode);
 
         if (!result) {
             // 连接错误
-            HTTP_LOG_ERROR("[ws] [conn-{}] [read-error] [{}]", conn_id, result.error().message());
+            HTTP_LOG_ERROR("[ws] [read-error] [{}]", result.error().message());
             break;
         }
 
         if (!result.value()) {
             // 消息未完成，继续读取
-            HTTP_LOG_INFO("[ws] [conn-{}] [message-incomplete]", conn_id);
             continue;
         }
 
         // 处理不同类型的消息
         if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
-            total_messages++;
-            total_bytes += message.size();
-            conn_messages++;
-            conn_bytes += message.size();
-
-            HTTP_LOG_INFO("[ws] [conn-{}] [recv] [opcode={}] [size={}] [total-msg={}]",
-                         conn_id, static_cast<int>(opcode), message.size(), conn_messages);
+            total_messages.fetch_add(1, std::memory_order_relaxed);
+            total_bytes.fetch_add(message.size(), std::memory_order_relaxed);
 
             // 回显消息
             if (opcode == WsOpcode::Text) {
-                HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sending]", conn_id);
                 while (true) {
                     auto send_res = co_await writer.sendText(message);
                     if (!send_res) {
-                        HTTP_LOG_ERROR("[ws] [conn-{}] [echo-text] [send-fail] [{}]", conn_id, send_res.error().message());
+                        HTTP_LOG_ERROR("[ws] [echo-text] [send-fail] [{}]", send_res.error().message());
                         goto cleanup;
                     }
                     if (send_res.value()) {
-                        HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sent]", conn_id);
                         break;
                     }
                 }
             } else {
-                HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sending]", conn_id);
                 while (true) {
                     auto send_res = co_await writer.sendBinary(message);
                     if (!send_res) {
-                        HTTP_LOG_ERROR("[ws] [conn-{}] [echo-binary] [send-fail] [{}]", conn_id, send_res.error().message());
+                        HTTP_LOG_ERROR("[ws] [echo-binary] [send-fail] [{}]", send_res.error().message());
                         goto cleanup;
                     }
                     if (send_res.value()) {
-                        HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sent]", conn_id);
                         break;
                     }
                 }
@@ -124,30 +102,26 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
 
         } else if (opcode == WsOpcode::Ping) {
             // 响应 Ping
-            HTTP_LOG_INFO("[ws] [conn-{}] [ping] [responding]", conn_id);
             while (true) {
                 auto pong_res = co_await writer.sendPong(message);
                 if (!pong_res) {
-                    HTTP_LOG_ERROR("[ws] [conn-{}] [pong] [send-fail] [{}]", conn_id, pong_res.error().message());
+                    HTTP_LOG_ERROR("[ws] [pong] [send-fail] [{}]", pong_res.error().message());
                     goto cleanup;
                 }
                 if (pong_res.value()) {
-                    HTTP_LOG_INFO("[ws] [conn-{}] [pong] [sent]", conn_id);
                     break;
                 }
             }
 
         } else if (opcode == WsOpcode::Close) {
             // 客户端关闭连接
-            HTTP_LOG_INFO("[ws] [conn-{}] [close-requested]", conn_id);
             while (true) {
                 auto close_res = co_await writer.sendClose();
                 if (!close_res) {
-                    HTTP_LOG_ERROR("[ws] [conn-{}] [close] [send-fail] [{}]", conn_id, close_res.error().message());
+                    HTTP_LOG_ERROR("[ws] [close] [send-fail] [{}]", close_res.error().message());
                     break;
                 }
                 if (close_res.value()) {
-                    HTTP_LOG_INFO("[ws] [conn-{}] [close] [sent]", conn_id);
                     break;
                 }
             }
@@ -156,11 +130,6 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     }
 
 cleanup:
-    HTTP_LOG_INFO("[ws] [conn-{}] [cleanup] [messages={}] [bytes={}]", conn_id, conn_messages, conn_bytes);
-
-    auto lock_result = co_await g_conn_mutex.lock();
-    g_conn_stats.emplace_back(conn_messages, conn_bytes);
-    g_conn_mutex.unlock();
     co_await ws_conn.close();
     co_return;
 }
@@ -311,34 +280,6 @@ int main(int argc, char* argv[]) {
         std::cout << "Total messages: " << total_messages.load() << std::endl;
         std::cout << "Total bytes: " << total_bytes.load() << " ("
                   << (total_bytes.load() / 1024.0 / 1024.0) << " MB)" << std::endl;
-        while (!g_conn_mutex.tryLock()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        if (!g_conn_stats.empty()) {
-            std::vector<uint64_t> msg_counts;
-            std::vector<uint64_t> byte_counts;
-            msg_counts.reserve(g_conn_stats.size());
-            byte_counts.reserve(g_conn_stats.size());
-            for (const auto& stat : g_conn_stats) {
-                msg_counts.push_back(stat.first);
-                byte_counts.push_back(stat.second);
-            }
-            auto minmax_msg = std::minmax_element(msg_counts.begin(), msg_counts.end());
-            auto minmax_bytes = std::minmax_element(byte_counts.begin(), byte_counts.end());
-            uint64_t sum_msg = std::accumulate(msg_counts.begin(), msg_counts.end(), uint64_t(0));
-            uint64_t sum_bytes = std::accumulate(byte_counts.begin(), byte_counts.end(), uint64_t(0));
-            double avg_msg = static_cast<double>(sum_msg) / msg_counts.size();
-            double avg_bytes = static_cast<double>(sum_bytes) / byte_counts.size();
-            std::cout << "\nPer-connection stats:" << std::endl;
-            std::cout << "  Connections: " << g_conn_stats.size() << std::endl;
-            std::cout << "  Messages: min " << *minmax_msg.first
-                      << ", avg " << avg_msg
-                      << ", max " << *minmax_msg.second << std::endl;
-            std::cout << "  Bytes:    min " << *minmax_bytes.first
-                      << ", avg " << avg_bytes
-                      << ", max " << *minmax_bytes.second << std::endl;
-        }
-        g_conn_mutex.unlock();
         std::cout << "========================================" << std::endl;
 
         std::cout << "Server stopped." << std::endl;

@@ -1,8 +1,15 @@
-# B9-HttpServer 压测文档
+# B1-HttpServer 压测文档
 
 ## 概述
 
-B9-HttpServer 是一个专门用于压测的 HTTP 服务器基准测试程序。它提供了一个轻量级的 HTTP 服务器，用于测试 Galay-HTTP 框架在高并发场景下的性能表现。
+B1-HttpServer 是一个专门用于压测的 HTTP 服务器基准测试程序。它提供了一个轻量级的 HTTP 服务器，用于测试 Galay-HTTP 框架在高并发场景下的性能表现。
+
+## 测试架构
+
+- **服务器程序**：`benchmark/B1-HttpServer.cc`
+- **客户端程序**：`benchmark/B2-HttpClient.cc`
+- **测试模式**：简单响应服务器
+- **协议**：HTTP/1.1
 
 ## 特性
 
@@ -15,7 +22,7 @@ B9-HttpServer 是一个专门用于压测的 HTTP 服务器基准测试程序。
 
 ```bash
 cd build
-cmake --build . --target B9-HttpServer
+cmake --build . --target B1-HttpServer
 ```
 
 ## 使用方法
@@ -24,10 +31,10 @@ cmake --build . --target B9-HttpServer
 
 ```bash
 # 使用默认端口 8080
-./build/benchmark/B9-HttpServer
+./build/benchmark/B1-HttpServer
 
 # 指定端口
-./build/benchmark/B9-HttpServer 9090
+./build/benchmark/B1-HttpServer 9090
 ```
 
 ### 服务器输出

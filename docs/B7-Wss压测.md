@@ -1,9 +1,11 @@
-# B7-WSS (WebSocket Secure) 压力测试
+# B7-Wss (WebSocket Secure) 压力测试
 
 ## 测试环境
 
 - **平台**: macOS Darwin 24.6.0
 - **CPU**: Apple Silicon
+- **服务器程序**: `benchmark/B7-WssServer.cc`
+- **客户端程序**: `benchmark/B8-WssClient.cc`
 - **服务器配置**: 4 IO 调度器, 10 计算调度器
 - **SSL**: OpenSSL, TLS 1.3
 - **证书**: 自签名证书 (RSA 2048)
@@ -72,14 +74,14 @@ openssl req -x509 -newkey rsa:2048 -keyout cert/test.key -out cert/test.crt \
     -days 365 -nodes -subj "/CN=localhost"
 
 # 启动 WSS 服务器
-./build/example/E7-WssServer 8443 cert/test.crt cert/test.key
+./build/benchmark/B7-WssServer 8443 cert/test.crt cert/test.key
 
 # 运行客户端测试
-./build/example/E8-WssClient localhost 8443 /ws 10
+./build/benchmark/B8-WssClient localhost 8443 /ws 10
 
 # 并发压测脚本
 for i in $(seq 1 100); do
-    ./build/example/E8-WssClient localhost 8443 /ws 20 &
+    ./build/benchmark/B8-WssClient localhost 8443 /ws 20 &
 done
 wait
 ```
@@ -105,7 +107,7 @@ WSS 实现基于 `HttpsServer` + `WsFrameParser`:
 
 ## 相关文件
 
-- `example/E7-WssServer.cc` - WSS 服务器示例
-- `example/E8-WssClient.cc` - WSS 客户端示例
+- `benchmark/B7-WssServer.cc` - WSS 服务器压测程序
+- `benchmark/B8-WssClient.cc` - WSS 客户端压测程序
 - `galay-http/kernel/websocket/WsUpgrade.h` - WebSocket 升级处理
 - `galay-http/protoc/websocket/WebSocketFrame.h` - WebSocket 帧解析器

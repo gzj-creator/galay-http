@@ -445,7 +445,7 @@ public:
 
     const WsUrl& url() const { return m_url; }
 
-private:
+protected:
     std::unique_ptr<SocketType> m_socket;
     WsUrl m_url;
 };
@@ -458,27 +458,122 @@ using WsClient = WsClientImpl<TcpSocket>;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/SslSocket.h"
+#include "galay-ssl/SslContext.h"
 
 namespace galay::websocket {
 
 /**
- * @note WSS 客户端说明
- *
- * 由于 galay::ssl::SslSocket 目前不支持 readv 方法，WsClientImpl 模板
- * 不能直接用于 SslSocket。
- *
- * 要实现 WSS 客户端，请参考 example/E8-WssClient.cc 示例，
- * 直接使用 SslSocket 和 WebSocketFrame 进行操作：
- *
- * 1. 创建 SslContext 和 SslSocket
- * 2. 执行 TCP 连接 (socket.connect())
- * 3. 执行 SSL 握手 (socket.handshake())
- * 4. 发送 WebSocket 升级请求
- * 5. 接收并验证升级响应
- * 6. 使用 WsFrameParser 进行帧的编解码
- *
- * 完整的 WssClient 类支持需要为 SslSocket 添加 readv 方法。
+ * @brief WSS (WebSocket Secure) 客户端配置
  */
+struct WssClientConfig
+{
+    // SSL 配置
+    std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
+    bool verify_peer = false;       // 是否验证服务器证书
+    int verify_depth = 4;           // 证书链验证深度
+};
+
+/**
+ * @brief WSS (WebSocket Secure) 客户端类
+ * @details 基于 SslSocket 的 WebSocket 客户端，支持 wss:// 协议
+ */
+class WssClient : public WsClientImpl<galay::ssl::SslSocket>
+{
+public:
+    WssClient(const WssClientConfig& config = WssClientConfig())
+        : WsClientImpl<galay::ssl::SslSocket>()
+        , m_wss_config(config)
+        , m_ssl_ctx(galay::ssl::SslMethod::TLS_Client)
+    {
+        initSslContext();
+    }
+
+    ~WssClient() = default;
+
+    WssClient(const WssClient&) = delete;
+    WssClient& operator=(const WssClient&) = delete;
+    WssClient(WssClient&&) = delete;
+    WssClient& operator=(WssClient&&) = delete;
+
+    auto connect(const std::string& url) {
+        auto parsed_url = WsUrl::parse(url);
+        if (!parsed_url) {
+            throw std::runtime_error("Invalid WebSocket URL: " + url);
+        }
+
+        m_url = parsed_url.value();
+
+        if (!m_url.is_secure) {
+            HTTP_LOG_WARN("[wss] [upgrade] [forced]");
+        }
+
+        HTTP_LOG_INFO("[connect] [wss] [{}:{}{}]", m_url.host, m_url.port, m_url.path);
+
+        // 创建 SslSocket
+        m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
+
+        auto nonblock_result = m_socket->option().handleNonBlock();
+        if (!nonblock_result) {
+            throw std::runtime_error("Failed to set non-blocking: " + nonblock_result.error().message());
+        }
+
+        // 设置 SNI (Server Name Indication)
+        auto sni_result = m_socket->setHostname(m_url.host);
+        if (!sni_result) {
+            HTTP_LOG_WARN("[sni] [fail] [{}]", sni_result.error().message());
+        }
+
+        Host server_host(IPType::IPV4, m_url.host, m_url.port);
+        return m_socket->connect(server_host);
+    }
+
+    /**
+     * @brief 执行 SSL 握手（连接后必须调用）
+     */
+    auto handshake() {
+        if (!m_socket) {
+            throw std::runtime_error("WssClient not connected. Call connect() first.");
+        }
+        return m_socket->handshake();
+    }
+
+    /**
+     * @brief 检查 SSL 握手是否完成
+     */
+    bool isHandshakeCompleted() const {
+        if (!m_socket) return false;
+        return m_socket->isHandshakeCompleted();
+    }
+
+private:
+    void initSslContext() {
+        if (!m_ssl_ctx.isValid()) {
+            throw std::runtime_error("Failed to create SSL context");
+        }
+
+        // 加载 CA 证书
+        if (!m_wss_config.ca_path.empty()) {
+            auto result = m_ssl_ctx.loadCACertificate(m_wss_config.ca_path);
+            if (!result) {
+                HTTP_LOG_WARN("[ssl] [ca] [load-fail] [{}]", m_wss_config.ca_path);
+            }
+        }
+
+        // 设置验证模式
+        if (m_wss_config.verify_peer) {
+            m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::Peer);
+            m_ssl_ctx.setVerifyDepth(m_wss_config.verify_depth);
+        } else {
+            m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);
+        }
+    }
+
+    WssClientConfig m_wss_config;
+    galay::ssl::SslContext m_ssl_ctx;
+};
+
+// 类型别名 - WebSocket over SSL
+using WssUpgrader = WsUpgraderImpl<galay::ssl::SslSocket>;
 
 } // namespace galay::websocket
 #endif
