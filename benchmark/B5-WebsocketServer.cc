@@ -1,31 +1,25 @@
 /**
- * @file B5-Websocket.cc
- * @brief WebSocket 服务器压测程序
- * @details 配合 B4-WebsocketClient 进行 WebSocket 性能测试
+ * @file B5-WebsocketServer.cc
+ * @brief WebSocket 服务器压测程序（纯净版）
+ * @details 配合 B6-WebsocketClient 进行 WebSocket 性能测试
+ *          移除统计功能，由客户端负责统计
  */
 
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
 #include "galay-http/kernel/websocket/WsConn.h"
 #include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "kernel/websocket/WsWriterSetting.h"
 #include <iostream>
-#include <atomic>
-#include <thread>
-#include <signal.h>
+#include <csignal>
 
 using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
 
-// 统计信息
-std::atomic<uint64_t> total_connections{0};
-std::atomic<uint64_t> total_messages{0};
-std::atomic<uint64_t> total_bytes{0};
-std::atomic<bool> g_running{true};
+static volatile bool g_running = true;
 
 void signalHandler(int) {
     g_running = false;
@@ -35,8 +29,6 @@ void signalHandler(int) {
  * @brief WebSocket 连接处理协程
  */
 Coroutine handleWebSocketConnection(WsConn& ws_conn) {
-    total_connections.fetch_add(1, std::memory_order_relaxed);
-
     auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
@@ -60,21 +52,16 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         auto result = co_await reader.getMessage(message, opcode);
 
         if (!result) {
-            // 连接错误
             HTTP_LOG_ERROR("[ws] [read-error] [{}]", result.error().message());
             break;
         }
 
         if (!result.value()) {
-            // 消息未完成，继续读取
             continue;
         }
 
         // 处理不同类型的消息
         if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
-            total_messages.fetch_add(1, std::memory_order_relaxed);
-            total_bytes.fetch_add(message.size(), std::memory_order_relaxed);
-
             // 回显消息
             if (opcode == WsOpcode::Text) {
                 while (true) {
@@ -138,57 +125,42 @@ cleanup:
  * @brief HTTP 请求处理协程
  */
 Coroutine handleHttpRequest(HttpConn conn) {
-    static std::atomic<int> req_id{0};
-    int current_req_id = req_id.fetch_add(1);
-
-    HTTP_LOG_INFO("[http] [req-{}] [start]", current_req_id);
-
     auto reader = conn.getReader();
     HttpRequest request;
 
-    HTTP_LOG_INFO("[http] [req-{}] [reading-request]", current_req_id);
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
-        HTTP_LOG_ERROR("[http] [req-{}] [read-fail] [{}]", current_req_id, read_result.error().message());
+        HTTP_LOG_ERROR("[http] [read-fail] [{}]", read_result.error().message());
         co_await conn.close();
         co_return;
     }
 
-    HTTP_LOG_INFO("[http] [req-{}] [read-ok] [uri={}]", current_req_id, request.header().uri());
-
     // 检查是否是 WebSocket 升级请求
     if (request.header().uri() == "/ws" || request.header().uri() == "/") {
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [handling]", current_req_id);
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [fail]", current_req_id);
+            HTTP_LOG_ERROR("[http] [ws-upgrade] [fail]");
             auto writer = conn.getWriter();
             co_await writer.sendResponse(upgrade_result.response);
             co_await conn.close();
             co_return;
         }
 
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [sending-response]", current_req_id);
         // 发送升级响应
         auto writer = conn.getWriter();
         auto send_result = co_await writer.sendResponse(upgrade_result.response);
 
         if (!send_result) {
-            HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [send-fail] [{}]", current_req_id, send_result.error().message());
+            HTTP_LOG_ERROR("[http] [ws-upgrade] [send-fail] [{}]", send_result.error().message());
             co_await conn.close();
             co_return;
         }
 
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [response-sent] [converting-to-ws]", current_req_id);
         WsConn ws_conn = WsConn::from(std::move(conn), true);
-
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [entering-ws-handler]", current_req_id);
         co_await handleWebSocketConnection(ws_conn).wait();
-        HTTP_LOG_INFO("[http] [req-{}] [ws-handler] [done]", current_req_id);
     } else {
         // 非 WebSocket 请求，返回 404
-        HTTP_LOG_INFO("[http] [req-{}] [not-ws] [404]", current_req_id);
         auto response = Http1_1ResponseBuilder()
             .status(HttpStatusCode::NotFound_404)
             .body("Not Found")
@@ -203,23 +175,28 @@ Coroutine handleHttpRequest(HttpConn conn) {
 }
 
 int main(int argc, char* argv[]) {
-    // 设置日志为文件模式
-    galay::http::HttpLogger::file("B5-Websocket.log");
+    // 禁用日志以获得最佳性能
+    galay::http::HttpLogger::disable();
 
     uint16_t port = 8080;
-    if (argc >= 2) {
+    int io_threads = 4;
+
+    if (argc > 1) {
         port = std::atoi(argv[1]);
     }
+    if (argc > 2) {
+        io_threads = std::atoi(argv[2]);
+    }
 
-    std::cout << "========================================" << std::endl;
-    std::cout << "WebSocket Benchmark Server" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << "Port: " << port << std::endl;
-    std::cout << "WebSocket endpoint: ws://localhost:" << port << "/ws" << std::endl;
-    std::cout << "Press Ctrl+C to stop" << std::endl;
-    std::cout << "========================================\n" << std::endl;
+    std::cout << "========================================\n";
+    std::cout << "WebSocket Benchmark Server\n";
+    std::cout << "========================================\n";
+    std::cout << "Port: " << port << "\n";
+    std::cout << "IO Threads: " << io_threads << "\n";
+    std::cout << "WebSocket endpoint: ws://localhost:" << port << "/ws\n";
+    std::cout << "Press Ctrl+C to stop\n";
+    std::cout << "========================================\n\n";
 
-    // 设置信号处理
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
@@ -227,7 +204,7 @@ int main(int argc, char* argv[]) {
         HttpServerConfig config;
         config.host = "0.0.0.0";
         config.port = port;
-        config.io_scheduler_count = 4;
+        config.io_scheduler_count = io_threads;
         config.compute_scheduler_count = 0;
 
         HttpServer server(config);
@@ -236,56 +213,20 @@ int main(int argc, char* argv[]) {
 
         server.start(handleHttpRequest);
 
-        std::cout << "Server started successfully!\n" << std::endl;
-
-        std::thread stats_thread([] {
-            uint64_t last_messages = 0;
-            uint64_t last_bytes = 0;
-            auto last_time = std::chrono::steady_clock::now();
-            while (g_running.load(std::memory_order_relaxed)) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                auto now = std::chrono::steady_clock::now();
-                auto cur_messages = static_cast<uint64_t>(total_messages.load());
-                auto cur_bytes = static_cast<uint64_t>(total_bytes.load());
-                auto delta_sec = std::chrono::duration<double>(now - last_time).count();
-                auto delta_messages = cur_messages - last_messages;
-                auto delta_bytes = cur_bytes - last_bytes;
-                if (delta_sec > 0.0) {
-                    std::cout << "[Stats] QPS: " << (delta_messages / delta_sec)
-                              << " | MB/s: " << (delta_bytes / 1024.0 / 1024.0 / delta_sec)
-                              << std::endl;
-                }
-                last_time = now;
-                last_messages = cur_messages;
-                last_bytes = cur_bytes;
-            }
-        });
+        std::cout << "Server started successfully!\n";
+        std::cout << "Waiting for requests...\n\n";
 
         // 等待停止信号
         while (g_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        std::cout << "\nShutting down..." << std::endl;
+        std::cout << "\nShutting down...\n";
         server.stop();
-        if (stats_thread.joinable()) {
-            stats_thread.join();
-        }
-
-        // 打印统计信息
-        std::cout << "\n========================================" << std::endl;
-        std::cout << "Benchmark Statistics:" << std::endl;
-        std::cout << "========================================" << std::endl;
-        std::cout << "Total connections: " << total_connections.load() << std::endl;
-        std::cout << "Total messages: " << total_messages.load() << std::endl;
-        std::cout << "Total bytes: " << total_bytes.load() << " ("
-                  << (total_bytes.load() / 1024.0 / 1024.0) << " MB)" << std::endl;
-        std::cout << "========================================" << std::endl;
-
-        std::cout << "Server stopped." << std::endl;
+        std::cout << "Server stopped.\n";
 
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
 

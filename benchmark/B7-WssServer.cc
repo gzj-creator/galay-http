@@ -1,19 +1,17 @@
 /**
- * @file B11-WssServer.cc
- * @brief WSS (WebSocket Secure) 服务器压测程序
- * @details 配合 B12-WssClient 进行 WSS 性能测试
+ * @file B7-WssServer.cc
+ * @brief WSS (WebSocket Secure) 服务器压测程序（纯净版）
+ * @details 配合 B8-WssClient 进行 WSS 性能测试
+ *          移除统计功能，由客户端负责统计
  */
 
 #include <chrono>
 #include <csignal>
 #include <iostream>
-#include <atomic>
-#include <thread>
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 
@@ -22,14 +20,8 @@
 using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
-using namespace std::chrono_literals;
 
-// 统计信息
-static std::atomic<bool> g_running{true};
-static std::atomic<uint64_t> g_total_connections{0};
-static std::atomic<uint64_t> g_active_connections{0};
-static std::atomic<uint64_t> g_total_messages{0};
-static std::atomic<uint64_t> g_total_bytes{0};
+static volatile bool g_running = true;
 
 void signalHandler(int) {
     g_running = false;
@@ -40,8 +32,6 @@ void signalHandler(int) {
  */
 Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
     HTTP_LOG_DEBUG("[wss] [conn] [open]");
-    g_total_connections.fetch_add(1, std::memory_order_relaxed);
-    g_active_connections.fetch_add(1, std::memory_order_relaxed);
 
     // 发送欢迎消息
     WsFrame welcome_frame = WsFrameParser::createTextFrame("Welcome to WSS Benchmark Server!");
@@ -52,7 +42,6 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
         auto result = co_await socket.send(welcome_data.data() + sent, welcome_data.size() - sent);
         if (!result) {
             HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", result.error().message());
-            g_active_connections.fetch_sub(1, std::memory_order_relaxed);
             co_return;
         }
         sent += result.value();
@@ -111,10 +100,7 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
                 co_await socket.send(pong_data.data(), pong_data.size());
             }
             else if (frame.header.opcode == WsOpcode::Text || frame.header.opcode == WsOpcode::Binary) {
-                g_total_messages.fetch_add(1, std::memory_order_relaxed);
-                g_total_bytes.fetch_add(frame.payload.size(), std::memory_order_relaxed);
-
-                // 回显消息（不添加前缀，直接回显）
+                // 回显消息
                 WsFrame echo_frame = (frame.header.opcode == WsOpcode::Text)
                     ? WsFrameParser::createTextFrame(frame.payload)
                     : WsFrameParser::createBinaryFrame(frame.payload);
@@ -132,7 +118,6 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
 
 cleanup:
     co_await socket.close();
-    g_active_connections.fetch_sub(1, std::memory_order_relaxed);
     HTTP_LOG_DEBUG("[wss] [conn] [closed]");
     co_return;
 }
@@ -210,21 +195,24 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
 }
 
 int main(int argc, char* argv[]) {
-    // 设置日志为文件模式
-    galay::http::HttpLogger::file("B11-WssServer.log");
+    // 禁用日志以获得最佳性能
+    galay::http::HttpLogger::disable();
 
     int port = 8443;
+    int io_threads = 4;
     std::string cert_path = "../cert/test.crt";
     std::string key_path = "../cert/test.key";
 
     if (argc > 1) port = std::atoi(argv[1]);
-    if (argc > 2) cert_path = argv[2];
-    if (argc > 3) key_path = argv[3];
+    if (argc > 2) io_threads = std::atoi(argv[2]);
+    if (argc > 3) cert_path = argv[3];
+    if (argc > 4) key_path = argv[4];
 
     std::cout << "========================================\n";
     std::cout << "WSS (WebSocket Secure) Benchmark Server\n";
     std::cout << "========================================\n";
     std::cout << "Port: " << port << "\n";
+    std::cout << "IO Threads: " << io_threads << "\n";
     std::cout << "Cert: " << cert_path << "\n";
     std::cout << "Key:  " << key_path << "\n";
     std::cout << "WSS endpoint: wss://localhost:" << port << "/ws\n";
@@ -240,42 +228,14 @@ int main(int argc, char* argv[]) {
         config.port = port;
         config.cert_path = cert_path;
         config.key_path = key_path;
-        config.io_scheduler_count = 4;
+        config.io_scheduler_count = io_threads;
 
         HttpsServer server(config);
 
         server.start(httpsHandler);
 
-        std::cout << "Server started successfully!\n\n";
-
-        // 统计线程
-        std::thread stats_thread([] {
-            uint64_t last_messages = 0;
-            uint64_t last_bytes = 0;
-            auto last_time = std::chrono::steady_clock::now();
-
-            while (g_running.load(std::memory_order_relaxed)) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-
-                auto now = std::chrono::steady_clock::now();
-                auto cur_messages = g_total_messages.load(std::memory_order_relaxed);
-                auto cur_bytes = g_total_bytes.load(std::memory_order_relaxed);
-                auto delta_sec = std::chrono::duration<double>(now - last_time).count();
-                auto delta_messages = cur_messages - last_messages;
-                auto delta_bytes = cur_bytes - last_bytes;
-
-                if (delta_sec > 0.0) {
-                    std::cout << "[Stats] Active: " << g_active_connections.load(std::memory_order_relaxed)
-                              << " | QPS: " << static_cast<uint64_t>(delta_messages / delta_sec)
-                              << " | MB/s: " << (delta_bytes / 1024.0 / 1024.0 / delta_sec)
-                              << "\n";
-                }
-
-                last_time = now;
-                last_messages = cur_messages;
-                last_bytes = cur_bytes;
-            }
-        });
+        std::cout << "Server started successfully!\n";
+        std::cout << "Waiting for requests...\n\n";
 
         // 等待停止信号
         while (g_running) {
@@ -284,22 +244,6 @@ int main(int argc, char* argv[]) {
 
         std::cout << "\nShutting down...\n";
         server.stop();
-
-        if (stats_thread.joinable()) {
-            stats_thread.join();
-        }
-
-        // 打印统计信息
-        std::cout << "\n========================================\n";
-        std::cout << "Benchmark Statistics:\n";
-        std::cout << "========================================\n";
-        std::cout << "Total connections: " << g_total_connections.load() << "\n";
-        std::cout << "Active connections: " << g_active_connections.load() << "\n";
-        std::cout << "Total messages: " << g_total_messages.load() << "\n";
-        std::cout << "Total bytes: " << g_total_bytes.load() << " ("
-                  << (g_total_bytes.load() / 1024.0 / 1024.0) << " MB)\n";
-        std::cout << "========================================\n";
-
         std::cout << "Server stopped.\n";
 
     } catch (const std::exception& e) {

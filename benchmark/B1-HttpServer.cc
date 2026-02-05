@@ -1,11 +1,13 @@
 /**
- * @file B9-HttpServer.cc
- * @brief HTTP 服务器压测程序
+ * @file B1-HttpServer.cc
+ * @brief HTTP 服务器压测程序（纯净版）
  * @details 启动一个高性能 HTTP 服务器用于压测
+ *          移除所有统计功能，由客户端负责统计
  *
  * 使用方法:
- *   ./benchmark/B9-HttpServer [port]
+ *   ./benchmark/B1-HttpServer [port] [io_threads]
  *   默认端口: 8080
+ *   默认线程数: 4
  *
  * 压测命令:
  *   wrk -t4 -c100 -d30s --latency http://127.0.0.1:8080/
@@ -15,28 +17,22 @@
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/http/HttpConn.h"
 #include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include <iostream>
-#include <atomic>
 #include <csignal>
-#include <chrono>
 
 using namespace galay::http;
 using namespace galay::kernel;
 
-static std::atomic<bool> g_running{true};
-static std::atomic<uint64_t> g_request_count{0};
-static std::atomic<uint64_t> g_error_count{0};
-static std::chrono::steady_clock::time_point g_start_time;
+static volatile bool g_running = true;
 
 void signalHandler(int) {
     g_running = false;
 }
 
 /**
- * @brief HTTP 请求处理器 - 简单的 echo 响应
+ * @brief HTTP 请求处理器 - 简单的 OK 响应
  */
 Coroutine handleHttpRequest(HttpConn conn) {
     while(true) {
@@ -46,13 +42,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
         while (true) {
             auto read_result = co_await reader.getRequest(request);
             if (!read_result) {
-                std::cerr << "Failed to send response: " << read_result.error().message() << "\n";
-                g_error_count++;
                 co_return;
             }
             if (read_result.value()) break;
         }
-        g_request_count++;
 
         // 构建响应
         auto response = Http1_1ResponseBuilder()
@@ -67,8 +60,6 @@ Coroutine handleHttpRequest(HttpConn conn) {
         while (true) {
             auto result = co_await writer.sendResponse(response);
             if (!result) {
-                std::cerr << "Failed to send response: " << result.error().message() << "\n";
-                g_error_count++;
                 break;
             }
             if (result.value()) break;
@@ -78,35 +69,25 @@ Coroutine handleHttpRequest(HttpConn conn) {
     co_return;
 }
 
-/**
- * @brief 打印统计信息
- */
-void printStats() {
-    auto now = std::chrono::steady_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::seconds>(now - g_start_time).count();
-
-    if (duration > 0) {
-        uint64_t requests = g_request_count.load();
-        uint64_t errors = g_error_count.load();
-        double qps = static_cast<double>(requests) / duration;
-
-        std::cout << "\r[Stats] Requests: " << requests
-                  << " | Errors: " << errors
-                  << " | QPS: " << static_cast<uint64_t>(qps)
-                  << " | Uptime: " << duration << "s" << std::flush;
-    }
-}
-
 int main(int argc, char* argv[]) {
+    // 禁用日志以获得最佳性能
+    galay::http::HttpLogger::disable();
+
     uint16_t port = 8080;
+    int io_threads = 4;
+
     if (argc > 1) {
         port = std::atoi(argv[1]);
+    }
+    if (argc > 2) {
+        io_threads = std::atoi(argv[2]);
     }
 
     std::cout << "========================================\n";
     std::cout << "HTTP Server Benchmark\n";
     std::cout << "========================================\n";
     std::cout << "Port: " << port << "\n";
+    std::cout << "IO Threads: " << io_threads << "\n";
     std::cout << "Endpoint: http://127.0.0.1:" << port << "/\n";
     std::cout << "\nBenchmark commands:\n";
     std::cout << "  wrk -t4 -c100 -d30s --latency http://127.0.0.1:" << port << "/\n";
@@ -121,7 +102,7 @@ int main(int argc, char* argv[]) {
         HttpServerConfig config;
         config.host = "0.0.0.0";
         config.port = port;
-        config.io_scheduler_count = 4;
+        config.io_scheduler_count = io_threads;
         config.compute_scheduler_count = 0;
 
         HttpServer server(config);
@@ -133,30 +114,12 @@ int main(int argc, char* argv[]) {
         std::cout << "Server started successfully!\n";
         std::cout << "Waiting for requests...\n\n";
 
-        g_start_time = std::chrono::steady_clock::now();
-
-        // 定期打印统计信息
+        // 等待停止信号
         while (g_running) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            printStats();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
 
-        std::cout << "\n\nShutting down...\n";
-
-        auto end_time = std::chrono::steady_clock::now();
-        auto total_duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - g_start_time).count();
-
-        std::cout << "\n========================================\n";
-        std::cout << "Final Statistics\n";
-        std::cout << "========================================\n";
-        std::cout << "Total requests: " << g_request_count.load() << "\n";
-        std::cout << "Total errors:   " << g_error_count.load() << "\n";
-        std::cout << "Total time:     " << total_duration << " seconds\n";
-        if (total_duration > 0) {
-            std::cout << "Average QPS:    " << (g_request_count.load() / total_duration) << "\n";
-        }
-        std::cout << "========================================\n";
-
+        std::cout << "\nShutting down...\n";
         server.stop();
         std::cout << "Server stopped.\n";
 

@@ -13,10 +13,12 @@ B1-HttpServer 是一个专门用于压测的 HTTP 服务器基准测试程序。
 
 ## 特性
 
-- **高性能**: 基于 HttpRouter 实现，支持 Keep-Alive 连接复用
-- **实时统计**: 每秒更新请求数、错误数和 QPS
+- **高性能**: 基于协程实现，支持 Keep-Alive 连接复用
+- **批量 IO**: 读取端使用 `readv`，写入端使用 `writev`，减少系统调用
+- **零拷贝**: writev 避免 header 和 body 的内存拷贝
+- **日志禁用**: 压测时禁用日志以获得最佳性能
 - **简单响应**: 返回简单的 "OK" 文本，最小化处理开销
-- **易于使用**: 支持命令行参数配置端口
+- **易于使用**: 支持命令行参数配置端口和线程数
 
 ## 编译
 
@@ -30,11 +32,14 @@ cmake --build . --target B1-HttpServer
 ### 启动服务器
 
 ```bash
-# 使用默认端口 8080
+# 使用默认配置（端口 8080，4 个 IO 线程）
 ./build/benchmark/B1-HttpServer
 
 # 指定端口
 ./build/benchmark/B1-HttpServer 9090
+
+# 指定端口和 IO 线程数
+./build/benchmark/B1-HttpServer 8080 8
 ```
 
 ### 服务器输出
@@ -44,6 +49,7 @@ cmake --build . --target B1-HttpServer
 HTTP Server Benchmark
 ========================================
 Port: 8080
+IO Threads: 4
 Endpoint: http://127.0.0.1:8080/
 
 Benchmark commands:
@@ -55,8 +61,6 @@ Press Ctrl+C to stop
 
 Server started successfully!
 Waiting for requests...
-
-[Stats] Requests: 1279162 | Errors: 0 | QPS: 126618 | Uptime: 10s
 ```
 
 ## 压测工具
@@ -69,21 +73,21 @@ Waiting for requests...
 wrk -t4 -c100 -d30s --latency http://127.0.0.1:8080/
 ```
 
-**预期结果**:
+**实测结果**:
 ```
 Running 30s test @ http://127.0.0.1:8080/
   4 threads and 100 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     1.17ms  674.96us  33.41ms   97.83%
-    Req/Sec    22.12k     2.38k   71.73k    92.34%
+    Latency     1.24ms  710.60us  28.24ms   96.90%
+    Req/Sec    20.83k     2.94k   26.75k    78.42%
   Latency Distribution
-     50%    1.09ms
-     75%    1.14ms
-     90%    1.27ms
-     99%    2.34ms
-  2642958 requests in 30.10s, 1.09GB read
-Requests/sec:  87804.19
-Transfer/sec:     37.18MB
+     50%    1.15ms
+     75%    1.24ms
+     90%    1.43ms
+     99%    2.93ms
+  2487186 requests in 30.02s, 213.48MB read
+Requests/sec:  82862.73
+Transfer/sec:      7.11MB
 ```
 
 #### 高强度压测（8线程，500连接）
@@ -92,44 +96,21 @@ Transfer/sec:     37.18MB
 wrk -t8 -c500 -d30s --latency http://127.0.0.1:8080/
 ```
 
-**预期结果**:
+**实测结果**:
 ```
 Running 30s test @ http://127.0.0.1:8080/
   8 threads and 500 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency     5.80ms    2.26ms  79.27ms   97.94%
-    Req/Sec    10.94k     1.06k   16.59k    92.21%
+    Latency     6.92ms    2.39ms  69.80ms   94.91%
+    Req/Sec     9.08k     1.46k   17.51k    78.71%
   Latency Distribution
-     50%    5.50ms
-     75%    5.77ms
-     90%    6.35ms
-     99%    9.43ms
-  2613170 requests in 30.04s, 1.08GB read
-Requests/sec:  86997.49
-Transfer/sec:     36.84MB
-```
-
-#### 短时高并发压测（4线程，100连接，10秒）
-
-```bash
-wrk -t4 -c100 -d10s --latency http://127.0.0.1:8080/
-```
-
-**实测结果**:
-```
-Running 10s test @ http://127.0.0.1:8080/
-  4 threads and 100 connections
-  Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   791.06us  142.64us   5.80ms   97.05%
-    Req/Sec    31.82k     2.32k   33.70k    94.80%
-  Latency Distribution
-     50%  775.00us
-     75%  792.00us
-     90%  823.00us
-     99%    1.27ms
-  1279162 requests in 10.10s, 109.79MB read
-Requests/sec: 126618.25
-Transfer/sec:     10.87MB
+     50%    6.78ms
+     75%    7.25ms
+     90%    8.06ms
+     99%   13.89ms
+  2170789 requests in 30.03s, 186.32MB read
+Requests/sec:  72292.19
+Transfer/sec:      6.20MB
 ```
 
 ## 性能指标

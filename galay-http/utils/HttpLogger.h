@@ -30,6 +30,9 @@ namespace galay::http
         // @param log_file_path 日志文件路径，默认为 "galay-http.log"
         static void file(const std::string& log_file_path = "galay-http.log");
 
+        // 禁用日志输出（设置为 off 级别）
+        static void disable();
+
     private:
         std::shared_ptr<spdlog::logger> m_spdlogger;
         std::shared_ptr<spdlog::details::thread_pool> m_thread_pool;

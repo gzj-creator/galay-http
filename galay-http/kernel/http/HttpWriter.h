@@ -13,6 +13,7 @@
 #include <expected>
 #include <coroutine>
 #include <string>
+#include <sys/uio.h>
 
 namespace galay::http
 {
@@ -24,9 +25,66 @@ using namespace galay::async;
 template<typename SocketType>
 class HttpWriterImpl;
 
+// 类型萃取：判断是否为 TcpSocket
+template<typename T>
+struct is_tcp_socket : std::false_type {};
+
+template<>
+struct is_tcp_socket<TcpSocket> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_tcp_socket_v = is_tcp_socket<T>::value;
+
 /**
- * @brief HTTP响应写入等待体
- * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
+ * @brief HTTP响应写入等待体（writev 优化版 - 仅用于 TcpSocket）
+ */
+template<typename SocketType>
+class SendResponseWritevAwaitableImpl : public galay::kernel::TimeoutSupport<SendResponseWritevAwaitableImpl<SocketType>>
+{
+public:
+    using WritevAwaitableType = decltype(std::declval<SocketType>().writev(std::declval<std::vector<iovec>>()));
+
+    SendResponseWritevAwaitableImpl(HttpWriterImpl<SocketType>& writer, WritevAwaitableType&& writev_awaitable)
+        : m_writer(writer)
+        , m_writev_awaitable(std::move(writev_awaitable))
+    {
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    auto await_suspend(std::coroutine_handle<> handle) {
+        return m_writev_awaitable.await_suspend(handle);
+    }
+
+    std::expected<bool, HttpError> await_resume() {
+        auto writev_result = m_writev_awaitable.await_resume();
+        if (!writev_result) {
+            HTTP_LOG_DEBUG("[writev] [fail] [{}]", writev_result.error().message());
+            return std::unexpected(HttpError(kSendError, writev_result.error().message()));
+        }
+
+        size_t bytes_written = writev_result.value();
+        m_writer.updateRemainingWritev(bytes_written);
+
+        if (m_writer.getRemainingBytes() == 0) {
+            return true;
+        }
+
+        return false;
+    }
+
+private:
+    HttpWriterImpl<SocketType>& m_writer;
+    WritevAwaitableType m_writev_awaitable;
+
+public:
+    std::expected<bool, galay::kernel::IOError> m_result;
+};
+
+/**
+ * @brief HTTP响应写入等待体（send 版本 - 用于 SslSocket 等）
  */
 template<typename SocketType>
 class SendResponseAwaitableImpl : public galay::kernel::TimeoutSupport<SendResponseAwaitableImpl<SocketType>>
@@ -85,20 +143,46 @@ public:
         : m_setting(&setting)
         , m_socket(&socket)
         , m_remaining_bytes(0)
+        , m_writev_offset(0)
     {
     }
 
-    SendResponseAwaitableImpl<SocketType> sendResponse(HttpResponse& response) {
+    auto sendResponse(HttpResponse& response) {
         if (m_remaining_bytes == 0) {
             logResponseStatus(response.header().code());
-            m_buffer = response.toString();
-            m_remaining_bytes = m_buffer.size();
+
+            if constexpr (is_tcp_socket_v<SocketType>) {
+                // TcpSocket: 使用 writev 避免内存拷贝
+                m_body_buffer = response.getBodyStr();
+
+                if(!response.header().isChunked()) {
+                    response.header().headerPairs().addHeaderPairIfNotExist("Content-Length", std::to_string(m_body_buffer.size()));
+                }
+
+                m_buffer = response.header().toString();
+
+                m_iovecs.clear();
+                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+                if (!m_body_buffer.empty()) {
+                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
+                }
+
+                m_remaining_bytes = m_buffer.size() + m_body_buffer.size();
+                m_writev_offset = 0;
+            } else {
+                // SslSocket: 使用 send
+                m_buffer = response.toString();
+                m_remaining_bytes = m_buffer.size();
+            }
         }
 
-        size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-        const char* send_ptr = m_buffer.data() + sent_bytes;
-
-        return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+        if constexpr (is_tcp_socket_v<SocketType>) {
+            return SendResponseWritevAwaitableImpl<SocketType>(*this, m_socket->writev(m_iovecs));
+        } else {
+            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
+            const char* send_ptr = m_buffer.data() + sent_bytes;
+            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+        }
     }
 
     SendResponseAwaitableImpl<SocketType> sendRequest(HttpRequest& request) {
@@ -175,6 +259,38 @@ public:
         }
     }
 
+    void updateRemainingWritev(size_t bytes_sent) {
+        if (bytes_sent >= m_remaining_bytes) {
+            m_remaining_bytes = 0;
+            m_buffer.clear();
+            m_body_buffer.clear();
+            m_iovecs.clear();
+            m_writev_offset = 0;
+        } else {
+            m_remaining_bytes -= bytes_sent;
+            m_writev_offset += bytes_sent;
+
+            // 更新 iovec 数组，跳过已发送的部分
+            size_t offset = m_writev_offset;
+            m_iovecs.clear();
+
+            size_t header_size = m_buffer.size();
+            if (offset < header_size) {
+                // 还在 header 部分
+                m_iovecs.push_back({const_cast<char*>(m_buffer.data() + offset), header_size - offset});
+                if (!m_body_buffer.empty()) {
+                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
+                }
+            } else {
+                // 已经到 body 部分
+                size_t body_offset = offset - header_size;
+                if (body_offset < m_body_buffer.size()) {
+                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data() + body_offset), m_body_buffer.size() - body_offset});
+                }
+            }
+        }
+    }
+
     size_t getRemainingBytes() const {
         return m_remaining_bytes;
     }
@@ -193,8 +309,13 @@ private:
 
     const HttpWriterSetting* m_setting;
     SocketType* m_socket;
-    std::string m_buffer;
+    std::string m_buffer;        // TcpSocket: 存储 header; SslSocket: 存储完整响应
     size_t m_remaining_bytes;
+
+    // writev 专用成员（仅 TcpSocket 使用）
+    std::string m_body_buffer;   // 存储 body
+    std::vector<iovec> m_iovecs;
+    size_t m_writev_offset;
 };
 
 // 类型别名 - HTTP (TcpSocket)

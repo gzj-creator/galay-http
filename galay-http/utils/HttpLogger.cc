@@ -68,4 +68,10 @@ namespace galay::http
 #endif
     }
 
+    void HttpLogger::disable()
+    {
+        auto instance = getInstance();
+        instance->m_spdlogger->set_level(spdlog::level::off);
+    }
+
 }
