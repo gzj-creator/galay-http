@@ -5,7 +5,7 @@
 #include "Http2Error.h"
 #include <string>
 #include <vector>
-#include <deque>
+#include <unordered_map>
 #include <expected>
 #include <optional>
 
@@ -31,6 +31,43 @@ struct Http2HeaderField
 };
 
 /**
+ * @brief HTTP/2 头部构建器，支持链式调用
+ * @details 通过隐式转换兼容所有接受 const std::vector<Http2HeaderField>& 的 API
+ */
+class Http2Headers
+{
+public:
+    Http2Headers() = default;
+
+    // 通用添加
+    Http2Headers& add(std::string name, std::string value) {
+        m_fields.push_back({std::move(name), std::move(value)});
+        return *this;
+    }
+
+    // 请求伪头部
+    Http2Headers& method(const std::string& m)     { return add(":method", m); }
+    Http2Headers& scheme(const std::string& s)     { return add(":scheme", s); }
+    Http2Headers& authority(const std::string& a)  { return add(":authority", a); }
+    Http2Headers& path(const std::string& p)       { return add(":path", p); }
+
+    // 响应伪头部
+    Http2Headers& status(int code) { return add(":status", std::to_string(code)); }
+
+    // 常用头部快捷方法
+    Http2Headers& contentType(const std::string& ct) { return add("content-type", ct); }
+    Http2Headers& contentLength(size_t len)           { return add("content-length", std::to_string(len)); }
+    Http2Headers& server(const std::string& s)        { return add("server", s); }
+
+    // 隐式转换为 vector，兼容现有 API
+    operator const std::vector<Http2HeaderField>&() const { return m_fields; }
+    const std::vector<Http2HeaderField>& fields() const { return m_fields; }
+
+private:
+    std::vector<Http2HeaderField> m_fields;
+};
+
+/**
  * @brief HPACK 静态表
  * @details RFC 7541 Appendix A 定义的静态表
  */
@@ -50,8 +87,18 @@ public:
     size_t size() const { return m_table.size(); }
 
 private:
+    struct PairHash {
+        size_t operator()(const std::pair<std::string, std::string>& p) const {
+            size_t h1 = std::hash<std::string>{}(p.first);
+            size_t h2 = std::hash<std::string>{}(p.second);
+            return h1 ^ (h2 << 32 | h2 >> 32);
+        }
+    };
+
     HpackStaticTable();
     std::vector<Http2HeaderField> m_table;
+    std::unordered_map<std::pair<std::string, std::string>, size_t, PairHash> m_full_index;
+    std::unordered_map<std::string, size_t> m_name_index;
 };
 
 /**
@@ -81,7 +128,7 @@ public:
     size_t maxSize() const { return m_max_size; }
 
     // 获取条目数量
-    size_t count() const { return m_table.size(); }
+    size_t count() const { return m_count; }
 
     // 清空动态表
     void clear();
@@ -89,7 +136,9 @@ public:
 private:
     void evict();
 
-    std::deque<Http2HeaderField> m_table;
+    std::vector<Http2HeaderField> m_ring;  // 环形缓冲区
+    size_t m_head = 0;    // 下一个写入位置（最新条目的后一位）
+    size_t m_count = 0;   // 当前条目数
     size_t m_max_size;
     size_t m_current_size = 0;
 };

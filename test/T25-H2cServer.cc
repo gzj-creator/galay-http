@@ -25,62 +25,30 @@ void signalHandler(int) {
 }
 
 /**
- * @brief 处理 HTTP/2 请求
+ * @brief 处理单个流的请求
  */
-Coroutine handleRequest(Http2ConnImpl<galay::async::TcpSocket>& conn, Http2Stream::ptr stream, Http2Request request) {
+Coroutine handleStream(Http2Stream::ptr stream) {
     g_request_count++;
 
+    // 读取完整请求
+    co_await stream->readRequest().wait();
+    auto& req = stream->request();
+
+    if (req.method.empty()) co_return;
+
     HTTP_LOG_INFO("Request #{}: {} {} (stream {})",
-                  g_request_count.load(), request.method, request.path, stream->streamId());
+                  g_request_count.load(), req.method, req.path, stream->streamId());
 
     // 构造响应
-    Http2Response response;
-    response.status = 200;
-    response.headers.push_back({"content-type", "text/plain"});
-    response.headers.push_back({"server", "Galay-H2c-Test/1.0"});
+    std::string resp_body = "Hello from H2c Test Server!\n";
+    resp_body += "Request #" + std::to_string(g_request_count.load()) + "\n";
+    resp_body += "Method: " + req.method + "\n";
+    resp_body += "Path: " + req.path + "\n";
+    resp_body += "Stream ID: " + std::to_string(stream->streamId()) + "\n";
 
-    std::string body = "Hello from H2c Test Server!\n";
-    body += "Request #" + std::to_string(g_request_count.load()) + "\n";
-    body += "Method: " + request.method + "\n";
-    body += "Path: " + request.path + "\n";
-    body += "Stream ID: " + std::to_string(stream->streamId()) + "\n";
-
-    response.body = body;
-
-    // 构建响应头部
-    std::vector<Http2HeaderField> headers;
-    headers.push_back({":status", std::to_string(response.status)});
-    for (const auto& h : response.headers) {
-        headers.push_back(h);
-    }
-
-    bool has_body = !response.body.empty();
-
-    // 发送 HEADERS
-    HTTP_LOG_DEBUG("Sending HEADERS for stream {}", stream->streamId());
-    while (true) {
-        auto result = co_await conn.sendHeaders(stream->streamId(), headers, !has_body, true);
-        if (!result) {
-            HTTP_LOG_ERROR("Failed to send headers: {}", http2ErrorCodeToString(result.error()));
-            co_return;
-        }
-        if (result.value()) break;
-    }
-    HTTP_LOG_DEBUG("HEADERS sent for stream {}", stream->streamId());
-
-    // 发送 DATA
-    if (has_body) {
-        HTTP_LOG_DEBUG("Sending DATA for stream {}, size: {}", stream->streamId(), response.body.size());
-        while (true) {
-            auto result = co_await conn.sendDataFrame(stream->streamId(), response.body, true);
-            if (!result) {
-                HTTP_LOG_ERROR("Failed to send data: {}", http2ErrorCodeToString(result.error()));
-                co_return;
-            }
-            if (result.value()) break;
-        }
-        HTTP_LOG_DEBUG("DATA sent for stream {}", stream->streamId());
-    }
+    co_await stream->replyAndWait(
+        Http2Headers().status(200).contentType("text/plain").server("Galay-H2c-Test/1.0"),
+        resp_body).wait();
 
     HTTP_LOG_INFO("Response sent for stream {}", stream->streamId());
     co_return;
@@ -117,7 +85,7 @@ int main(int argc, char* argv[]) {
 
         HTTP_LOG_INFO("H2c test server starting on {}:{}", config.host, config.port);
 
-        server.start(handleRequest);
+        server.start(handleStream);
 
         std::cout << "Server started successfully!\n\n";
 

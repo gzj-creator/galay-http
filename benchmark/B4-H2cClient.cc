@@ -27,43 +27,8 @@ std::atomic<int> response_failures{0};
 static const std::string kEchoPayload = "hello-h2c-echo";
 
 Coroutine handleStream(Http2Stream::ptr stream) {
-    Http2Response response;
-
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) break;
-        auto frame = std::move(frame_result.value());
-        if (!frame) break;
-        if (frame->isHeaders()) {
-            auto* hdrs = frame->asHeaders();
-            stream->appendHeaderBlock(hdrs->headerBlock());
-            if (hdrs->isEndHeaders()) {
-                auto fields = stream->decodeHeaders(stream->headerBlock());
-                if (fields.empty()) {
-                    fail_count++;
-                    co_return;
-                }
-                stream->clearHeaderBlock();
-
-                for (const auto& field : fields) {
-                    if (field.name == ":status") {
-                        response.status = std::stoi(field.value);
-                    } else {
-                        response.headers.push_back(field);
-                    }
-                }
-
-                if (hdrs->isEndStream()) break;
-            }
-        } else if (frame->isData()) {
-            auto* data = frame->asData();
-            response.body.append(data->data());
-            if (data->isEndStream()) break;
-        } else if (frame->isRstStream()) {
-            fail_count++;
-            co_return;
-        }
-    }
+    co_await stream->readResponse().wait();
+    auto& response = stream->response();
 
     if (response.status == 200 && response.body == kEchoPayload) {
         success_count++;
@@ -97,35 +62,23 @@ Coroutine handlePushStream(Http2Stream::ptr stream) {
 Coroutine sendRequests(Http2StreamManager* mgr,
                        const std::string& host, uint16_t port,
                        int requests_per_client) {
-    uint32_t next_stream_id = 3;  // h2c upgrade 使用了 stream 1
-
     for (int i = 0; i < requests_per_client; i++) {
-        uint32_t stream_id = next_stream_id;
-        next_stream_id += 2;
+        auto stream = mgr->allocateStream();
 
-        auto stream = mgr->newStream(stream_id);
-
-        std::vector<Http2HeaderField> headers;
-        headers.push_back({":method", "POST"});
-        headers.push_back({":scheme", "http"});
-        headers.push_back({":authority", host + ":" + std::to_string(port)});
-        headers.push_back({":path", "/echo"});
-        headers.push_back({"content-type", "text/plain"});
-        headers.push_back({"content-length", std::to_string(kEchoPayload.size())});
-
-        stream->sendHeaders(headers, false, true);
+        stream->sendHeaders(
+            Http2Headers().method("POST").scheme("http")
+                .authority(host + ":" + std::to_string(port)).path("/echo")
+                .contentType("text/plain").contentLength(kEchoPayload.size()),
+            false, true);
         stream->sendData(kEchoPayload, true);
         total_requests++;
 
-        // 读取响应（inline，与 echo 示例相同模式）
+        // 读取响应
         co_await handleStream(stream).wait();
     }
 
-    // 所有请求完成，发送 GOAWAY
-    auto waiter = mgr->sendGoaway(Http2ErrorCode::NoError);
-    if (waiter) {
-        co_await waiter->wait();
-    }
+    // 所有请求完成，发送 GOAWAY 并关闭
+    co_await mgr->shutdown().wait();
 
     co_return;
 }

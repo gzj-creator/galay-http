@@ -37,12 +37,6 @@ Coroutine handleStream(Http2Stream::ptr stream) {
         if (frame->isEndStream()) break;
     }
 
-    // 构造响应（echo body）
-    std::vector<Http2HeaderField> headers;
-    headers.push_back({":status", "200"});
-    headers.push_back({"content-type", "text/plain"});
-    headers.push_back({"content-length", std::to_string(body.size())});
-
     if (g_debug_log) {
         int idx = g_debug_logs.fetch_add(1);
         if (idx < 10) {
@@ -50,8 +44,10 @@ Coroutine handleStream(Http2Stream::ptr stream) {
         }
     }
 
-    auto waiter = stream->reply(headers, body);
-    co_await stream->waitReply(waiter);
+    // 构造响应（echo body）
+    co_await stream->replyAndWait(
+        Http2Headers().status(200).contentType("text/plain").contentLength(body.size()),
+        body).wait();
 
     co_return;
 }

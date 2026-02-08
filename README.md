@@ -58,7 +58,7 @@
 - **Chunked 编码**: 高性能实现（编码 400万 ops/sec，解析 217万 ops/sec）
 
 ### 易用的 API
-- **Builder 模式**: 链式调用构造 HTTP 请求和响应
+- **Builder 模式**: 链式调用构造 HTTP/1.1 请求和响应，以及 HTTP/2 头部
 - **自动路由分发**: HttpServer 内置 Router 支持
 - **简洁的协程接口**: 使用 `co_await` 进行异步操作
 
@@ -192,24 +192,26 @@ Coroutine runClient() {
         co_return;
     }
 
+    // 获取 Session
+    auto session = client.getSession();
+
     // 升级到 HTTP/2
+    auto upgrader = session.upgrade("/");
     while (true) {
-        auto result = co_await client.upgrade("/");
+        auto result = co_await upgrader();
         if (!result) {
             std::cerr << "Upgrade failed\n";
             co_return;
         }
-        if (result.value().has_value()) {
-            if (*result.value()) {
-                std::cout << "Upgraded to HTTP/2!\n";
-                break;
-            }
+        if (result.value()) {
+            std::cout << "Upgraded to HTTP/2!\n";
+            break;
         }
     }
 
     // 发送 GET 请求
     while (true) {
-        auto result = co_await client.get("/api/data");
+        auto result = co_await session.get("/api/data");
         if (!result) {
             std::cerr << "Request failed\n";
             break;
@@ -556,6 +558,41 @@ auto formRequest = Http1_1RequestBuilder::post("/login")
     .build();
 ```
 
+### Http2Headers
+
+使用 Builder 模式构造 HTTP/2 头部，替代繁琐的 `std::vector<Http2HeaderField>` + `push_back`：
+
+```cpp
+#include "galay-http/protoc/http2/Http2Hpack.h"
+
+// 响应头部
+co_await stream->replyAndWait(
+    Http2Headers().status(200).contentType("text/plain")
+        .server("Galay/1.0").contentLength(body.size()),
+    body).wait();
+
+// 请求头部
+stream->sendHeaders(
+    Http2Headers().method("POST").scheme("http")
+        .authority("localhost:8080").path("/echo")
+        .contentType("text/plain").contentLength(body.size()),
+    false, true);
+
+// 通用 add() 方法添加自定义头部
+auto headers = Http2Headers()
+    .status(200)
+    .add("x-custom-header", "value")
+    .contentType("application/json");
+```
+
+**快捷方法**:
+- 请求伪头部: `method()`, `scheme()`, `authority()`, `path()`
+- 响应伪头部: `status(int)`
+- 常用头部: `contentType()`, `contentLength()`, `server()`
+- 通用: `add(name, value)`
+
+`Http2Headers` 通过隐式转换为 `const std::vector<Http2HeaderField>&`，可直接传入所有现有 API（`replyAndWait()`、`sendHeaders()` 等），无需任何接口修改。
+
 ## Chunked Transfer-Encoding
 
 Galay-HTTP 完整支持 HTTP Chunked Transfer Encoding (RFC 7230)。
@@ -764,11 +801,10 @@ target_link_libraries(your_target
 - `E6-HttpsClient.cc` - HTTPS 客户端示例
 - `E7-WssServer.cc` - WSS (WebSocket over SSL) 服务器示例
 - `E8-WssClient.cc` - WSS 客户端示例
-- `E9-H2cServer.cc` - HTTP/2 cleartext 服务器示例
-- `E10-H2Server.cc` - HTTP/2 over TLS 服务器示例
-- `E11-H2cServerPush.cc` - HTTP/2 Server Push 示例
-- `E12-H2cClient.cc` - HTTP/2 cleartext 客户端示例
-- `E13-H2Client.cc` - HTTP/2 over TLS 客户端示例
+- `E9-H2cEchoServer.cc` - HTTP/2 cleartext Echo 服务器示例
+- `E10-H2cEchoClient.cc` - HTTP/2 cleartext Echo 客户端示例
+- `E11-H2Server.cc` - HTTP/2 over TLS 服务器示例
+- `E12-H2Client.cc` - HTTP/2 over TLS 客户端示例
 
 ### 基准测试程序 (benchmark/)
 
