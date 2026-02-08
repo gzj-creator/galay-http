@@ -2,6 +2,7 @@
 #define GALAY_HTTP2_SERVER_H
 
 #include "Http2Conn.h"
+#include "Http2StreamManager.h"
 #include "Http2Stream.h"
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
@@ -39,9 +40,9 @@ struct H2cServerConfig
 };
 
 /**
- * @brief HTTP/2 请求处理器类型
+ * @brief HTTP/2 流处理器类型（每个新流创建后 spawn handler(stream)）
  */
-using Http2RequestHandler = std::function<Coroutine(Http2ConnImpl<TcpSocket>&, Http2Stream::ptr, Http2Request)>;
+using Http2ConnectionHandler = Http2StreamHandler;
 
 /**
  * @brief h2c 服务器 (HTTP/2 over cleartext)
@@ -53,7 +54,6 @@ public:
         : m_runtime(config.io_scheduler_count, config.compute_scheduler_count)
         , m_config(config)
         , m_handler(nullptr)
-        , m_listener(nullptr)
         , m_running(false)
     {
     }
@@ -65,7 +65,7 @@ public:
     H2cServer(const H2cServer&) = delete;
     H2cServer& operator=(const H2cServer&) = delete;
     
-    void start(Http2RequestHandler handler) {
+    void start(Http2ConnectionHandler handler) {
         m_handler = std::move(handler);
         startInternal();
     }
@@ -74,13 +74,10 @@ public:
         if (!m_running.load()) {
             return;
         }
-        
+
         m_running.store(false);
         HTTP_LOG_INFO("[h2c] [server] [stopping]");
-      if (m_listener) {
-            m_listener.reset();
-        }
-        
+
         m_runtime.stop();
         HTTP_LOG_INFO("[h2c] [server] [stopped]");
     }
@@ -99,90 +96,88 @@ private:
             HTTP_LOG_WARN("[server] [already-running]");
             return false;
         }
-        
+
         if (!m_handler) {
             HTTP_LOG_ERROR("[handler] [missing]");
             return false;
         }
-        
+
         m_runtime.start();
-        
-        auto* scheduler = m_runtime.getNextIOScheduler();
-        if (!scheduler) {
-            HTTP_LOG_ERROR("[scheduler] [io] [missing]");
-            m_runtime.stop();
-            return false;
-        }
-        
-        m_listener = std::make_unique<TcpSocket>(IPType::IPV4);
-        
-        auto reuse_result = m_listener->option().handleReuseAddr();
-        if (!reuse_result) {
-            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-        
-        auto nonblock_result = m_listener->option().handleNonBlock();
-        if (!nonblock_result) {
-            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-        
-        Host bind_host(IPType::IPV4, m_config.host, m_config.port);
-        auto bind_result = m_listener->bind(bind_host);
-        if (!bind_result) {
-            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-        
-        auto listen_result = m_listener->listen(m_config.backlog);
-        if (!listen_result) {
-            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
-            m_runtime.stop();
-            return false;
-        }
-        
+
         m_running.store(true);
         HTTP_LOG_INFO("[server] [listen] [h2c] [{}:{}]", m_config.host, m_config.port);
-        
-        scheduler->spawn(serverLoop());
-        
+
+        // Spawn one serverLoop per IO scheduler with SO_REUSEPORT
+        size_t io_scheduler_count = m_runtime.getIOSchedulerCount();
+        for (size_t i = 0; i < io_scheduler_count; i++) {
+            auto* scheduler = m_runtime.getIOScheduler(i);
+            if (scheduler) {
+                scheduler->spawn(serverLoop(scheduler));
+            }
+        }
+
         return true;
     }
 
-    Coroutine serverLoop() {
+    Coroutine serverLoop(IOScheduler* scheduler) {
+        // Each serverLoop creates its own listener socket
+        TcpSocket listener(IPType::IPV4);
+
+        auto reuse_result = listener.option().handleReuseAddr();
+        if (!reuse_result) {
+            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
+            co_return;
+        }
+
+        auto reuse_port_result = listener.option().handleReusePort();
+        if (!reuse_port_result) {
+            HTTP_LOG_ERROR("[socket] [reuseport-fail] [{}]", reuse_port_result.error().message());
+            co_return;
+        }
+
+        auto nonblock_result = listener.option().handleNonBlock();
+        if (!nonblock_result) {
+            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
+            co_return;
+        }
+
+        Host bind_host(IPType::IPV4, m_config.host, m_config.port);
+        auto bind_result = listener.bind(bind_host);
+        if (!bind_result) {
+            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
+            co_return;
+        }
+
+        auto listen_result = listener.listen(m_config.backlog);
+        if (!listen_result) {
+            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
+            co_return;
+        }
+
         while (m_running.load()) {
             Host client_host;
-            auto accept_result = co_await m_listener->accept(&client_host);
-            
+            auto accept_result = co_await listener.accept(&client_host);
+
             if (!accept_result) {
                 if (m_running.load()) {
                     HTTP_LOG_ERROR("[accept] [fail] [{}]", accept_result.error().message());
                 }
                 continue;
             }
-            
+
             HTTP_LOG_INFO("[connect] [h2c] [{}:{}]", client_host.ip(), client_host.port());
-            
-            auto* scheduler = m_runtime.getNextIOScheduler();
-            if (!scheduler) {
-                HTTP_LOG_ERROR("[scheduler] [io] [missing]");
-                continue;
-            }
-            
+
             TcpSocket client_socket(accept_result.value());
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
                 HTTP_LOG_ERROR("[socket] [nonblock-fail] [client] [{}]", nonblock_result.error().message());
                 continue;
             }
-            
+
+            // Handle connection on the same scheduler
             scheduler->spawn(handleConnection(std::move(client_socket)));
         }
-        
+
         co_return;
     }
     
@@ -193,11 +188,7 @@ private:
         Http2ConnImpl<TcpSocket> conn(std::move(socket));
 
         // 配置本地设置
-        conn.localSettings().max_concurrent_streams = m_config.max_concurrent_streams;
-        conn.localSettings().initial_window_size = m_config.initial_window_size;
-        conn.localSettings().max_frame_size = m_config.max_frame_size;
-        conn.localSettings().max_header_list_size = m_config.max_header_list_size;
-        conn.localSettings().enable_push = m_config.enable_push ? 1 : 0;
+        conn.localSettings().from(m_config);
 
         // 检测协议（Prior Knowledge 或 HTTP/1.1 升级）
         bool detect_success = false;
@@ -208,9 +199,12 @@ private:
             co_return;
         }
 
-        // 处理 HTTP/2 连接
-        co_await handleHttp2Connection(conn).wait();
-
+        // 初始化 StreamManager 并启动帧分发循环
+        conn.initStreamManager();
+        auto* mgr = conn.streamManager();
+        HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
+        co_await mgr->start(m_handler).wait();
+        HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
         co_await conn.close();
         co_return;
     }
@@ -377,335 +371,10 @@ private:
         co_return;
     }
 
-
-    /**
-     * @brief 处理 HTTP/2 连接
-     */
-    Coroutine handleHttp2Connection(Http2ConnImpl<TcpSocket>& conn) {
-        bool first_settings_received = false;
-
-        while (!conn.isGoawaySent() && !conn.isGoawayReceived()) {
-            auto read_awaitable = conn.readFrame();
-            auto frame_result = co_await read_awaitable;
-
-            if (!frame_result) {
-                // NoError 表示需要更多数据，继续读取
-                if (frame_result.error() == Http2ErrorCode::NoError) {
-                    continue;
-                }
-                HTTP_LOG_ERROR("[frame] [read-fail] [{}]", http2ErrorCodeToString(frame_result.error()));
-                co_await conn.sendGoaway(frame_result.error());
-                break;
-            }
-            
-            auto& frame = *frame_result;
-            uint32_t stream_id = frame->streamId();
-
-            HTTP_LOG_DEBUG("[frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
-                          http2FrameTypeToString(frame->type()), stream_id, frame->header().flags);
-            
-            // 处理 CONTINUATION 状态
-            if (conn.isExpectingContinuation()) {
-                if (frame->type() != Http2FrameType::Continuation ||
-                    stream_id != conn.continuationStreamId()) {
-                    co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                    break;
-                }
-            }
-            
-            switch (frame->type()) {
-                case Http2FrameType::Settings: {
-                    auto* settings = static_cast<Http2SettingsFrame*>(frame.get());
-                    if (settings->isAck()) {
-                        HTTP_LOG_DEBUG("[settings] [ack]");
-                    } else {
-                        // 应用对端设置
-                        conn.peerSettings().applySettings(*settings);
-                        conn.encoder().setMaxTableSize(conn.peerSettings().header_table_size);
-                        
-                        // 发送 ACK
-                        auto ack_awaitable = conn.sendSettingsAck();
-                        auto ack_result = co_await ack_awaitable;
-                        if (!ack_result) {
-                            co_await conn.sendGoaway(Http2ErrorCode::InternalError);
-                            break;
-                        }
-                        
-                        if (!first_settings_received) {
-                            first_settings_received = true;
-                            HTTP_LOG_DEBUG("[settings] [init-ok]");
-                        }
-                    }
-                    break;
-                }
-                
-                case Http2FrameType::Headers: {
-                    auto* headers = static_cast<Http2HeadersFrame*>(frame.get());
-                    
-                    if (stream_id == 0) {
-                        co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                        break;
-                    }
-                    
-                    // 获取或创建流
-                    auto stream = conn.getStream(stream_id);
-                    if (!stream) {
-                        // 新流
-                        if (stream_id <= conn.lastPeerStreamId()) {
-                            co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                            break;
-                        }
-                        
-                        // 检查并发流数量
-                        if (conn.streamCount() >= conn.localSettings().max_concurrent_streams) {
-                            co_await conn.sendRstStream(stream_id, Http2ErrorCode::RefusedStream);
-                            continue;
-                        }
-                        
-                        stream = conn.createStream(stream_id);
-                        conn.setLastPeerStreamId(stream_id);
-                    }
-                    
-                    // 累积头部块
-                    stream->appendHeaderBlock(headers->headerBlock());
-                    
-                    if (headers->isEndHeaders()) {
-                        // 解码头部
-                        auto decode_result = conn.decoder().decode(stream->headerBlock());
-                        if (!decode_result) {
-                            co_await conn.sendGoaway(Http2ErrorCode::CompressionError);
-                            break;
-                        }
-                        
-                        stream->clearHeaderBlock();
-                        stream->setEndHeadersReceived();
-                        conn.setExpectingContinuation(false);
-                        
-                        // 解析请求
-                        Http2Request request;
-                        for (const auto& field : *decode_result) {
-                            if (field.name == ":method") {
-                                request.method = field.value;
-                            } else if (field.name == ":scheme") {
-                                request.scheme = field.value;
-                            } else if (field.name == ":authority") {
-                                request.authority = field.value;
-                            } else if (field.name == ":path") {
-                                request.path = field.value;
-                            } else {
-                                request.headers.push_back(field);
-                            }
-                        }
-                        
-                        stream->request() = request;
-                        stream->onHeadersReceived(headers->isEndStream());
-                        
-                        // 如果请求完整，调用处理器
-                        if (headers->isEndStream()) {
-                            m_runtime.getNextIOScheduler()->spawn(
-                                m_handler(conn, stream, std::move(request)));
-                        }
-                    } else {
-                        // 等待 CONTINUATION
-                        conn.setExpectingContinuation(true, stream_id);
-                    }
-                    break;
-                }
-                
-                case Http2FrameType::Continuation: {
-                    auto* continuation = static_cast<Http2ContinuationFrame*>(frame.get());
-                    auto stream = conn.getStream(stream_id);
-                    
-                    if (!stream) {
-                        co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                        break;
-                    }
-                    
-                    stream->appendHeaderBlock(continuation->headerBlock());
-                    
-                    if (continuation->isEndHeaders()) {
-                        // 解码头部
-                        auto decode_result = conn.decoder().decode(stream->headerBlock());
-                        if (!decode_result) {
-                            co_await conn.sendGoaway(Http2ErrorCode::CompressionError);
-                            break;
-                        }
-                        
-                        stream->clearHeaderBlock();
-                        stream->setEndHeadersReceived();
-                        conn.setExpectingContinuation(false);
-                        
-                        // 解析请求
-                        Http2Request request;
-                        for (const auto& field : *decode_result) {
-                            if (field.name == ":method") {
-                                request.method = field.value;
-                            } else if (field.name == ":scheme") {
-                                request.scheme = field.value;
-                            } else if (field.name == ":authority") {
-                                request.authority = field.value;
-                            } else if (field.name == ":path") {
-                                request.path = field.value;
-                            } else {
-                                request.headers.push_back(field);
-                            }
-                        }
-                        
-                        stream->request() = request;
-                        
-                        // 如果之前的 HEADERS 有 END_STREAM，调用处理器
-                        if (stream->isEndStreamReceived()) {
-                            m_runtime.getNextIOScheduler()->spawn(
-                                m_handler(conn, stream, std::move(request)));
-                        }
-                    }
-                    break;
-                }
-
-
-                case Http2FrameType::Data: {
-                    auto* data = static_cast<Http2DataFrame*>(frame.get());
-                    
-                    if (stream_id == 0) {
-                        co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                        break;
-                    }
-                    
-                    auto stream = conn.getStream(stream_id);
-                    if (!stream) {
-                        co_await conn.sendRstStream(stream_id, Http2ErrorCode::StreamClosed);
-                        continue;
-                    }
-                    
-                    if (!stream->canReceiveData()) {
-                        co_await conn.sendRstStream(stream_id, Http2ErrorCode::StreamClosed);
-                        continue;
-                    }
-                    
-                    // 累积数据
-                    stream->appendData(data->data());
-                    
-                    // 更新流量控制窗口
-                    conn.adjustConnRecvWindow(-static_cast<int32_t>(data->data().size()));
-                    stream->adjustRecvWindow(-static_cast<int32_t>(data->data().size()));
-                    
-                    // 发送 WINDOW_UPDATE（简化：每次都发送）
-                    if (conn.connRecvWindow() < static_cast<int32_t>(kDefaultInitialWindowSize / 2)) {
-                        uint32_t increment = kDefaultInitialWindowSize - conn.connRecvWindow();
-                        co_await conn.sendWindowUpdate(0, increment);
-                        conn.adjustConnRecvWindow(increment);
-                    }
-                    
-                    if (stream->recvWindow() < static_cast<int32_t>(kDefaultInitialWindowSize / 2)) {
-                        uint32_t increment = kDefaultInitialWindowSize - stream->recvWindow();
-                        co_await conn.sendWindowUpdate(stream_id, increment);
-                        stream->adjustRecvWindow(increment);
-                    }
-                    
-                    stream->onDataReceived(data->isEndStream());
-                    
-                    // 如果请求完整，调用处理器
-                    if (data->isEndStream() && stream->isEndHeadersReceived()) {
-                        Http2Request request = stream->request();
-                        request.body = stream->request().body;
-                        m_runtime.getNextIOScheduler()->spawn(
-                            m_handler(conn, stream, std::move(request)));
-                    }
-                    break;
-                }
-                
-                case Http2FrameType::Ping: {
-                    auto* ping = static_cast<Http2PingFrame*>(frame.get());
-                    
-                    if (stream_id != 0) {
-                        co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                        break;
-                    }
-                    
-                    if (!ping->isAck()) {
-                        // 回复 PING ACK
-                        co_await conn.sendPing(ping->opaqueData(), true);
-                    }
-                    break;
-                }
-                
-                case Http2FrameType::WindowUpdate: {
-                    auto* window_update = static_cast<Http2WindowUpdateFrame*>(frame.get());
-                    uint32_t increment = window_update->windowSizeIncrement();
-                    
-                    if (increment == 0) {
-                        if (stream_id == 0) {
-                            co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                        } else {
-                            co_await conn.sendRstStream(stream_id, Http2ErrorCode::ProtocolError);
-                        }
-                        break;
-                    }
-                    
-                    if (stream_id == 0) {
-                        conn.adjustConnSendWindow(increment);
-                    } else {
-                        auto stream = conn.getStream(stream_id);
-                        if (stream) {
-                            stream->adjustSendWindow(increment);
-                        }
-                    }
-                    break;
-                }
-                
-                case Http2FrameType::RstStream: {
-                    auto* rst = static_cast<Http2RstStreamFrame*>(frame.get());
-                    
-                    if (stream_id == 0) {
-                        co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                        break;
-                    }
-                    
-                    auto stream = conn.getStream(stream_id);
-                    if (stream) {
-                        stream->onRstStreamReceived();
-                        HTTP_LOG_DEBUG("[stream] [rst] [id={}] [err={}]",
-                                      stream_id, http2ErrorCodeToString(rst->errorCode()));
-                    }
-                    break;
-                }
-                
-                case Http2FrameType::GoAway: {
-                    auto* goaway = static_cast<Http2GoAwayFrame*>(frame.get());
-                    conn.setGoawayReceived();
-                    HTTP_LOG_INFO("[goaway] [recv] [last={}] [err={}] [debug={}]",
-                                 goaway->lastStreamId(),
-                                 http2ErrorCodeToString(goaway->errorCode()),
-                                 goaway->debugData());
-                    break;
-                }
-                
-                case Http2FrameType::Priority: {
-                    // 优先级帧，可以忽略
-                    HTTP_LOG_DEBUG("[priority] [recv] [ignored]");
-                    break;
-                }
-                
-                case Http2FrameType::PushPromise: {
-                    // 客户端不应该发送 PUSH_PROMISE
-                    co_await conn.sendGoaway(Http2ErrorCode::ProtocolError);
-                    break;
-                }
-                
-                default:
-                    HTTP_LOG_WARN("[frame] [unknown] [type={}]", static_cast<int>(frame->type()));
-                    break;
-            }
-        }
-        
-        co_return;
-    }
-
 private:
     Runtime m_runtime;
     H2cServerConfig m_config;
-    Http2RequestHandler m_handler;
-    std::unique_ptr<TcpSocket> m_listener;
+    Http2ConnectionHandler m_handler;
     std::atomic<bool> m_running;
 };
 

@@ -1,72 +1,65 @@
 /**
  * @file B3-H2cServer.cc
- * @brief HTTP/2 Cleartext (h2c) 服务器压测程序（纯净版）
- * @details 高性能 H2c 服务器，移除统计功能，由客户端负责统计
+ * @brief HTTP/2 Cleartext (h2c) Echo 服务器压测程序
+ * @details 高性能 H2c Echo 服务器，移除统计功能，由客户端负责统计
  */
 
 #include "galay-http/kernel/http2/Http2Server.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include <iostream>
 #include <csignal>
+#include <atomic>
 
 using namespace galay::http2;
 using namespace galay::kernel;
 
 static volatile bool g_running = true;
+static bool g_debug_log = false;
+static std::atomic<int> g_debug_logs{0};
 
 void signalHandler(int) {
     g_running = false;
 }
 
-/**
- * @brief 处理 HTTP/2 请求
- */
-Coroutine handleRequest(Http2ConnImpl<TcpSocket>& conn, Http2Stream::ptr stream, Http2Request request) {
-    // 构造响应
-    Http2Response response;
-    response.status = 200;
-    response.headers.push_back({"content-type", "text/plain"});
+Coroutine handleStream(Http2Stream::ptr stream) {
+    std::string body;
 
-    std::string body = "Hello from H2c Server!";
-    response.headers.push_back({"content-length", std::to_string(body.size())});
-    response.body = body;
+    // 消费所有帧直到 END_STREAM
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result) break;
+        auto frame = std::move(frame_result.value());
+        if (!frame) break;
+        if (frame->isData()) {
+            auto* data = frame->asData();
+            body.append(data->data());
+        }
+        if (frame->isEndStream()) break;
+    }
 
-    // 发送响应
+    // 构造响应（echo body）
     std::vector<Http2HeaderField> headers;
-    headers.push_back({":status", std::to_string(response.status)});
-    for (const auto& h : response.headers) {
-        headers.push_back(h);
+    headers.push_back({":status", "200"});
+    headers.push_back({"content-type", "text/plain"});
+    headers.push_back({"content-length", std::to_string(body.size())});
+
+    if (g_debug_log) {
+        int idx = g_debug_logs.fetch_add(1);
+        if (idx < 10) {
+            std::cerr << "[echo] recv body_len=" << body.size() << "\n";
+        }
     }
 
-    // 发送 HEADERS 帧
-    while (true) {
-        auto result = co_await conn.sendHeaders(stream->streamId(), headers, false, true);
-        if (!result) {
-            HTTP_LOG_ERROR("[h2c] [headers] [send-fail]");
-            co_return;
-        }
-        if (result.value()) break;
-    }
-
-    // 发送 DATA 帧
-    while (true) {
-        auto result = co_await conn.sendDataFrame(stream->streamId(), response.body, true);
-        if (!result) {
-            HTTP_LOG_ERROR("[h2c] [data] [send-fail]");
-            co_return;
-        }
-        if (result.value()) break;
-    }
+    auto waiter = stream->reply(headers, body);
+    co_await stream->waitReply(waiter);
 
     co_return;
 }
 
 int main(int argc, char* argv[]) {
-    // 禁用日志以获得最佳性能
-    galay::http::HttpLogger::disable();
-
     uint16_t port = 9080;
     int io_threads = 4;
+    int debug_log = 0;
 
     if (argc > 1) {
         port = std::atoi(argv[1]);
@@ -74,12 +67,24 @@ int main(int argc, char* argv[]) {
     if (argc > 2) {
         io_threads = std::atoi(argv[2]);
     }
+    if (argc > 3) {
+        debug_log = std::atoi(argv[3]);
+    }
+
+    // 默认禁用日志以获得最佳性能，debug_log=1 时开启
+    if (debug_log > 0) {
+        galay::http::HttpLogger::console();
+    } else {
+        galay::http::HttpLogger::disable();
+    }
+    g_debug_log = (debug_log > 0);
 
     std::cout << "========================================\n";
     std::cout << "HTTP/2 Cleartext (h2c) Server Benchmark\n";
     std::cout << "========================================\n";
     std::cout << "Port: " << port << "\n";
     std::cout << "IO Threads: " << io_threads << "\n";
+    std::cout << "Debug Log: " << (debug_log > 0 ? "ON" : "OFF") << "\n";
     std::cout << "Test command: ./build/benchmark/B4-H2cClient localhost " << port << " <connections> <requests>\n";
     std::cout << "Press Ctrl+C to stop\n";
     std::cout << "========================================\n\n";
@@ -98,12 +103,11 @@ int main(int argc, char* argv[]) {
 
         H2cServer server(config);
 
-        server.start(handleRequest);
+        server.start(handleStream);
 
         std::cout << "Server started successfully!\n";
         std::cout << "Waiting for requests...\n\n";
 
-        // 等待停止信号
         while (g_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
