@@ -18,17 +18,6 @@
 using namespace galay::http2;
 using namespace galay::kernel;
 
-Coroutine drainPushStream(Http2Stream::ptr stream) {
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) break;
-        auto frame = std::move(frame_result.value());
-        if (!frame) break;
-        if (frame->isEndStream()) break;
-    }
-    co_return;
-}
-
 Coroutine runClient(const std::string& host, uint16_t port) {
     H2cClient client;
 
@@ -42,35 +31,16 @@ Coroutine runClient(const std::string& host, uint16_t port) {
     }
     std::cout << "Connected!\n";
 
-    // 获取 Session
-    auto session = client.getSession();
-
-    // 升级到 HTTP/2
+    // 升级到 HTTP/2（内部启动 StreamManager）
     std::cout << "Upgrading to HTTP/2...\n";
-    auto upgrader = session.upgrade("/");
-    while (true) {
-        auto result = co_await upgrader();
-        if (!result) {
-            std::cerr << "Upgrade failed: " << http2ErrorCodeToString(result.error()) << "\n";
-            co_await client.close();
-            co_return;
-        }
-        if (result.value()) {
-            std::cout << "Upgraded to HTTP/2!\n\n";
-            break;
-        }
-    }
-
-    auto* conn = session.getConn();
-    if (!conn) {
-        std::cerr << "Failed to get HTTP/2 connection\n";
-        co_await client.close();
+    co_await client.upgrade("/").wait();
+    if (!client.isUpgraded()) {
+        std::cerr << "Upgrade failed\n";
         co_return;
     }
+    std::cout << "Upgraded to HTTP/2!\n\n";
 
-    // 启动 StreamManager 帧分发循环（等待 writer 就绪后返回）
-    auto* mgr = conn->streamManager();
-    co_await mgr->startInBackground(drainPushStream).wait();
+    auto* mgr = client.getConn()->streamManager();
 
     // 发送 POST /echo
     std::string body = "Hello from H2cEchoClient!";
@@ -91,8 +61,7 @@ Coroutine runClient(const std::string& host, uint16_t port) {
     std::cout << "Body: " << response.body << "\n\n";
 
     // 优雅关闭
-    co_await mgr->shutdown().wait();
-    co_await client.close();
+    co_await client.shutdown().wait();
     std::cout << "Connection closed.\n";
 
     co_return;

@@ -88,7 +88,7 @@ public:
                 if (!read_result) {
                     const auto& error = read_result.error();
                     if (error.code() == kConnectionClose) {
-                        HTTP_LOG_INFO("[disconnect]");
+                        HTTP_LOG_WARN("[disconnect]");
                     } else if (error.code() == kRecvTimeOut || error.code() == kSendTimeOut || error.code() == kRequestTimeOut) {
                         HTTP_LOG_WARN("[timeout] [request] [{}]", error.message());
                     } else {

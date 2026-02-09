@@ -44,45 +44,6 @@ Coroutine handleStream(Http2Stream::ptr stream) {
     co_return;
 }
 
-Coroutine handlePushStream(Http2Stream::ptr stream) {
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) break;
-        auto frame = std::move(frame_result.value());
-        if (!frame) break;
-        if (frame->isEndStream()) break;
-    }
-    co_return;
-}
-
-/**
- * @brief 发送请求并等待所有响应完成的协程
- * @details 作为独立协程 spawn，在 StreamManager 启动后由 IOScheduler 调度执行
- */
-Coroutine sendRequests(Http2StreamManager* mgr,
-                       const std::string& host, uint16_t port,
-                       int requests_per_client) {
-    for (int i = 0; i < requests_per_client; i++) {
-        auto stream = mgr->allocateStream();
-
-        stream->sendHeaders(
-            Http2Headers().method("POST").scheme("http")
-                .authority(host + ":" + std::to_string(port)).path("/echo")
-                .contentType("text/plain").contentLength(kEchoPayload.size()),
-            false, true);
-        stream->sendData(kEchoPayload, true);
-        total_requests++;
-
-        // 读取响应
-        co_await handleStream(stream).wait();
-    }
-
-    // 所有请求完成，发送 GOAWAY 并关闭
-    co_await mgr->shutdown().wait();
-
-    co_return;
-}
-
 /**
  * @brief 单个客户端协程 - 使用 HTTP/2 多路复用
  */
@@ -100,55 +61,37 @@ Coroutine runClient(int client_id, const std::string& host, uint16_t port, int r
         co_return;
     }
 
-    // 获取 Session
-    auto session = client.getSession();
-
-    // 升级到 HTTP/2
-    auto upgrader = session.upgrade("/");
-    while (true) {
-        auto result = co_await upgrader();
-        if (!result) {
-            int idx = upgrade_failures.fetch_add(1);
-            if (idx < 5) {
-                std::cerr << "[upgrade-fail] " << http2ErrorCodeToString(result.error());
-                if (!client.lastError().empty()) {
-                    std::cerr << " (" << client.lastError() << ")";
-                }
-                std::cerr << "\n";
-            }
-            fail_count += requests_per_client;
-            co_await client.close();
-            co_return;
+    // 升级到 HTTP/2（内部启动 StreamManager）
+    co_await client.upgrade("/").wait();
+    if (!client.isUpgraded()) {
+        int idx = upgrade_failures.fetch_add(1);
+        if (idx < 5) {
+            std::cerr << "[upgrade-fail]\n";
         }
-        if (result.value()) {
-            break;
-        }
+        fail_count += requests_per_client;
+        co_return;
     }
 
     connected_clients++;
 
-    auto* conn = session.getConn();
-    if (!conn) {
-        int idx = connect_failures.fetch_add(1);
-        if (idx < 5) {
-            std::cerr << "[conn-null] session.getConn() returned null\n";
-        }
-        fail_count += requests_per_client;
-        co_await client.close();
-        co_return;
+    auto* mgr = client.getConn()->streamManager();
+
+    // 发送请求
+    for (int i = 0; i < requests_per_client; i++) {
+        auto stream = mgr->allocateStream();
+
+        stream->sendHeaders(
+            Http2Headers().method("POST").scheme("http")
+                .authority(host + ":" + std::to_string(port)).path("/echo")
+                .contentType("text/plain").contentLength(kEchoPayload.size()),
+            false, true);
+        stream->sendData(kEchoPayload, true);
+        total_requests++;
+
+        co_await handleStream(stream).wait();
     }
 
-    auto* mgr = conn->streamManager();
-
-    // Spawn 请求发送协程（在 StreamManager 启动后由调度器执行）
-    co_await spawn(sendRequests(mgr, host, port, requests_per_client));
-
-    // 运行 StreamManager（reader + writer 循环），阻塞直到连接关闭
-    // 这确保 writer 协程能被 IOScheduler 正确调度
-    co_await mgr->start(handlePushStream).wait();
-
-    co_await conn->close();
-    co_await client.close();
+    co_await client.shutdown().wait();
     co_return;
 }
 

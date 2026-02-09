@@ -36,6 +36,18 @@ struct Http2FrameHeader
     void clearFlag(uint8_t flag) { flags &= ~flag; }
 };
 
+// 前向声明所有帧子类（用于基类中的 asXXX 方法声明）
+class Http2DataFrame;
+class Http2HeadersFrame;
+class Http2PriorityFrame;
+class Http2RstStreamFrame;
+class Http2SettingsFrame;
+class Http2PushPromiseFrame;
+class Http2PingFrame;
+class Http2GoAwayFrame;
+class Http2WindowUpdateFrame;
+class Http2ContinuationFrame;
+
 /**
  * @brief HTTP/2 帧基类
  */
@@ -58,6 +70,47 @@ public:
 
     // 获取流 ID
     uint32_t streamId() const { return m_header.stream_id; }
+
+    // 类型判断
+    bool isData() const { return m_header.type == Http2FrameType::Data; }
+    bool isHeaders() const { return m_header.type == Http2FrameType::Headers; }
+    bool isPriority() const { return m_header.type == Http2FrameType::Priority; }
+    bool isRstStream() const { return m_header.type == Http2FrameType::RstStream; }
+    bool isSettings() const { return m_header.type == Http2FrameType::Settings; }
+    bool isPushPromise() const { return m_header.type == Http2FrameType::PushPromise; }
+    bool isPing() const { return m_header.type == Http2FrameType::Ping; }
+    bool isGoAway() const { return m_header.type == Http2FrameType::GoAway; }
+    bool isWindowUpdate() const { return m_header.type == Http2FrameType::WindowUpdate; }
+    bool isContinuation() const { return m_header.type == Http2FrameType::Continuation; }
+
+    // END_STREAM 判断（DATA 和 HEADERS 帧通用）
+    bool isEndStream() const {
+        return (m_header.type == Http2FrameType::Data || m_header.type == Http2FrameType::Headers)
+            && m_header.hasFlag(Http2FrameFlags::kEndStream);
+    }
+
+    // 安全向下转型（定义在文件末尾，所有子类声明之后）
+    inline Http2DataFrame* asData();
+    inline Http2HeadersFrame* asHeaders();
+    inline Http2PriorityFrame* asPriority();
+    inline Http2RstStreamFrame* asRstStream();
+    inline Http2SettingsFrame* asSettings();
+    inline Http2PushPromiseFrame* asPushPromise();
+    inline Http2PingFrame* asPing();
+    inline Http2GoAwayFrame* asGoAway();
+    inline Http2WindowUpdateFrame* asWindowUpdate();
+    inline Http2ContinuationFrame* asContinuation();
+
+    inline const Http2DataFrame* asData() const;
+    inline const Http2HeadersFrame* asHeaders() const;
+    inline const Http2PriorityFrame* asPriority() const;
+    inline const Http2RstStreamFrame* asRstStream() const;
+    inline const Http2SettingsFrame* asSettings() const;
+    inline const Http2PushPromiseFrame* asPushPromise() const;
+    inline const Http2PingFrame* asPing() const;
+    inline const Http2GoAwayFrame* asGoAway() const;
+    inline const Http2WindowUpdateFrame* asWindowUpdate() const;
+    inline const Http2ContinuationFrame* asContinuation() const;
 
     // 序列化整个帧
     virtual std::string serialize() const = 0;
@@ -389,6 +442,30 @@ public:
 private:
     std::string m_header_block;
 };
+
+// ==================== Http2Frame::asXXX 内联定义 ====================
+
+inline Http2DataFrame* Http2Frame::asData() { return isData() ? static_cast<Http2DataFrame*>(this) : nullptr; }
+inline Http2HeadersFrame* Http2Frame::asHeaders() { return isHeaders() ? static_cast<Http2HeadersFrame*>(this) : nullptr; }
+inline Http2PriorityFrame* Http2Frame::asPriority() { return isPriority() ? static_cast<Http2PriorityFrame*>(this) : nullptr; }
+inline Http2RstStreamFrame* Http2Frame::asRstStream() { return isRstStream() ? static_cast<Http2RstStreamFrame*>(this) : nullptr; }
+inline Http2SettingsFrame* Http2Frame::asSettings() { return isSettings() ? static_cast<Http2SettingsFrame*>(this) : nullptr; }
+inline Http2PushPromiseFrame* Http2Frame::asPushPromise() { return isPushPromise() ? static_cast<Http2PushPromiseFrame*>(this) : nullptr; }
+inline Http2PingFrame* Http2Frame::asPing() { return isPing() ? static_cast<Http2PingFrame*>(this) : nullptr; }
+inline Http2GoAwayFrame* Http2Frame::asGoAway() { return isGoAway() ? static_cast<Http2GoAwayFrame*>(this) : nullptr; }
+inline Http2WindowUpdateFrame* Http2Frame::asWindowUpdate() { return isWindowUpdate() ? static_cast<Http2WindowUpdateFrame*>(this) : nullptr; }
+inline Http2ContinuationFrame* Http2Frame::asContinuation() { return isContinuation() ? static_cast<Http2ContinuationFrame*>(this) : nullptr; }
+
+inline const Http2DataFrame* Http2Frame::asData() const { return isData() ? static_cast<const Http2DataFrame*>(this) : nullptr; }
+inline const Http2HeadersFrame* Http2Frame::asHeaders() const { return isHeaders() ? static_cast<const Http2HeadersFrame*>(this) : nullptr; }
+inline const Http2PriorityFrame* Http2Frame::asPriority() const { return isPriority() ? static_cast<const Http2PriorityFrame*>(this) : nullptr; }
+inline const Http2RstStreamFrame* Http2Frame::asRstStream() const { return isRstStream() ? static_cast<const Http2RstStreamFrame*>(this) : nullptr; }
+inline const Http2SettingsFrame* Http2Frame::asSettings() const { return isSettings() ? static_cast<const Http2SettingsFrame*>(this) : nullptr; }
+inline const Http2PushPromiseFrame* Http2Frame::asPushPromise() const { return isPushPromise() ? static_cast<const Http2PushPromiseFrame*>(this) : nullptr; }
+inline const Http2PingFrame* Http2Frame::asPing() const { return isPing() ? static_cast<const Http2PingFrame*>(this) : nullptr; }
+inline const Http2GoAwayFrame* Http2Frame::asGoAway() const { return isGoAway() ? static_cast<const Http2GoAwayFrame*>(this) : nullptr; }
+inline const Http2WindowUpdateFrame* Http2Frame::asWindowUpdate() const { return isWindowUpdate() ? static_cast<const Http2WindowUpdateFrame*>(this) : nullptr; }
+inline const Http2ContinuationFrame* Http2Frame::asContinuation() const { return isContinuation() ? static_cast<const Http2ContinuationFrame*>(this) : nullptr; }
 
 /**
  * @brief HTTP/2 帧解析器

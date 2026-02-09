@@ -32,7 +32,7 @@ class HttpSessionAwaitableImpl : public galay::kernel::TimeoutSupport<HttpSessio
 {
 public:
     HttpSessionAwaitableImpl(HttpSessionImpl<SocketType>& session, HttpRequest&& request)
-        : m_session(session)
+        : m_session(&session)
         , m_request(std::move(request))
         , m_response()
         , m_state(State::Invalid)
@@ -48,13 +48,13 @@ public:
     bool await_suspend(std::coroutine_handle<> handle) {
         if (m_state == State::Invalid) {
             m_state = State::Sending;
-            m_send_awaitable.emplace(m_session.getWriter().sendRequest(m_request));
+            m_send_awaitable.emplace(m_session->getWriter().sendRequest(m_request));
             return m_send_awaitable->await_suspend(handle);
         } else if (m_state == State::Sending) {
-            m_send_awaitable.emplace(m_session.getWriter().sendRequest(m_request));
+            m_send_awaitable.emplace(m_session->getWriter().sendRequest(m_request));
             return m_send_awaitable->await_suspend(handle);
         } else {
-            m_recv_awaitable.emplace(m_session.getReader().getResponse(m_response));
+            m_recv_awaitable.emplace(m_session->getReader().getResponse(m_response));
             return m_recv_awaitable->await_suspend(handle);
         }
     }
@@ -135,7 +135,7 @@ private:
         Receiving
     };
 
-    HttpSessionImpl<SocketType>& m_session;
+    HttpSessionImpl<SocketType>* m_session;
     HttpRequest m_request;
     HttpResponse m_response;
     State m_state;

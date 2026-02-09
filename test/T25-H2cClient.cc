@@ -36,72 +36,33 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
 
     // Upgrade to HTTP/2
     std::cout << "Upgrading to HTTP/2..." << std::endl;
-    while (true) {
-        auto upgrade_result = co_await client.upgrade("/");
-        if (!upgrade_result) {
-            std::cerr << "Upgrade failed with error" << std::endl;
-            fail_count++;
-            co_return;
-        }
-        if (upgrade_result.value().has_value()) {
-            if (*upgrade_result.value()) {
-                std::cout << "Upgrade successful!" << std::endl;
-                break;
-            } else {
-                std::cerr << "Upgrade rejected by server" << std::endl;
-                fail_count++;
-                co_return;
-            }
-        }
+    co_await client.upgrade("/").wait();
+    if (!client.isUpgraded()) {
+        std::cerr << "Upgrade failed" << std::endl;
+        fail_count++;
+        co_return;
     }
+    std::cout << "Upgrade successful!" << std::endl;
 
     // Send multiple GET requests
     std::cout << "Sending " << num_requests << " requests..." << std::endl;
     for (int i = 0; i < num_requests; i++) {
         std::cout << "Starting request " << (i + 1) << "..." << std::endl;
-        bool request_success = false;
-        int loop_count = 0;
 
-        // 创建一次请求 awaitable 并保存引用
-        auto& request_awaitable = client.get("/");
+        auto stream = client.get("/");
+        co_await stream->readResponse().wait();
+        auto& response = stream->response();
 
-        // 循环等待直到请求完成
-        while (true) {
-            loop_count++;
-            auto result = co_await request_awaitable;
+        std::cout << "Request " << (i + 1) << " completed: status=" << response.status
+                  << ", body_size=" << response.body.size() << " bytes" << std::endl;
+        success_count++;
 
-            if (!result) {
-                std::cerr << "Request " << (i + 1) << " failed with error" << std::endl;
-                fail_count++;
-                break;
-            }
-
-            if (result.value().has_value()) {
-                auto response = result.value().value();
-                std::cout << "Request " << (i + 1) << " completed: status=" << response.status
-                          << ", body_size=" << response.body.size() << " bytes" << std::endl;
-                success_count++;
-                request_success = true;
-                break;
-            }
-
-            if (loop_count > 100) {
-                std::cerr << "Request " << (i + 1) << " timeout after " << loop_count << " iterations" << std::endl;
-                fail_count++;
-                break;
-            }
-        }
-
-        if (!request_success) {
-            std::cerr << "Request " << (i + 1) << " was not successful, breaking loop" << std::endl;
-            break;
-        }
         std::cout << "Request " << (i + 1) << " finished, continuing to next..." << std::endl;
     }
 
     // Close connection
     std::cout << "Closing connection..." << std::endl;
-    co_await client.close();
+    co_await client.shutdown().wait();
     std::cout << "Connection closed." << std::endl;
 
     co_return;

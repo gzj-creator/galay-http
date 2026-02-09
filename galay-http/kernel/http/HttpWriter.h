@@ -45,7 +45,7 @@ public:
     using WritevAwaitableType = decltype(std::declval<SocketType>().writev(std::declval<std::vector<iovec>>()));
 
     SendResponseWritevAwaitableImpl(HttpWriterImpl<SocketType>& writer, WritevAwaitableType&& writev_awaitable)
-        : m_writer(writer)
+        : m_writer(&writer)
         , m_writev_awaitable(std::move(writev_awaitable))
     {
     }
@@ -66,9 +66,9 @@ public:
         }
 
         size_t bytes_written = writev_result.value();
-        m_writer.updateRemainingWritev(bytes_written);
+        m_writer->updateRemainingWritev(bytes_written);
 
-        if (m_writer.getRemainingBytes() == 0) {
+        if (m_writer->getRemainingBytes() == 0) {
             return true;
         }
 
@@ -76,7 +76,7 @@ public:
     }
 
 private:
-    HttpWriterImpl<SocketType>& m_writer;
+    HttpWriterImpl<SocketType>* m_writer;
     WritevAwaitableType m_writev_awaitable;
 
 public:
@@ -93,7 +93,7 @@ public:
     using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
 
     SendResponseAwaitableImpl(HttpWriterImpl<SocketType>& writer, SendAwaitableType&& send_awaitable)
-        : m_writer(writer)
+        : m_writer(&writer)
         , m_send_awaitable(std::move(send_awaitable))
     {
     }
@@ -114,9 +114,9 @@ public:
         }
 
         size_t bytes_written = send_result.value();
-        m_writer.updateRemaining(bytes_written);
+        m_writer->updateRemaining(bytes_written);
 
-        if (m_writer.getRemainingBytes() == 0) {
+        if (m_writer->getRemainingBytes() == 0) {
             return true;
         }
 
@@ -124,7 +124,7 @@ public:
     }
 
 private:
-    HttpWriterImpl<SocketType>& m_writer;
+    HttpWriterImpl<SocketType>* m_writer;
     SendAwaitableType m_send_awaitable;
 
 public:

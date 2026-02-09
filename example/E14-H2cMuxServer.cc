@@ -8,6 +8,8 @@
  */
 
 #include "galay-http/kernel/http2/Http2Server.h"
+#include "galay-http/utils/HttpLogger.h"
+#include "galay-kernel/common/Sleep.hpp"
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -50,7 +52,7 @@ Coroutine handleStream(Http2Stream::ptr stream) {
 
     int delay_ms = parseDelayMs(req.path);
     if (delay_ms > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        co_await sleep(std::chrono::milliseconds(delay_ms));
     }
 
     std::string body = "stream=" + std::to_string(stream->streamId()) + " path=" + req.path;
@@ -66,6 +68,7 @@ Coroutine handleStream(Http2Stream::ptr stream) {
 }
 
 int main(int argc, char* argv[]) {
+    galay::http::HttpLogger::console();
     int port = 8080;
     if (argc > 1) {
         port = std::atoi(argv[1]);

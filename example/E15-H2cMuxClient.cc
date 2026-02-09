@@ -2,7 +2,7 @@
  * @file E15-H2cMuxClient.cc
  * @brief h2c 多路复用客户端示例
  * @details 在一条连接上并发多个 stream，请求乱序返回
- *          使用 StreamManager 进行帧分发，每个流通过 stream->getFrame() 协程接收响应
+ *          使用 StreamManager 进行帧分发，每个流通过 spawn 协程接收响应
  *
  * 测试方法:
  *   ./E15-H2cMuxClient localhost 8080
@@ -13,75 +13,55 @@
 #include "galay-kernel/common/Sleep.hpp"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 using namespace galay::http2;
 using namespace galay::kernel;
 
 static std::atomic<int> g_done_streams{0};
+static std::mutex g_mutex;
+static std::condition_variable g_cv;
+static std::atomic<bool> g_finished{false};
 
 Coroutine handleStream(Http2Stream::ptr stream) {
+    std::cout << "[stream " << stream->streamId() << "] waiting response...\n" << std::flush;
     co_await stream->readResponse().wait();
     auto& response = stream->response();
 
     std::cout << "[stream " << stream->streamId() << "] status=" << response.status
-              << " body=\"" << response.body << "\"\n";
+              << " body=\"" << response.body << "\"\n" << std::flush;
     g_done_streams++;
-    co_return;
-}
-
-Coroutine handlePushStream(Http2Stream::ptr stream) {
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) break;
-        auto frame = std::move(frame_result.value());
-        if (!frame) break;
-        if (frame->isEndStream()) break;
-    }
     co_return;
 }
 
 Coroutine runClient(const std::string& host, uint16_t port) {
     H2cClient client;
 
-    std::cout << "Connecting to " << host << ":" << port << "...\n";
+    std::cout << "Connecting to " << host << ":" << port << "...\n" << std::flush;
     auto connect_result = co_await client.connect(host, port);
     if (!connect_result) {
         std::cerr << "Connect failed: " << connect_result.error().message() << "\n";
+        g_finished = true;
+        g_cv.notify_one();
         co_return;
     }
-    std::cout << "Connected!\n";
+    std::cout << "Connected!\n" << std::flush;
 
-    auto session = client.getSession();
-
-    std::cout << "Upgrading to HTTP/2...\n";
-    auto upgrader = session.upgrade("/");
-    while (true) {
-        auto result = co_await upgrader();
-        if (!result) {
-            std::cerr << "Upgrade failed: " << http2ErrorCodeToString(result.error()) << "\n";
-            co_await client.close();
-            co_return;
-        }
-        if (result.value()) {
-            std::cout << "Upgraded to HTTP/2!\n\n";
-            break;
-        }
-    }
-
-    auto* conn = session.getConn();
-    if (!conn) {
-        std::cerr << "Failed to get HTTP/2 connection\n";
-        co_await client.close();
+    std::cout << "Upgrading to HTTP/2...\n" << std::flush;
+    co_await client.upgrade("/").wait();
+    if (!client.isUpgraded()) {
+        std::cerr << "Upgrade failed\n";
+        g_finished = true;
+        g_cv.notify_one();
         co_return;
     }
+    std::cout << "Upgraded to HTTP/2!\n\n" << std::flush;
 
-    // 启动 StreamManager 帧分发循环（等待 writer 就绪后返回）
-    auto* mgr = conn->streamManager();
-    co_await mgr->startInBackground(handlePushStream).wait();
+    auto* mgr = client.getConn()->streamManager();
 
     std::vector<std::string> paths = {
         "/delay/200",
@@ -91,7 +71,6 @@ Coroutine runClient(const std::string& host, uint16_t port) {
         "/delay/30"
     };
 
-    // 发送多个请求，每个请求 spawn 一个 handleStream 协程接收响应
     for (const auto& path : paths) {
         auto stream = mgr->allocateStream();
 
@@ -100,19 +79,36 @@ Coroutine runClient(const std::string& host, uint16_t port) {
                 .authority(host + ":" + std::to_string(port)).path(path),
             true, true);
 
-        std::cout << "Sent stream " << stream->streamId() << " -> " << path << "\n";
-
-        // spawn 协程处理该流的响应
+        std::cout << "Sent stream " << stream->streamId() << " -> " << path << "\n" << std::flush;
         co_await spawn(handleStream(stream));
     }
 
-    // 等待所有流完成
+    std::cout << "All requests sent, waiting for completion...\n" << std::flush;
+
     while (g_done_streams < static_cast<int>(paths.size()) && mgr->isRunning()) {
         co_await sleep(std::chrono::milliseconds(10));
     }
 
-    co_await mgr->shutdown().wait();
-    co_await client.close();
+    std::cout << "All streams done (" << g_done_streams.load() << "/" << paths.size()
+              << "), shutting down...\n" << std::flush;
+
+    if (mgr->isRunning()) {
+        // 发送 GOAWAY 通知服务端
+        auto goaway_waiter = mgr->sendGoaway();
+        if (goaway_waiter) {
+            co_await goaway_waiter->wait();
+        }
+        // 关闭 TCP 连接（非 awaitable），触发 readerLoop 退出
+        client.getConn()->initiateClose();
+        // 等待 start() 自然完成
+        while (mgr->isRunning()) {
+            co_await sleep(std::chrono::milliseconds(1));
+        }
+    }
+    std::cout << "Connection closed.\n" << std::flush;
+
+    g_finished = true;
+    g_cv.notify_one();
     co_return;
 }
 
@@ -136,7 +132,11 @@ int main(int argc, char* argv[]) {
         auto* scheduler = runtime.getNextIOScheduler();
         scheduler->spawn(runClient(host, port));
 
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        {
+            std::unique_lock<std::mutex> lock(g_mutex);
+            g_cv.wait(lock, [] { return g_finished.load(); });
+        }
+
         runtime.stop();
 
     } catch (const std::exception& e) {

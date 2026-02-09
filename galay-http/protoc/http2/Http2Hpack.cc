@@ -4919,7 +4919,7 @@ std::pair<size_t, bool> HpackDynamicTable::find(const std::string& name, const s
     if (name_match > 0) {
         return {name_match - 1, true};  // 只匹配名称
     }
-    return {0, false};  // 未找到
+    return {SIZE_MAX, false};  // 未找到：用 SIZE_MAX 区分于索引 0 的完全匹配
 }
 
 void HpackDynamicTable::setMaxSize(size_t max_size)
@@ -5140,21 +5140,21 @@ void HpackEncoder::encodeField(const Http2HeaderField& field, std::string& outpu
     
     // 在动态表中查找
     auto [dyn_idx, dyn_name_only] = m_dynamic_table.find(field.name, field.value);
-    
-    if (!dyn_name_only && m_dynamic_table.get(dyn_idx) != nullptr) {
+
+    if (dyn_idx != SIZE_MAX && !dyn_name_only) {
         // 动态表完全匹配
         size_t index = static_table.size() + dyn_idx + 1;
         encodeIndexed(index, output);
         return;
     }
-    
+
     // 需要字面编码
     // 敏感头部不索引
-    bool sensitive = (field.name == "authorization" || 
+    bool sensitive = (field.name == "authorization" ||
                       field.name == "cookie" ||
                       field.name == "set-cookie" ||
                       field.name == "proxy-authorization");
-    
+
     if (sensitive) {
         if (static_idx > 0) {
             encodeLiteralNeverIndexed(static_idx, field.value, output);
@@ -5165,7 +5165,7 @@ void HpackEncoder::encodeField(const Http2HeaderField& field, std::string& outpu
         // 添加到动态表
         if (static_idx > 0) {
             encodeLiteralIndexed(static_idx, field.value, output);
-        } else if (!dyn_name_only && dyn_idx < m_dynamic_table.count()) {
+        } else if (dyn_idx != SIZE_MAX && dyn_name_only) {
             size_t index = static_table.size() + dyn_idx + 1;
             encodeLiteralIndexed(index, field.value, output);
         } else {
