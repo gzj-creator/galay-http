@@ -213,155 +213,153 @@ private:
      * @brief 检测协议类型并完成初始握手
      * @param conn HTTP/2 连接
      * @param success 输出参数，表示是否成功
+     *
+     * 数据直接读入 conn 的 RingBuffer，避免 recv → 临时 buffer → feedData 的多余拷贝。
+     * Prior Knowledge 路径：readv → RingBuffer → peek 验证 → consume preface，后续帧留在 buffer。
+     * Upgrade 路径：HTTP/1.1 头取出解析后，Connection Preface 同样走 RingBuffer。
      */
     Coroutine detectProtocol(Http2ConnImpl<TcpSocket>& conn, bool& success) {
         success = false;
+        auto& rb = conn.ringBuffer();
 
-        // 读取足够的数据来判断协议
-        std::string preface_data;
-        preface_data.reserve(128);
-
-        while (preface_data.size() < kHttp2ConnectionPrefaceLength) {
-            char temp_buf[128];
-            auto result = co_await conn.socket().recv(temp_buf, sizeof(temp_buf));
-            if (!result) {
-                co_return;
-            }
-            auto& bytes = result.value();
-            if (bytes.size() == 0) {
-                co_return;
-            }
-            preface_data.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        // 直接 readv 到 RingBuffer，凑够 Connection Preface 长度
+        while (rb.readable() < kHttp2ConnectionPrefaceLength) {
+            auto result = co_await conn.socket().readv(rb.getWriteIovecs());
+            if (!result || result.value() == 0) co_return;
+            rb.produce(result.value());
         }
 
-        // 检查是否是 HTTP/2 Connection Preface
-        if (preface_data.size() >= kHttp2ConnectionPrefaceLength &&
-            std::memcmp(preface_data.data(), kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) == 0) {
-            HTTP_LOG_DEBUG("[h2] [prior-knowledge]");
-
-            // 将多余的数据（Connection Preface 之后的数据）放入 RingBuffer
-            if (preface_data.size() > kHttp2ConnectionPrefaceLength) {
-                conn.feedData(preface_data.data() + kHttp2ConnectionPrefaceLength,
-                             preface_data.size() - kHttp2ConnectionPrefaceLength);
+        // 从 RingBuffer peek 出数据判断协议
+        char peek_buf[kHttp2ConnectionPrefaceLength];
+        {
+            auto iovecs = rb.getReadIovecs();
+            size_t copied = 0;
+            for (const auto& iov : iovecs) {
+                size_t n = std::min(iov.iov_len, kHttp2ConnectionPrefaceLength - copied);
+                std::memcpy(peek_buf + copied, iov.iov_base, n);
+                copied += n;
+                if (copied >= kHttp2ConnectionPrefaceLength) break;
             }
+        }
 
-            // 发送服务器 SETTINGS
+        // ===== Prior Knowledge =====
+        if (std::memcmp(peek_buf, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) == 0) {
+            HTTP_LOG_DEBUG("[h2] [prior-knowledge]");
+            rb.consume(kHttp2ConnectionPrefaceLength);
+
             while (true) {
                 auto settings_result = co_await conn.sendSettings();
-                if (!settings_result) {
-                    co_return;
-                }
+                if (!settings_result) co_return;
                 if (settings_result.value()) break;
             }
-
             success = true;
             co_return;
         }
 
-        // 检查是否是 HTTP/1.1 Upgrade 请求
-        if (preface_data.size() >= 4 &&
-            (preface_data.substr(0, 4) == "GET " ||
-             preface_data.substr(0, 5) == "POST " ||
-             preface_data.substr(0, 4) == "PUT " ||
-             preface_data.substr(0, 4) == "HEAD")) {
+        // ===== HTTP/1.1 Upgrade =====
+        if (std::memcmp(peek_buf, "GET ", 4) == 0 ||
+            std::memcmp(peek_buf, "POST", 4) == 0 ||
+            std::memcmp(peek_buf, "PUT ", 4) == 0 ||
+            std::memcmp(peek_buf, "HEAD", 4) == 0) {
             HTTP_LOG_DEBUG("[h1] [upgrade] [detect]");
 
-            // 继续读取直到找到完整的 HTTP 头部
-            while (preface_data.find("\r\n\r\n") == std::string::npos && preface_data.size() < 8192) {
-                char temp_buf[1024];
-                auto result = co_await conn.socket().recv(temp_buf, sizeof(temp_buf));
-                if (!result || result.value().size() == 0) {
-                    co_return;
+            // HTTP/1.1 头不是 HTTP/2 帧，取出到 string 解析
+            std::string header_data;
+            header_data.reserve(4096);
+            {
+                auto iovecs = rb.getReadIovecs();
+                for (const auto& iov : iovecs) {
+                    header_data.append(static_cast<const char*>(iov.iov_base), iov.iov_len);
                 }
-                auto& bytes = result.value();
-                preface_data.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                rb.consume(rb.readable());
             }
 
-            // 解析 HTTP 请求头
-            size_t header_end = preface_data.find("\r\n\r\n");
+            while (header_data.find("\r\n\r\n") == std::string::npos && header_data.size() < 8192) {
+                auto result = co_await conn.socket().readv(rb.getWriteIovecs());
+                if (!result || result.value() == 0) co_return;
+                rb.produce(result.value());
+                auto iovecs = rb.getReadIovecs();
+                for (const auto& iov : iovecs) {
+                    header_data.append(static_cast<const char*>(iov.iov_base), iov.iov_len);
+                }
+                rb.consume(rb.readable());
+            }
+
+            size_t header_end = header_data.find("\r\n\r\n");
             if (header_end == std::string::npos) {
                 HTTP_LOG_ERROR("[header] [invalid] [too-large]");
                 co_return;
             }
 
-            std::string header_str = preface_data.substr(0, header_end + 4);
-
-            // 检查是否包含 Upgrade: h2c
-            bool has_upgrade = header_str.find("Upgrade: h2c") != std::string::npos ||
-                              header_str.find("upgrade: h2c") != std::string::npos;
-            bool has_http2_settings = header_str.find("HTTP2-Settings:") != std::string::npos ||
-                                     header_str.find("http2-settings:") != std::string::npos;
+            std::string_view hdr(header_data.data(), header_end + 4);
+            bool has_upgrade = hdr.find("Upgrade: h2c") != std::string_view::npos ||
+                              hdr.find("upgrade: h2c") != std::string_view::npos;
+            bool has_http2_settings = hdr.find("HTTP2-Settings:") != std::string_view::npos ||
+                                     hdr.find("http2-settings:") != std::string_view::npos;
 
             if (has_upgrade && has_http2_settings) {
                 HTTP_LOG_DEBUG("[h1] [upgrade] [h2c]");
 
-                // 发送 101 Switching Protocols 响应
-                std::string upgrade_response =
+                static constexpr char kUpgradeResp[] =
                     "HTTP/1.1 101 Switching Protocols\r\n"
                     "Connection: Upgrade\r\n"
                     "Upgrade: h2c\r\n"
                     "\r\n";
+                static constexpr size_t kUpgradeRespLen = sizeof(kUpgradeResp) - 1;
 
-                // 发送响应
                 size_t sent = 0;
-                while (sent < upgrade_response.size()) {
+                while (sent < kUpgradeRespLen) {
                     auto send_result = co_await conn.socket().send(
-                        upgrade_response.data() + sent,
-                        upgrade_response.size() - sent
-                    );
+                        kUpgradeResp + sent, kUpgradeRespLen - sent);
                     if (!send_result) {
                         HTTP_LOG_ERROR("[upgrade] [send-fail]");
                         co_return;
                     }
                     sent += send_result.value();
                 }
-
                 HTTP_LOG_DEBUG("[upgrade] [101-sent]");
 
-                // 现在期望接收 HTTP/2 Connection Preface
-                std::string preface_buf;
-                preface_buf.reserve(kHttp2ConnectionPrefaceLength);
-
-                // 检查是否已经有 preface 数据（在 header_end 之后）
-                if (preface_data.size() > header_end + 4) {
-                    preface_buf = preface_data.substr(header_end + 4);
+                // HTTP 头后面可能已带部分 Connection Preface，写入 RingBuffer
+                if (header_data.size() > header_end + 4) {
+                    rb.write(header_data.data() + header_end + 4,
+                             header_data.size() - header_end - 4);
                 }
 
-                // 继续读取直到获得完整的 Connection Preface
-                while (preface_buf.size() < kHttp2ConnectionPrefaceLength) {
-                    char temp_buf[128];
-                    auto result = co_await conn.socket().recv(temp_buf, sizeof(temp_buf));
-                    if (!result || result.value().size() == 0) {
+                // readv 直接读入 RingBuffer，凑够 Connection Preface
+                while (rb.readable() < kHttp2ConnectionPrefaceLength) {
+                    auto result = co_await conn.socket().readv(rb.getWriteIovecs());
+                    if (!result || result.value() == 0) {
                         HTTP_LOG_ERROR("[preface] [recv-fail]");
                         co_return;
                     }
-                    auto& bytes = result.value();
-                    preface_buf.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+                    rb.produce(result.value());
                 }
 
-                // 验证 Connection Preface
-                if (std::memcmp(preface_buf.data(), kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
+                // 从 RingBuffer 原地验证 Connection Preface
+                {
+                    auto iovecs = rb.getReadIovecs();
+                    size_t copied = 0;
+                    for (const auto& iov : iovecs) {
+                        size_t n = std::min(iov.iov_len, kHttp2ConnectionPrefaceLength - copied);
+                        std::memcpy(peek_buf + copied, iov.iov_base, n);
+                        copied += n;
+                        if (copied >= kHttp2ConnectionPrefaceLength) break;
+                    }
+                }
+                if (std::memcmp(peek_buf, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
                     HTTP_LOG_ERROR("[preface] [invalid] [after-upgrade]");
                     co_return;
                 }
-
                 HTTP_LOG_DEBUG("[preface] [ok]");
 
-                // 将多余的数据放入 RingBuffer
-                if (preface_buf.size() > kHttp2ConnectionPrefaceLength) {
-                    conn.feedData(preface_buf.data() + kHttp2ConnectionPrefaceLength,
-                                 preface_buf.size() - kHttp2ConnectionPrefaceLength);
-                }
+                // 消费 preface，后续数据（客户端 SETTINGS 等）留在 RingBuffer
+                rb.consume(kHttp2ConnectionPrefaceLength);
 
-                // 发送服务器 SETTINGS
                 while (true) {
                     auto settings_result = co_await conn.sendSettings();
-                    if (!settings_result) {
-                        co_return;
-                    }
+                    if (!settings_result) co_return;
                     if (settings_result.value()) break;
                 }
-
                 success = true;
                 co_return;
             }

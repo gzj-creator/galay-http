@@ -9,6 +9,7 @@
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-http/kernel/http/HttpConn.h"
 #include "galay-kernel/common/Buffer.h"
+#include "galay-kernel/common/Error.h"
 #include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
@@ -26,6 +27,10 @@ namespace galay::http2
 {
 
 using namespace galay::kernel;
+
+// 前向声明 StreamManager
+template<typename SocketType>
+class Http2StreamManagerImpl;
 
 // 类型特征：检测是否是 SslSocket
 template<typename T>
@@ -76,6 +81,26 @@ struct Http2Settings
         }
     }
     
+    template<typename Config>
+    void from(const Config& config) {
+        if constexpr (requires { config.header_table_size; })
+            header_table_size = config.header_table_size;
+        if constexpr (requires { config.enable_push; }) {
+            if constexpr (std::is_same_v<decltype(config.enable_push), const bool>)
+                enable_push = config.enable_push ? 1 : 0;
+            else
+                enable_push = config.enable_push;
+        }
+        if constexpr (requires { config.max_concurrent_streams; })
+            max_concurrent_streams = config.max_concurrent_streams;
+        if constexpr (requires { config.initial_window_size; })
+            initial_window_size = config.initial_window_size;
+        if constexpr (requires { config.max_frame_size; })
+            max_frame_size = config.max_frame_size;
+        if constexpr (requires { config.max_header_list_size; })
+            max_header_list_size = config.max_header_list_size;
+    }
+
     Http2SettingsFrame toFrame() const {
         Http2SettingsFrame frame;
         frame.addSetting(Http2SettingsId::HeaderTableSize, header_table_size);
@@ -105,10 +130,18 @@ class Http2ReadFrameAwaitableImpl<SocketType, false> : public TimeoutSupport<Htt
 public:
     using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
 
-    Http2ReadFrameAwaitableImpl(RingBuffer& ring_buffer, Http2Settings& peer_settings, SocketType& socket)
+    Http2ReadFrameAwaitableImpl(RingBuffer& ring_buffer,
+                                Http2Settings& peer_settings,
+                                SocketType& socket,
+                                bool* peer_closed = nullptr,
+                                std::string* last_error_msg = nullptr,
+                                const bool* closing = nullptr)
         : m_ring_buffer(ring_buffer)
         , m_peer_settings(peer_settings)
         , m_socket(socket)
+        , m_peer_closed(peer_closed)
+        , m_last_error_msg(last_error_msg)
+        , m_closing(closing)
         , m_has_buffered_frame(false)
     {
         // 检查 RingBuffer 中是否已经有完整的帧
@@ -116,20 +149,32 @@ public:
     }
 
     bool await_ready() const noexcept {
+        // 连接已关闭时不挂起，直接返回错误
+        if (m_closing && *m_closing) return true;
         return m_has_buffered_frame;
     }
 
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_readv_awaitable) {
-            m_readv_awaitable.emplace(m_socket.readv(m_ring_buffer.getWriteIovecs()));
+            auto iovecs = m_ring_buffer.getWriteIovecs();
+            m_readv_awaitable.emplace(m_socket.readv(std::move(iovecs)));
         }
         return m_readv_awaitable->await_suspend(handle);
     }
 
     std::expected<Http2Frame::uptr, Http2ErrorCode> await_resume() {
+        // 连接已关闭
+        if (m_closing && *m_closing && !m_has_buffered_frame) {
+            if (m_last_error_msg) {
+                *m_last_error_msg = "Connection closing";
+            }
+            return std::unexpected(Http2ErrorCode::ProtocolError);
+        }
+
         // 如果已经有缓冲的帧，直接解析
         if (m_has_buffered_frame) {
+            HTTP_LOG_DEBUG("[readFrame] [resume] [buffered]");
             return parseFrameFromBuffer();
         }
 
@@ -137,17 +182,36 @@ public:
         m_readv_awaitable.reset();
 
         if (!readv_result) {
-            HTTP_LOG_DEBUG("[readv] [fail] [{}]", readv_result.error().message());
+            if (galay::kernel::IOError::contains(readv_result.error().code(), galay::kernel::kDisconnectError)) {
+                if (m_peer_closed) {
+                    *m_peer_closed = true;
+                }
+            }
+            if (m_last_error_msg) {
+                *m_last_error_msg = readv_result.error().message();
+            }
+            HTTP_LOG_DEBUG("[readFrame] [readv-fail] [{}]", readv_result.error().message());
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
 
         ssize_t bytes_read = readv_result.value();
+        HTTP_LOG_DEBUG("[readFrame] [readv] [bytes={}] [ring_readable={}]", bytes_read, m_ring_buffer.readable());
         if (bytes_read == 0) {
-            HTTP_LOG_DEBUG("[conn] [closed]");
+            HTTP_LOG_DEBUG("[readFrame] [conn-closed]");
+            if (m_peer_closed) {
+                *m_peer_closed = true;
+            }
+            if (m_last_error_msg) {
+                *m_last_error_msg = "peer closed";
+            }
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
 
         m_ring_buffer.produce(bytes_read);
+        HTTP_LOG_DEBUG("[readFrame] [after-produce] [ring_readable={}]", m_ring_buffer.readable());
+        if (m_last_error_msg) {
+            m_last_error_msg->clear();
+        }
 
         return parseFrameFromBuffer();
     }
@@ -232,6 +296,9 @@ private:
     RingBuffer& m_ring_buffer;
     Http2Settings& m_peer_settings;
     SocketType& m_socket;
+    bool* m_peer_closed;
+    std::string* m_last_error_msg;
+    const bool* m_closing;
     std::optional<ReadvAwaitableType> m_readv_awaitable;
     bool m_has_buffered_frame;
 };
@@ -244,10 +311,16 @@ class Http2ReadFrameAwaitableImpl<SocketType, true> : public TimeoutSupport<Http
 public:
     using RecvAwaitableType = decltype(std::declval<SocketType>().recv(std::declval<char*>(), std::declval<size_t>()));
     
-    Http2ReadFrameAwaitableImpl(RingBuffer& ring_buffer, Http2Settings& peer_settings, SocketType& socket)
+    Http2ReadFrameAwaitableImpl(RingBuffer& ring_buffer,
+                                Http2Settings& peer_settings,
+                                SocketType& socket,
+                                bool* peer_closed = nullptr,
+                                std::string* last_error_msg = nullptr)
         : m_ring_buffer(ring_buffer)
         , m_peer_settings(peer_settings)
         , m_socket(socket)
+        , m_peer_closed(peer_closed)
+        , m_last_error_msg(last_error_msg)
     {
     }
     
@@ -271,6 +344,14 @@ public:
         m_recv_awaitable.reset();
         
         if (!recv_result) {
+            if (galay::kernel::IOError::contains(recv_result.error().code(), galay::kernel::kDisconnectError)) {
+                if (m_peer_closed) {
+                    *m_peer_closed = true;
+                }
+            }
+            if (m_last_error_msg) {
+                *m_last_error_msg = recv_result.error().message();
+            }
             HTTP_LOG_DEBUG("[ssl] [recv-fail] [{}]", recv_result.error().message());
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
@@ -278,10 +359,19 @@ public:
         ssize_t bytes_read = static_cast<ssize_t>(recv_result.value().size());
         if (bytes_read == 0) {
             HTTP_LOG_DEBUG("[ssl] [closed]");
+            if (m_peer_closed) {
+                *m_peer_closed = true;
+            }
+            if (m_last_error_msg) {
+                *m_last_error_msg = "peer closed";
+            }
             return std::unexpected(Http2ErrorCode::ProtocolError);
         }
         
         m_ring_buffer.produce(bytes_read);
+        if (m_last_error_msg) {
+            m_last_error_msg->clear();
+        }
         
         if (m_ring_buffer.readable() < kHttp2FrameHeaderLength) {
             return std::unexpected(Http2ErrorCode::NoError);
@@ -335,6 +425,8 @@ private:
     RingBuffer& m_ring_buffer;
     Http2Settings& m_peer_settings;
     SocketType& m_socket;
+    bool* m_peer_closed;
+    std::string* m_last_error_msg;
     std::optional<RecvAwaitableType> m_recv_awaitable;
 };
 #endif
@@ -364,22 +456,24 @@ public:
     template<typename Handle>
     auto await_suspend(Handle handle) {
         if (!m_send_awaitable) {
+            HTTP_LOG_DEBUG("[writeFrame] [suspend] [bytes={}] [offset={}] [total={}]",
+                          m_data.size() - m_offset, m_offset, m_data.size());
             m_send_awaitable.emplace(m_socket.send(m_data.data() + m_offset, m_data.size() - m_offset));
         }
         return m_send_awaitable->await_suspend(handle);
     }
-    
+
     std::expected<bool, Http2ErrorCode> await_resume() {
         auto send_result = m_send_awaitable->await_resume();
         m_send_awaitable.reset();
 
         if (!send_result) {
-            HTTP_LOG_ERROR("[frame] [send-fail] [{}]", send_result.error().message());
+            HTTP_LOG_ERROR("[writeFrame] [send-fail] [{}]", send_result.error().message());
             return std::unexpected(Http2ErrorCode::InternalError);
         }
 
         m_offset += send_result.value();
-        HTTP_LOG_DEBUG("[frame] [sent] [bytes={}] [total={}/{}]",
+        HTTP_LOG_DEBUG("[writeFrame] [resume] [sent={}] [progress={}/{}]",
                       send_result.value(), m_offset, m_data.size());
 
         if (m_offset >= m_data.size()) {
@@ -467,8 +561,11 @@ public:
         , m_conn_recv_window(kDefaultInitialWindowSize)
         , m_goaway_sent(false)
         , m_goaway_received(false)
+        , m_peer_closed(false)
+        , m_closing(false)
         , m_expecting_continuation(false)
         , m_continuation_stream_id(0)
+        , m_is_client(false)
     {
     }
 
@@ -485,8 +582,11 @@ public:
         , m_conn_recv_window(kDefaultInitialWindowSize)
         , m_goaway_sent(false)
         , m_goaway_received(false)
+        , m_peer_closed(false)
+        , m_closing(false)
         , m_expecting_continuation(false)
         , m_continuation_stream_id(0)
+        , m_is_client(false)
     {
         // 升级后需要扩展 buffer 大小以适应 HTTP/2
         if (m_ring_buffer.capacity() < 65536) {
@@ -518,20 +618,23 @@ public:
         , m_conn_recv_window(kDefaultInitialWindowSize)
         , m_goaway_sent(false)
         , m_goaway_received(false)
+        , m_peer_closed(false)
+        , m_closing(false)
         , m_expecting_continuation(false)
         , m_continuation_stream_id(0)
+        , m_is_client(false)
     {
     }
 
-    ~Http2ConnImpl() = default;
-    
+    ~Http2ConnImpl();
+
     // 禁用拷贝
     Http2ConnImpl(const Http2ConnImpl&) = delete;
     Http2ConnImpl& operator=(const Http2ConnImpl&) = delete;
-    
+
     // 启用移动
-    Http2ConnImpl(Http2ConnImpl&&) = default;
-    Http2ConnImpl& operator=(Http2ConnImpl&&) = default;
+    Http2ConnImpl(Http2ConnImpl&&) noexcept;
+    Http2ConnImpl& operator=(Http2ConnImpl&&) noexcept;
     
     // 获取 socket
     SocketType& socket() { return m_socket; }
@@ -551,7 +654,7 @@ public:
     }
     
     Http2Stream::ptr createStream(uint32_t stream_id) {
-        auto stream = std::make_shared<Http2Stream>(stream_id);
+        auto stream = Http2Stream::create(stream_id);
         m_streams[stream_id] = stream;
         return stream;
     }
@@ -561,7 +664,15 @@ public:
     }
     
     size_t streamCount() const { return m_streams.size(); }
-    
+
+    // 遍历所有流
+    template<typename Func>
+    void forEachStream(Func&& func) {
+        for (auto& [id, stream] : m_streams) {
+            func(id, stream);
+        }
+    }
+
     // 获取下一个本地流 ID（服务器使用偶数）
     uint32_t nextLocalStreamId() {
         if (m_last_local_stream_id == 0) {
@@ -578,11 +689,19 @@ public:
     void adjustConnSendWindow(int32_t delta) { m_conn_send_window += delta; }
     void adjustConnRecvWindow(int32_t delta) { m_conn_recv_window += delta; }
     
+    // 客户端/服务端模式
+    bool isClient() const { return m_is_client; }
+    void setIsClient(bool is_client) { m_is_client = is_client; }
+
     // GOAWAY 状态
     bool isGoawaySent() const { return m_goaway_sent; }
     bool isGoawayReceived() const { return m_goaway_received; }
     void setGoawaySent() { m_goaway_sent = true; }
     void setGoawayReceived() { m_goaway_received = true; }
+
+    bool isPeerClosed() const { return m_peer_closed; }
+    bool isClosing() const { return m_closing; }
+    const std::string& lastReadError() const { return m_last_read_error; }
     
     // 最后处理的流 ID
     uint32_t lastPeerStreamId() const { return m_last_peer_stream_id; }
@@ -596,10 +715,35 @@ public:
         m_continuation_stream_id = stream_id;
     }
     
-    // 关闭连接
+    // 关闭连接（awaitable 版本，需要 co_await）
     auto close() {
+        m_closing = true;
+        // shutdown(fd) 触发 kqueue 读事件（readv 返回 0），
+        // 让 readerLoop 能从 co_await readFrame() 中返回并退出。
+        ::shutdown(m_socket.handle().fd, SHUT_RDWR);
         return m_socket.close();
     }
+
+    // 非 awaitable 关闭：仅设置 closing 标志并 shutdown(fd)，
+    // 触发 readerLoop 退出，不需要 co_await。
+    // 适用于调用者不方便 co_await 的场景（如从外部协程发起关闭）。
+    void initiateClose() {
+        m_closing = true;
+        ::shutdown(m_socket.handle().fd, SHUT_RDWR);
+    }
+
+    // StreamManager 访问（需要 include Http2StreamManager.h 后才能使用）
+    Http2StreamManagerImpl<SocketType>* streamManager() { return m_stream_manager.get(); }
+    void initStreamManager() {
+        if (!m_stream_manager) {
+            m_stream_manager = std::make_unique<Http2StreamManagerImpl<SocketType>>(*this);
+        }
+    }
+
+    /**
+     * @brief 获取接收缓冲区引用
+     */
+    RingBuffer& ringBuffer() { return m_ring_buffer; }
 
     /**
      * @brief 将数据放入接收缓冲区
@@ -624,7 +768,8 @@ public:
      * @brief 获取帧读取等待体
      */
     Http2ReadFrameAwaitableImpl<SocketType> readFrame() {
-        return Http2ReadFrameAwaitableImpl<SocketType>(m_ring_buffer, m_peer_settings, m_socket);
+        return Http2ReadFrameAwaitableImpl<SocketType>(m_ring_buffer, m_peer_settings, m_socket,
+                                                       &m_peer_closed, &m_last_read_error, &m_closing);
     }
     
     /**
@@ -831,10 +976,17 @@ private:
     // 连接状态
     bool m_goaway_sent;
     bool m_goaway_received;
-    
+    bool m_is_client;
+    bool m_peer_closed;
+    bool m_closing;
+    std::string m_last_read_error;
+
     // CONTINUATION 状态
     bool m_expecting_continuation;
     uint32_t m_continuation_stream_id;
+
+    // StreamManager
+    std::unique_ptr<Http2StreamManagerImpl<SocketType>> m_stream_manager;
 };
 
 // 类型别名
@@ -847,6 +999,23 @@ using Http2sConn = Http2ConnImpl<galay::ssl::SslSocket>;
 using Http2sReadFrameAwaitable = Http2ReadFrameAwaitableImpl<galay::ssl::SslSocket>;
 using Http2sWriteFrameAwaitable = Http2WriteFrameAwaitableImpl<galay::ssl::SslSocket>;
 #endif
+
+} // namespace galay::http2
+
+// Http2StreamManager 的完整定义（解决 unique_ptr 析构需要完整类型的问题）
+#include "Http2StreamManager.h"
+
+namespace galay::http2
+{
+
+template<typename SocketType>
+Http2ConnImpl<SocketType>::~Http2ConnImpl() = default;
+
+template<typename SocketType>
+Http2ConnImpl<SocketType>::Http2ConnImpl(Http2ConnImpl&&) noexcept = default;
+
+template<typename SocketType>
+Http2ConnImpl<SocketType>& Http2ConnImpl<SocketType>::operator=(Http2ConnImpl&&) noexcept = default;
 
 } // namespace galay::http2
 

@@ -85,9 +85,15 @@ public:
         m_running = true;
         m_draining_handlers.store(false, std::memory_order_release);
 
+        // 初始化自动分配的 stream ID
+        if (m_next_local_stream_id == 0) {
+            m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
+        }
+
         // spawn writer 协程（后台运行），保存句柄用于等待结束
         Coroutine writer = writerLoop();
         co_await spawn(writer);
+        m_writer_ready.notify();
 
         // reader 协程在当前协程中运行
         co_await readerLoop(std::move(handler)).wait();
@@ -126,15 +132,65 @@ public:
 
     bool isRunning() const { return m_running; }
 
-    bool hasStarted() const { return m_started; }
+    /**
+     * @brief 获取连接引用（供用户 handler 使用）
+     */
+    Http2ConnImpl<SocketType>& conn() { return m_conn; }
 
-    galay::kernel::AsyncWaiterAwaitable<void> waitStopped() {
-        return m_stop_waiter.wait();
+    /**
+     * @brief 在后台启动 StreamManager，等待 writer 就绪后返回
+     * @details 比 co_await spawn(mgr->start(handler)) 更安全：
+     *          返回时 writer 已启动，可以安全地向 send channel 推送帧。
+     *          调用者之后可以直接 sendHeaders/sendData，无需担心调度时序。
+     */
+    Coroutine startInBackground(Http2StreamHandler handler) {
+        co_await spawn(start(std::move(handler)));
+        co_await m_writer_ready.wait();
+        co_return;
     }
 
     /**
-     * @brief 发送 GOAWAY 帧（通过 writer channel）
-     * @return waiter 可等待对象，用于确认发送完成
+     * @brief 自动分配 stream ID 并创建流
+     * @details 客户端自动分配奇数 ID（3, 5, 7, ...），服务端自动分配偶数 ID（2, 4, 6, ...）
+     */
+    Http2Stream::ptr allocateStream() {
+        uint32_t id = m_next_local_stream_id;
+        m_next_local_stream_id += 2;
+        return newStream(id);
+    }
+
+    /**
+     * @brief 优雅关闭：发送 GOAWAY、关闭连接、等待 StreamManager 停止
+     * @details 替代手动的 sendGoaway + conn.close() + waitStopped() 序列
+     */
+    Coroutine shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
+        if (!m_started) co_return;
+
+        if (m_running) {
+            auto waiter = sendGoaway(error);
+            if (waiter) {
+                co_await waiter->wait();
+            }
+
+            // 关闭所有流的帧队列
+            m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
+                stream->closeFrameQueue();
+            });
+
+            // close() 设置 m_closing=true 并关闭 socket。
+            // readerLoop 的 readFrame() 在 await_ready() 中检测到 closing，
+            // 不再挂起，直接返回错误，readerLoop 退出。
+            co_await m_conn.close();
+            if (m_running) {
+                co_await waitStopped();
+            }
+        }
+        co_return;
+    }
+
+    /**
+     * @brief 发送 GOAWAY 帧
+     * @return waiter，co_await waiter->wait() 等待发送完成
      */
     Http2OutgoingFrame::WaiterPtr sendGoaway(Http2ErrorCode error = Http2ErrorCode::NoError,
                                              const std::string& debug = "") {
@@ -144,13 +200,13 @@ public:
     }
 
     /**
-     * @brief 获取连接引用（供用户 handler 使用）
+     * @brief 等待 StreamManager 停止（start() 完成）
      */
-    Http2ConnImpl<SocketType>& conn() { return m_conn; }
+    galay::kernel::AsyncWaiterAwaitable<void> waitStopped() {
+        return m_stop_waiter.wait();
+    }
 
-    /**
-     * @brief 创建本地发起的流（例如服务端主动创建或客户端发起请求）
-     */
+private:
     Http2Stream::ptr newStream(uint32_t stream_id) {
         auto stream = m_conn.getStream(stream_id);
         if (stream) {
@@ -161,32 +217,29 @@ public:
     }
 
     /**
-     * @brief 获取已存在的流（例如客户端创建的流）
-     */
-    Http2Stream::ptr getStream(uint32_t stream_id) {
-        auto stream = m_conn.getStream(stream_id);
-        if (stream) {
-            attachStreamIO(stream);
-        }
-        return stream;
-    }
-
-private:
-    /**
      * @brief Reader 协程：读取帧、处理连接级帧、分发流级帧
      */
     Coroutine readerLoop(Http2StreamHandler handler) {
-        while (!m_conn.isGoawaySent() && !m_conn.isGoawayReceived()) {
+        // readerLoop 只在 IO 错误（peer closed / connection error）或连接关闭时退出。
+        // GOAWAY（无论收到还是发出）不退出：GOAWAY 只表示不再有新流，
+        // 已有流的帧仍需继续读取直到连接关闭（RFC 9113 §6.8）。
+        while (true) {
             auto read_awaitable = m_conn.readFrame();
             auto frame_result = co_await read_awaitable;
 
             if (!frame_result) {
+                if (m_conn.isClosing() || m_conn.isPeerClosed()) {
+                    HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
+                                  m_conn.isPeerClosed() ? "peer-closed" : "closing",
+                                  m_conn.lastReadError());
+                    break;
+                }
                 if (frame_result.error() == Http2ErrorCode::NoError) {
                     continue;
                 }
                 if (frame_result.error() == Http2ErrorCode::ProtocolError &&
                     (m_conn.isPeerClosed() || m_conn.isClosing())) {
-                    HTTP_LOG_INFO("[stream-mgr] [frame] [{}] [{}]",
+                    HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
                                   m_conn.isPeerClosed() ? "peer-closed" : "closing",
                                   m_conn.lastReadError());
                     break;
@@ -249,6 +302,8 @@ private:
 
     Coroutine runHandler(Http2StreamHandler handler, Http2Stream::ptr stream) {
         co_await handler(stream).wait();
+        // 流处理完毕，从连接的流表中移除，释放 max_concurrent_streams 配额
+        m_conn.removeStream(stream->streamId());
         int remaining = m_active_handlers.fetch_sub(1, std::memory_order_acq_rel) - 1;
         if (remaining == 0 && m_draining_handlers.load(std::memory_order_acquire)) {
             m_handler_waiter.notify();
@@ -258,8 +313,15 @@ private:
 
     /**
      * @brief Writer 协程：从 send channel 接收数据并写入 socket
+     * @details 使用 writev 批量发送多个帧，减少系统调用和内存拷贝
      */
     Coroutine writerLoop() {
+        // 预分配序列化缓冲区和 iovec 数组，避免每次循环分配
+        std::vector<std::string> frame_buffers;
+        std::vector<iovec> iovecs;
+        frame_buffers.reserve(64);
+        iovecs.reserve(64);
+
         while (true) {
             auto batch_result = co_await m_send_channel.recvBatch();
             if (!batch_result) {
@@ -268,36 +330,86 @@ private:
             }
 
             auto& batch = *batch_result;
+            frame_buffers.clear();
+            iovecs.clear();
+
+            // 批量序列化所有帧到 iovec
+            bool has_shutdown = false;
             for (auto& item : batch) {
                 if (!item.frame) {
-                    // 收到关闭信号
+                    // 收到关闭信号，先发送已有数据再退出
                     HTTP_LOG_DEBUG("[stream-mgr] [writer] [shutdown]");
-                    co_return;
+                    has_shutdown = true;
+                    break;
                 }
 
-                // 发送数据到 socket
-                auto data = item.frame->serialize();
-                size_t offset = 0;
-                while (offset < data.size()) {
-                    auto send_result = co_await m_conn.socket().send(
-                        data.data() + offset, data.size() - offset);
-                    if (!send_result) {
+                frame_buffers.push_back(item.frame->serialize());
+                iovecs.push_back({
+                    .iov_base = frame_buffers.back().data(),
+                    .iov_len = frame_buffers.back().size()
+                });
+            }
+
+            // 使用 writev 一次性发送所有帧
+            if (!iovecs.empty()) {
+                size_t total_bytes = 0;
+                for (const auto& iov : iovecs) {
+                    total_bytes += iov.iov_len;
+                }
+
+                size_t sent = 0;
+                while (sent < total_bytes) {
+                    auto result = co_await m_conn.socket().writev(iovecs);
+                    if (!result) {
                         if (m_conn.isClosing() || m_conn.isPeerClosed() ||
                             m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
-                            HTTP_LOG_DEBUG("[stream-mgr] [writer] [send-fail] [closing]");
+                            HTTP_LOG_DEBUG("[stream-mgr] [writer] [writev-fail] [closing]");
                         } else {
-                            HTTP_LOG_ERROR("[stream-mgr] [writer] [send-fail]");
+                            HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-fail]");
                         }
-                        if (item.waiter) {
-                            item.waiter->notify();
+                        // 通知所有 waiter 发送失败
+                        for (auto& item : batch) {
+                            if (item.waiter) {
+                                item.waiter->notify();
+                            }
                         }
                         co_return;
                     }
-                    offset += send_result.value();
+
+                    sent += result.value();
+                    if (sent >= total_bytes) {
+                        break;
+                    }
+
+                    // 部分发送，调整 iovecs
+                    size_t remaining = result.value();
+                    for (auto& iov : iovecs) {
+                        if (remaining >= iov.iov_len) {
+                            remaining -= iov.iov_len;
+                            iov.iov_len = 0;
+                        } else {
+                            iov.iov_base = static_cast<char*>(iov.iov_base) + remaining;
+                            iov.iov_len -= remaining;
+                            break;
+                        }
+                    }
+                    // 移除已发送完的 iovec
+                    iovecs.erase(
+                        std::remove_if(iovecs.begin(), iovecs.end(),
+                                      [](const iovec& iov) { return iov.iov_len == 0; }),
+                        iovecs.end());
                 }
+            }
+
+            // 通知所有 waiter
+            for (auto& item : batch) {
                 if (item.waiter) {
                     item.waiter->notify();
                 }
+            }
+
+            if (has_shutdown) {
+                co_return;
             }
         }
 
@@ -411,9 +523,17 @@ private:
 
             bool end_headers = hdrs->isEndHeaders();
             stream->onHeadersReceived(hdrs->isEndStream());
+            stream->appendHeaderBlock(hdrs->headerBlock());
             stream->pushFrame(std::move(frame));
 
             if (end_headers) {
+                // HPACK 解码必须在 readerLoop 中按帧到达顺序执行，
+                // 不能延迟到各 handler 协程中并发解码（动态表会错乱）
+                auto fields = m_conn.decoder().decode(stream->headerBlock());
+                if (fields) {
+                    stream->setDecodedHeaders(std::move(fields.value()));
+                }
+                stream->clearHeaderBlock();
                 m_conn.setExpectingContinuation(false);
                 if (!m_conn.isClient()) {
                     // 服务端：新请求就绪，spawn handler
@@ -436,9 +556,15 @@ private:
 
             auto* cont = frame->asContinuation();
             bool end_headers = cont->isEndHeaders();
+            stream->appendHeaderBlock(cont->headerBlock());
             stream->pushFrame(std::move(frame));
 
             if (end_headers) {
+                auto fields = m_conn.decoder().decode(stream->headerBlock());
+                if (fields) {
+                    stream->setDecodedHeaders(std::move(fields.value()));
+                }
+                stream->clearHeaderBlock();
                 m_conn.setExpectingContinuation(false);
                 if (!m_conn.isClient()) {
                     queueStreamHandler(stream);
@@ -631,6 +757,8 @@ private:
     bool m_started = false;
     bool m_running;
     galay::kernel::AsyncWaiter<void> m_stop_waiter;
+    galay::kernel::AsyncWaiter<void> m_writer_ready;
+    uint32_t m_next_local_stream_id = 0;
     std::atomic<int> m_active_handlers{0};
     std::atomic<bool> m_draining_handlers{false};
     galay::kernel::AsyncWaiter<void> m_handler_waiter;
