@@ -143,6 +143,7 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
                              HttpRouteHandler handler)
 {
     RouteTrieNode* node = root;
+    std::vector<std::string> paramNames;
 
     for (const auto& segment : segments) {
         // 判断段类型
@@ -158,16 +159,12 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
             // 参数节点（:id）
             // 所有参数节点共享同一个键 ":param"
             std::string paramName = segment.substr(1);  // 去掉冒号
+            paramNames.push_back(paramName);
 
             auto& child = node->children[":param"];
             if (!child) {
                 child = std::make_unique<RouteTrieNode>();
                 child->isParam = true;
-                child->paramName = paramName;  // 保存参数名在节点上
-            } else if (child->paramName != paramName) {
-                // 检测冲突：同一位置有不同的参数名
-                HTTP_LOG_WARN("[route] [param-conflict] [{}] [{}] [use={}]",
-                             child->paramName, paramName, child->paramName);
             }
             node = child.get();
         } else {
@@ -183,20 +180,26 @@ void HttpRouter::insertRoute(RouteTrieNode* root, const std::vector<std::string>
     // 标记为路径终点并设置处理函数
     node->isEnd = true;
     node->handler = handler;
+    node->paramNames = std::move(paramNames);
 }
 
 HttpRouteHandler* HttpRouter::searchRoute(RouteTrieNode* root, const std::vector<std::string>& segments,
                                           std::map<std::string, std::string>& params)
 {
     params.clear();
+    std::vector<std::string> paramValues;
 
-    // 使用递归进行深度优先搜索
+    // 使用递归进行深度优先搜索，收集参数值到 paramValues
     std::function<HttpRouteHandler*(RouteTrieNode*, size_t)> dfs =
         [&](RouteTrieNode* node, size_t depth) -> HttpRouteHandler* {
 
         // 到达路径末尾
         if (depth == segments.size()) {
             if (node->isEnd) {
+                // 用终端节点的 paramNames 和收集到的 paramValues 构建 params
+                for (size_t i = 0; i < node->paramNames.size() && i < paramValues.size(); ++i) {
+                    params[node->paramNames[i]] = paramValues[i];
+                }
                 return &node->handler;
             }
             return nullptr;
@@ -214,16 +217,10 @@ HttpRouteHandler* HttpRouter::searchRoute(RouteTrieNode* root, const std::vector
         // 2. 尝试参数匹配（:param）
         auto paramIt = node->children.find(":param");
         if (paramIt != node->children.end()) {
-            auto* paramNode = paramIt->second.get();
-
-            // 直接使用节点的参数名保存参数值
-            params[paramNode->paramName] = segment;
-
-            auto result = dfs(paramNode, depth + 1);
+            paramValues.push_back(segment);
+            auto result = dfs(paramIt->second.get(), depth + 1);
             if (result) return result;
-
-            // 回溯：如果这条路径不匹配，移除参数
-            params.erase(paramNode->paramName);
+            paramValues.pop_back();
         }
 
         // 3. 尝试单段通配符（*）

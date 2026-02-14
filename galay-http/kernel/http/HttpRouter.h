@@ -42,9 +42,9 @@ struct RouteTrieNode
     std::unordered_map<std::string, std::unique_ptr<RouteTrieNode>> children;  // 子节点
     HttpRouteHandler handler;                                                   // 处理函数
     bool isEnd = false;                                                         // 是否为路径终点
-    std::string paramName;                                                      // 参数名（如果是参数节点）
     bool isParam = false;                                                       // 是否为参数节点（:id）
     bool isWildcard = false;                                                    // 是否为通配符节点（*）
+    std::vector<std::string> paramNames;                                        // 该路由的参数名序列（仅isEnd节点）
 };
 
 /**
