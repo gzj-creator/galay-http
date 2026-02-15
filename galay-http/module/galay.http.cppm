@@ -1,3 +1,7 @@
+module;
+
+#include "galay-http/module/ModulePrelude.hpp"
+
 export module galay.http;
 
 export {

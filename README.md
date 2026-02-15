@@ -65,6 +65,31 @@ import galay.http2;
 import galay.websocket;
 ```
 
+### 模块支持更新（2026-02）
+
+本次模块接口已统一为：
+
+- `module;`
+- `#include "galay-http/module/ModulePrelude.hpp"`
+- `export module ...;`
+- `export { #include ... }`
+
+对应文件：
+
+- `galay-http/module/galay.http.cppm`
+- `galay-http/module/galay.http2.cppm`
+- `galay-http/module/galay.websocket.cppm`
+- `galay-http/module/ModulePrelude.hpp`
+
+推荐构建（Clang 20 + Ninja）：
+
+```bash
+cmake -S . -B build-mod -G Ninja \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++ \
+  -DGALAY_HTTP_ENABLE_SSL=OFF
+cmake --build build-mod --target galay-http-modules -j
+```
+
 ## Example（精简）
 
 只保留核心示例：协议 Echo + 静态服务器 + Proxy。
