@@ -121,7 +121,7 @@ using WsConn = WsConnImpl<TcpSocket>;
 } // namespace galay::websocket
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/SslSocket.h"
+#include "galay-ssl/async/SslSocket.h"
 namespace galay::websocket {
 using WssConn = WsConnImpl<galay::ssl::SslSocket>;
 } // namespace galay::websocket

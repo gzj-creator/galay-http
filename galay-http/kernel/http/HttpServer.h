@@ -13,6 +13,12 @@
 #include <functional>
 #include <optional>
 
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/async/SslSocket.h"
+#include "galay-ssl/ssl/SslContext.h"
+#include "SslHandshakeAwaitable.h"
+#endif
+
 namespace galay::http
 {
 
@@ -312,9 +318,6 @@ using HttpConnHandler = HttpConnHandlerImpl<TcpSocket>;
 using HttpServer = HttpServerImpl<TcpSocket>;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/SslSocket.h"
-#include "galay-ssl/SslContext.h"
-
 /**
  * @brief HTTPS 服务器配置
  */
@@ -444,22 +447,11 @@ protected:
 
 private:
     Coroutine handleSslConnection(galay::ssl::SslSocket socket) {
-        // 执行 SSL 握手
-        while (!socket.isHandshakeCompleted()) {
-            auto handshake_result = co_await socket.handshake();
-            if (!handshake_result) {
-                auto& err = handshake_result.error();
-                // WantRead/WantWrite 表示需要继续握手
-                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                    continue;
-                }
-                // 其他错误则退出
-                HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", err.message());
-                co_await socket.close();
-                co_return;
-            }
-            break;  // 握手成功
+        auto handshake_result = co_await handshakeCompletely(socket);
+        if (!handshake_result) {
+            HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
+            co_await socket.close();
+            co_return;
         }
 
         HTTP_LOG_DEBUG("[ssl] [handshake-ok]");

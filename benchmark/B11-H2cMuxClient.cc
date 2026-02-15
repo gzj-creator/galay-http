@@ -19,6 +19,9 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
+#include <algorithm>
+#include <memory>
+#include <vector>
 
 using namespace galay::http2;
 using namespace galay::kernel;
@@ -56,35 +59,37 @@ Coroutine handleResponse(Http2Stream::ptr stream) {
  *   每轮在同一连接上并发发射 streams_per_conn 个 stream，
  *   等待全部完成后进入下一轮
  */
-Coroutine runConnection(int id,
+Coroutine runConnection(std::shared_ptr<H2cClient> client,
+                        int id,
                         const std::string& host, uint16_t port,
                         int streams_per_conn, int rounds) {
     g.active++;
-    H2cClient client;
 
-    auto conn_result = co_await client.connect(host, port);
+    auto conn_result = co_await client->connect(host, port);
     if (!conn_result) {
         if (g.connect_err.fetch_add(1) < 3) {
             std::cerr << "[conn " << id << "] connect failed: "
                       << conn_result.error().message() << "\n";
         }
         g.fail += static_cast<int64_t>(streams_per_conn) * rounds;
+        co_await client->shutdown().wait();
         g.active--;
         co_return;
     }
 
-    co_await client.upgrade("/").wait();
-    if (!client.isUpgraded()) {
+    co_await client->upgrade("/").wait();
+    if (!client->isUpgraded()) {
         if (g.upgrade_err.fetch_add(1) < 3) {
             std::cerr << "[conn " << id << "] upgrade failed\n";
         }
         g.fail += static_cast<int64_t>(streams_per_conn) * rounds;
+        co_await client->shutdown().wait();
         g.active--;
         co_return;
     }
 
     g.connected++;
-    auto* mgr = client.getConn()->streamManager();
+    auto* mgr = client->getConn()->streamManager();
     std::string authority = host + ":" + std::to_string(port);
 
     for (int r = 0; r < rounds && mgr->isRunning(); r++) {
@@ -114,7 +119,7 @@ Coroutine runConnection(int id,
         }
     }
 
-    co_await client.shutdown().wait();
+    co_await client->shutdown().wait();
     g.active--;
     co_return;
 }
@@ -146,6 +151,7 @@ int main(int argc, char* argv[]) {
     int streams       = 100;
     int rounds        = 5;
     int max_wait      = 120;
+    int io_schedulers = 1;
 
     if (argc > 1) host        = argv[1];
     if (argc > 2) port        = std::atoi(argv[2]);
@@ -153,6 +159,7 @@ int main(int argc, char* argv[]) {
     if (argc > 4) streams     = std::atoi(argv[4]);
     if (argc > 5) rounds      = std::atoi(argv[5]);
     if (argc > 6) max_wait    = std::atoi(argv[6]);
+    if (argc > 7) io_schedulers = std::max(1, std::atoi(argv[7]));
 
     int64_t total_requests = static_cast<int64_t>(connections) * streams * rounds;
 
@@ -160,22 +167,28 @@ int main(int argc, char* argv[]) {
     std::cout << "H2c Mux Client Benchmark\n";
     std::cout << "========================================\n";
     std::cout << "用法: " << argv[0]
-              << " [host] [port] [connections] [streams] [rounds] [max_wait]\n";
+              << " [host] [port] [connections] [streams] [rounds] [max_wait] [io_threads]\n";
     std::cout << "目标: " << host << ":" << port << "\n";
     std::cout << "连接数: " << connections << "\n";
     std::cout << "每连接并发流: " << streams << "\n";
     std::cout << "轮次: " << rounds << "\n";
     std::cout << "总请求: " << total_requests << "\n";
+    std::cout << "IO 调度器线程: " << io_schedulers << "\n";
     std::cout << "========================================\n\n";
 
-    Runtime rt(4, 0);
+    Runtime rt(io_schedulers, 0);
     rt.start();
 
     auto t0 = std::chrono::steady_clock::now();
 
+    std::vector<std::shared_ptr<H2cClient>> client_pool;
+    client_pool.reserve(connections);
+
     for (int i = 0; i < connections; i++) {
+        auto client = std::make_shared<H2cClient>();
+        client_pool.push_back(client);
         auto* sched = rt.getNextIOScheduler();
-        sched->spawn(runConnection(i, host, port, streams, rounds));
+        sched->spawn(runConnection(std::move(client), i, host, port, streams, rounds));
     }
 
     std::cout << "压测进行中";
@@ -183,14 +196,25 @@ int main(int argc, char* argv[]) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
         std::cout << "." << std::flush;
 
-        if (g.success.load() + g.fail.load() >= total_requests) break;
         if (g.active.load() == 0) break;
-        if (max_wait > 0 && elapsed >= max_wait) break;
+        if (max_wait > 0 && elapsed >= max_wait) {
+            std::cerr << "\n[warn] wait timeout, active=" << g.active.load()
+                      << ", done=" << (g.success.load() + g.fail.load())
+                      << "/" << total_requests << "\n";
+            break;
+        }
     }
     std::cout << "\n";
 
     auto t1 = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0);
+
+    if (g.active.load() > 0) {
+        const auto grace_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (g.active.load() > 0 && std::chrono::steady_clock::now() < grace_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
 
     rt.stop();
 

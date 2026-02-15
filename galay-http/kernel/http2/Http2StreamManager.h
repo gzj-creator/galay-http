@@ -333,7 +333,7 @@ private:
             frame_buffers.clear();
             iovecs.clear();
 
-            // 批量序列化所有帧到 iovec
+            // 先批量序列化，再构建 iovec，避免 vector 扩容导致 data() 指针失效。
             bool has_shutdown = false;
             for (auto& item : batch) {
                 if (!item.frame) {
@@ -344,10 +344,16 @@ private:
                 }
 
                 frame_buffers.push_back(item.frame->serialize());
-                iovecs.push_back({
-                    .iov_base = frame_buffers.back().data(),
-                    .iov_len = frame_buffers.back().size()
-                });
+            }
+
+            if (!frame_buffers.empty()) {
+                iovecs.reserve(frame_buffers.size());
+                for (auto& buffer : frame_buffers) {
+                    iovecs.push_back({
+                        .iov_base = buffer.data(),
+                        .iov_len = buffer.size()
+                    });
+                }
             }
 
             // 使用 writev 一次性发送所有帧

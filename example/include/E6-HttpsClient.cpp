@@ -32,19 +32,11 @@ Coroutine httpsClientExample(const std::string& url) {
         std::cout << "TCP connection established\n";
 
         // SSL 握手
-        while (!client.isHandshakeCompleted()) {
-            auto handshake_result = co_await client.handshake();
-            if (!handshake_result) {
-                auto& err = handshake_result.error();
-                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                    continue;
-                }
-                std::cerr << "Handshake failed: " << err.message() << "\n";
-                co_await client.close();
-                co_return;
-            }
-            break;
+        auto handshake_result = co_await client.handshake();
+        if (!handshake_result) {
+            std::cerr << "Handshake failed: " << handshake_result.error().message() << "\n";
+            co_await client.close();
+            co_return;
         }
         std::cout << "SSL handshake completed\n";
         auto session = client.getSession();

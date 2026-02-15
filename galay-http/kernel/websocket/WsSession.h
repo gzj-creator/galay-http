@@ -9,13 +9,16 @@
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/async/TcpSocket.h"
+#include "galay-kernel/kernel/Awaitable.h"
+#include "galay-kernel/kernel/IOHandlers.hpp"
 #include <galay-utils/algorithm/Base64.hpp>
 #include <string>
 #include <optional>
 #include <coroutine>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/SslSocket.h"
+#include "galay-ssl/async/SslSocket.h"
+#include "galay-http/kernel/SslRecvCompatAwaitable.h"
 #endif
 
 namespace galay::websocket
@@ -46,12 +49,8 @@ template<typename SocketType>
 class WsSessionUpgraderImpl
 {
 public:
-    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
-
     WsSessionUpgraderImpl(WsSessionImpl<SocketType>* session)
         : m_session(session)
-        , m_state(State::Invalid)
-        , m_send_offset(0)
     {
     }
 
@@ -70,68 +69,705 @@ public:
     friend class WsSessionUpgraderImpl<SocketType>;
 
 private:
-    enum class State {
-        Invalid,
-        Sending,
-        Receiving
-    };
-
     WsSessionImpl<SocketType>* m_session;
-    State m_state;
-
-    std::optional<SendAwaitableType> m_send_awaitable;
-
-    std::string m_send_buffer;
-    size_t m_send_offset;
-    std::string m_ws_key;
-    HttpResponse m_upgrade_response;
 };
 
 /**
- * @brief WebSocket Session 升级等待体 - TcpSocket 版本（使用 readv）
+ * @brief WebSocket Session 升级等待体 - TcpSocket 版本（CustomAwaitable 链式 SEND+RECV）
  */
 template<typename SocketType>
 class WsSessionUpgradeAwaitableImpl<SocketType, false>
+    : public galay::kernel::CustomAwaitable
+    , public galay::kernel::TimeoutSupport<WsSessionUpgradeAwaitableImpl<SocketType, false>>
 {
 public:
-    using ReadvAwaitableType = decltype(std::declval<SocketType>().readv(std::declval<std::vector<iovec>>()));
+    class UpgradeSendAwaitable : public galay::kernel::SendAwaitable
+    {
+    public:
+        explicit UpgradeSendAwaitable(WsSessionUpgradeAwaitableImpl* owner)
+            : galay::kernel::SendAwaitable(owner->m_upgrader->m_session->m_socket.controller(),
+                                          nullptr,
+                                          0)
+            , m_owner(owner)
+        {
+        }
+
+        void resetBuffer(const char* buffer, size_t length) {
+            m_buffer = buffer;
+            m_length = length;
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
+            if (m_length == 0) {
+                return true;
+            }
+            if (cqe == nullptr) {
+                return false;
+            }
+
+            auto result = galay::kernel::io::handleSend(cqe);
+            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                return false;
+            }
+            if (!result) {
+                m_owner->setSendError(result.error());
+                return true;
+            }
+
+            size_t sent = result.value();
+            if (sent == 0) {
+                return false;
+            }
+
+            m_buffer += sent;
+            m_length -= sent;
+            return m_length == 0;
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            while (m_length > 0) {
+                auto result = galay::kernel::io::handleSend(handle, m_buffer, m_length);
+                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                    return false;
+                }
+                if (!result) {
+                    m_owner->setSendError(result.error());
+                    return true;
+                }
+
+                size_t sent = result.value();
+                if (sent == 0) {
+                    return false;
+                }
+
+                m_buffer += sent;
+                m_length -= sent;
+            }
+            return true;
+        }
+#endif
+
+    private:
+        WsSessionUpgradeAwaitableImpl* m_owner;
+    };
+
+    class UpgradeRecvAwaitable : public galay::kernel::RecvAwaitable
+    {
+    public:
+        explicit UpgradeRecvAwaitable(WsSessionUpgradeAwaitableImpl* owner)
+            : galay::kernel::RecvAwaitable(owner->m_upgrader->m_session->m_socket.controller(), nullptr, 0)
+            , m_owner(owner)
+        {
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
+            if (m_owner->parseUpgradeResponse()) {
+                return true;
+            }
+
+            if (cqe == nullptr) {
+                if (!prepareRecvWindow()) {
+                    m_owner->setProtocolError("Upgrade response too large");
+                    return true;
+                }
+                return false;
+            }
+
+            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                return false;
+            }
+            if (!result) {
+                m_owner->setRecvError(result.error());
+                return true;
+            }
+
+            size_t bytes_read = result.value().size();
+            if (bytes_read == 0) {
+                m_owner->setProtocolError("Connection closed");
+                return true;
+            }
+
+            m_owner->m_upgrader->m_session->m_ring_buffer.produce(bytes_read);
+
+            if (m_owner->parseUpgradeResponse()) {
+                return true;
+            }
+
+            if (!prepareRecvWindow()) {
+                m_owner->setProtocolError("Upgrade response too large");
+                return true;
+            }
+            return false;
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            while (true) {
+                if (m_owner->parseUpgradeResponse()) {
+                    return true;
+                }
+
+                if (!prepareRecvWindow()) {
+                    m_owner->setProtocolError("Upgrade response too large");
+                    return true;
+                }
+
+                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                    return false;
+                }
+                if (!result) {
+                    m_owner->setRecvError(result.error());
+                    return true;
+                }
+
+                size_t bytes_read = result.value().size();
+                if (bytes_read == 0) {
+                    m_owner->setProtocolError("Connection closed");
+                    return true;
+                }
+
+                m_owner->m_upgrader->m_session->m_ring_buffer.produce(bytes_read);
+            }
+        }
+#endif
+
+    private:
+        bool prepareRecvWindow() {
+            auto write_iovecs = m_owner->m_upgrader->m_session->m_ring_buffer.getWriteIovecs();
+            if (write_iovecs.empty()) {
+                return false;
+            }
+
+            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
+            m_length = write_iovecs[0].iov_len;
+            return m_length > 0;
+        }
+
+        WsSessionUpgradeAwaitableImpl* m_owner;
+    };
 
     WsSessionUpgradeAwaitableImpl(WsSessionUpgraderImpl<SocketType>* upgrader)
-        : m_upgrader(upgrader)
+        : galay::kernel::CustomAwaitable(upgrader->m_session->m_socket.controller())
+        , m_upgrader(upgrader)
+        , m_send_awaitable(this)
+        , m_recv_awaitable(this)
+        , m_result(true)
     {
+        if (m_upgrader->m_session->m_upgraded) {
+            m_done = true;
+            return;
+        }
+
+        initUpgradeRequest();
+        m_send_awaitable.resetBuffer(m_send_buffer.data(), m_send_buffer.size());
+        addTask(IOEventType::SEND, &m_send_awaitable);
+        addTask(IOEventType::RECV, &m_recv_awaitable);
     }
 
-    bool await_ready() const noexcept { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<bool, WsError> await_resume();
+    bool await_ready() const noexcept { return m_done; }
+    using galay::kernel::CustomAwaitable::await_suspend;
+
+    std::expected<bool, WsError> await_resume() {
+        onCompleted();
+
+        if (!m_result.has_value()) {
+            auto& io_error = m_result.error();
+            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kTimeout)) {
+                return std::unexpected(WsError(kWsConnectionError, "Upgrade timeout"));
+            }
+            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
+                return std::unexpected(WsError(kWsConnectionClosed, io_error.message()));
+            }
+            return std::unexpected(WsError(kWsConnectionError, io_error.message()));
+        }
+
+        if (m_error.has_value()) {
+            return std::unexpected(std::move(*m_error));
+        }
+
+        return true;
+    }
 
 private:
+    void initUpgradeRequest() {
+        auto& session = *m_upgrader->m_session;
+        m_ws_key = generateWebSocketKey();
+
+        auto request = Http1_1RequestBuilder::get(session.m_url.path)
+            .header("Host", session.m_url.host + ":" + std::to_string(session.m_url.port))
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", m_ws_key)
+            .header("Sec-WebSocket-Version", "13")
+            .build();
+
+        m_send_buffer = request.toString();
+        HTTP_LOG_INFO("[ws] [upgrade] [send]");
+    }
+
+    bool parseUpgradeResponse() {
+        auto& session = *m_upgrader->m_session;
+        auto iovecs = session.m_ring_buffer.getReadIovecs();
+        if (iovecs.empty()) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(iovecs);
+        if (consumed > 0) {
+            session.m_ring_buffer.consume(consumed);
+        }
+
+        if (error_code == kIncomplete || error_code == kHeaderInComplete) {
+            return false;
+        }
+
+        if (error_code != kNoError) {
+            setProtocolError("Failed to parse upgrade response");
+            return true;
+        }
+
+        if (!m_upgrade_response.isComplete()) {
+            return false;
+        }
+
+        if (!validateUpgradeResponse()) {
+            return true;
+        }
+
+        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
+        session.m_upgraded = true;
+        m_done = true;
+        return true;
+    }
+
+    bool validateUpgradeResponse() {
+        if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
+            return setUpgradeFailed("Upgrade failed with status " +
+                                    std::to_string(static_cast<int>(m_upgrade_response.header().code())));
+        }
+
+        if (!m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
+            return setUpgradeFailed("Missing Sec-WebSocket-Accept header");
+        }
+
+        std::string accept_key = m_upgrade_response.header().headerPairs().getValue("Sec-WebSocket-Accept");
+        std::string expected_accept = WsUpgrade::generateAcceptKey(m_ws_key);
+        if (accept_key != expected_accept) {
+            return setUpgradeFailed("Invalid Sec-WebSocket-Accept value");
+        }
+
+        return true;
+    }
+
+    bool setUpgradeFailed(std::string message) {
+        m_error = WsError(kWsUpgradeFailed, std::move(message));
+        return false;
+    }
+
+    void setSendError(const galay::kernel::IOError& io_error) {
+        m_error = WsError(kWsSendError, io_error.message());
+    }
+
+    void setRecvError(const galay::kernel::IOError& io_error) {
+        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
+            m_error = WsError(kWsConnectionClosed, io_error.message());
+            return;
+        }
+        m_error = WsError(kWsConnectionError, io_error.message());
+    }
+
+    void setProtocolError(std::string message) {
+        m_error = WsError(kWsProtocolError, std::move(message));
+    }
+
     WsSessionUpgraderImpl<SocketType>* m_upgrader;
-    std::optional<ReadvAwaitableType> m_recv_awaitable;
+    std::string m_ws_key;
+    std::string m_send_buffer;
+    HttpResponse m_upgrade_response;
+    UpgradeSendAwaitable m_send_awaitable;
+    UpgradeRecvAwaitable m_recv_awaitable;
+    std::optional<WsError> m_error;
+    bool m_done = false;
+
+public:
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 /**
- * @brief WebSocket Session 升级等待体 - SslSocket 版本（使用 recv）
+ * @brief WebSocket Session 升级等待体 - SslSocket 版本（CustomAwaitable 链式 SEND+RECV）
  */
 template<typename SocketType>
 class WsSessionUpgradeAwaitableImpl<SocketType, true>
+    : public galay::kernel::CustomAwaitable
+    , public galay::kernel::TimeoutSupport<WsSessionUpgradeAwaitableImpl<SocketType, true>>
 {
 public:
-    using RecvAwaitableType = decltype(std::declval<SocketType>().recv(std::declval<char*>(), std::declval<size_t>()));
+    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
+    using RecvAwaitableType = galay::http::SslRecvCompatAwaitable;
+
+    class UpgradeSendAwaitable : public SendAwaitableType
+    {
+    public:
+        explicit UpgradeSendAwaitable(WsSessionUpgradeAwaitableImpl* owner)
+            : SendAwaitableType(owner->m_upgrader->m_session->m_socket.send(owner->m_send_buffer.data(),
+                                                                             owner->m_send_buffer.size()))
+            , m_owner(owner)
+        {
+        }
+
+        void resetBuffer(const char* buffer, size_t length) {
+            this->m_plainBuffer = buffer;
+            this->m_plainLength = length;
+            this->m_plainOffset = 0;
+            this->m_cipherLength = 0;
+            this->m_sslResultSet = false;
+            this->m_buffer = nullptr;
+            this->m_length = 0;
+            if (length == 0) {
+                this->m_sslResult = size_t{0};
+                this->m_sslResultSet = true;
+                return;
+            }
+            this->fillNextSendChunk();
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+            if (m_owner->m_send_completed) {
+                return true;
+            }
+
+            if (cqe == nullptr) {
+                return false;
+            }
+
+            this->m_sslResultSet = false;
+            const bool done = SendAwaitableType::handleComplete(cqe, handle);
+            if (!done) {
+                return false;
+            }
+
+            auto send_result = std::move(this->m_sslResult);
+            this->m_sslResultSet = false;
+            if (!send_result) {
+                const auto& error = send_result.error();
+                m_owner->setSslSendError(error);
+                return true;
+            }
+
+            size_t sent = send_result.value();
+            if (sent == 0) {
+                return false;
+            }
+
+            m_owner->m_send_offset += sent;
+            if (m_owner->m_send_offset >= m_owner->m_send_buffer.size()) {
+                m_owner->m_send_completed = true;
+                return true;
+            }
+
+            this->m_plainBuffer = m_owner->m_send_buffer.data() + m_owner->m_send_offset;
+            this->m_plainLength = m_owner->m_send_buffer.size() - m_owner->m_send_offset;
+            return false;
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            while (!m_owner->m_send_completed) {
+                this->m_sslResultSet = false;
+                const bool done = SendAwaitableType::handleComplete(handle);
+                if (!done) {
+                    return false;
+                }
+
+                auto send_result = std::move(this->m_sslResult);
+                this->m_sslResultSet = false;
+                if (!send_result) {
+                    const auto& error = send_result.error();
+                    m_owner->setSslSendError(error);
+                    return true;
+                }
+
+                size_t sent = send_result.value();
+                if (sent == 0) {
+                    return false;
+                }
+
+                m_owner->m_send_offset += sent;
+                if (m_owner->m_send_offset >= m_owner->m_send_buffer.size()) {
+                    m_owner->m_send_completed = true;
+                    return true;
+                }
+
+                this->m_plainBuffer = m_owner->m_send_buffer.data() + m_owner->m_send_offset;
+                this->m_plainLength = m_owner->m_send_buffer.size() - m_owner->m_send_offset;
+            }
+            return true;
+        }
+#endif
+
+    private:
+        WsSessionUpgradeAwaitableImpl* m_owner;
+    };
+
+    class UpgradeRecvAwaitable : public RecvAwaitableType
+    {
+    public:
+        explicit UpgradeRecvAwaitable(WsSessionUpgradeAwaitableImpl* owner)
+            : RecvAwaitableType(owner->m_upgrader->m_session->m_socket.recv(owner->m_dummy_recv_buffer,
+                                                                             sizeof(owner->m_dummy_recv_buffer)))
+            , m_owner(owner)
+        {
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+            if (m_owner->parseUpgradeResponse()) {
+                return true;
+            }
+
+            if (!prepareRecvWindow()) {
+                m_owner->setProtocolError("Upgrade response too large");
+                return true;
+            }
+
+            if (cqe == nullptr) {
+                return false;
+            }
+
+            this->m_sslResultSet = false;
+            const bool done = RecvAwaitableType::handleComplete(cqe, handle);
+            if (!done) {
+                return false;
+            }
+
+            auto recv_result = std::move(this->m_sslResult);
+            this->m_sslResultSet = false;
+            if (!recv_result) {
+                const auto& error = recv_result.error();
+                m_owner->setSslRecvError(error);
+                return true;
+            }
+
+            size_t bytes_read = recv_result.value().size();
+            if (bytes_read == 0) {
+                m_owner->setProtocolError("Connection closed");
+                return true;
+            }
+
+            m_owner->m_upgrader->m_session->m_ring_buffer.produce(bytes_read);
+            return m_owner->parseUpgradeResponse();
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            while (true) {
+                if (m_owner->parseUpgradeResponse()) {
+                    return true;
+                }
+
+                if (!prepareRecvWindow()) {
+                    m_owner->setProtocolError("Upgrade response too large");
+                    return true;
+                }
+
+                this->m_sslResultSet = false;
+                const bool done = RecvAwaitableType::handleComplete(handle);
+                if (!done) {
+                    return false;
+                }
+
+                auto recv_result = std::move(this->m_sslResult);
+                this->m_sslResultSet = false;
+                if (!recv_result) {
+                    const auto& error = recv_result.error();
+                    m_owner->setSslRecvError(error);
+                    return true;
+                }
+
+                size_t bytes_read = recv_result.value().size();
+                if (bytes_read == 0) {
+                    m_owner->setProtocolError("Connection closed");
+                    return true;
+                }
+
+                m_owner->m_upgrader->m_session->m_ring_buffer.produce(bytes_read);
+            }
+        }
+#endif
+
+    private:
+        bool prepareRecvWindow() {
+            auto write_iovecs = m_owner->m_upgrader->m_session->m_ring_buffer.getWriteIovecs();
+            if (write_iovecs.empty()) {
+                return false;
+            }
+            this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
+            this->m_plainLength = write_iovecs[0].iov_len;
+            return this->m_plainLength > 0;
+        }
+
+        WsSessionUpgradeAwaitableImpl* m_owner;
+    };
 
     WsSessionUpgradeAwaitableImpl(WsSessionUpgraderImpl<SocketType>* upgrader)
-        : m_upgrader(upgrader)
+        : galay::kernel::CustomAwaitable(upgrader->m_session->m_socket.controller())
+        , m_upgrader(upgrader)
+        , m_send_awaitable(this)
+        , m_recv_awaitable(this)
+        , m_result(true)
     {
+        if (m_upgrader->m_session->m_upgraded) {
+            m_done = true;
+            return;
+        }
+
+        initUpgradeRequest();
+        m_send_awaitable.resetBuffer(m_send_buffer.data(), m_send_buffer.size());
+        addTask(IOEventType::SEND, &m_send_awaitable);
+        addTask(IOEventType::RECV, &m_recv_awaitable);
     }
 
-    bool await_ready() const noexcept { return false; }
-    bool await_suspend(std::coroutine_handle<> handle);
-    std::expected<bool, WsError> await_resume();
+    bool await_ready() const noexcept { return m_done; }
+    using galay::kernel::CustomAwaitable::await_suspend;
+
+    std::expected<bool, WsError> await_resume() {
+        if (m_done) {
+            return true;
+        }
+
+        onCompleted();
+
+        if (!m_result.has_value()) {
+            auto& io_error = m_result.error();
+            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kTimeout)) {
+                return std::unexpected(WsError(kWsConnectionError, "Upgrade timeout"));
+            }
+            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
+                return std::unexpected(WsError(kWsConnectionClosed, io_error.message()));
+            }
+            return std::unexpected(WsError(kWsConnectionError, io_error.message()));
+        }
+
+        if (m_ws_error.has_value()) {
+            return std::unexpected(std::move(*m_ws_error));
+        }
+
+        return true;
+    }
 
 private:
+    void initUpgradeRequest() {
+        auto& session = *m_upgrader->m_session;
+        m_ws_key = generateWebSocketKey();
+
+        auto request = Http1_1RequestBuilder::get(session.m_url.path)
+            .header("Host", session.m_url.host + ":" + std::to_string(session.m_url.port))
+            .header("Upgrade", "websocket")
+            .header("Connection", "Upgrade")
+            .header("Sec-WebSocket-Key", m_ws_key)
+            .header("Sec-WebSocket-Version", "13")
+            .build();
+
+        m_send_buffer = request.toString();
+        HTTP_LOG_INFO("[ws] [upgrade] [send]");
+    }
+
+    bool parseUpgradeResponse() {
+        auto& session = *m_upgrader->m_session;
+        auto iovecs = session.m_ring_buffer.getReadIovecs();
+        if (iovecs.empty()) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(iovecs);
+        if (consumed > 0) {
+            session.m_ring_buffer.consume(consumed);
+        }
+
+        if (error_code == kIncomplete || error_code == kHeaderInComplete) {
+            return false;
+        }
+
+        if (error_code != kNoError) {
+            setProtocolError("Failed to parse upgrade response");
+            return true;
+        }
+
+        if (!m_upgrade_response.isComplete()) {
+            return false;
+        }
+
+        if (!validateUpgradeResponse()) {
+            return true;
+        }
+
+        session.m_upgraded = true;
+        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
+        m_done = true;
+        return true;
+    }
+
+    bool validateUpgradeResponse() {
+        if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
+            return setUpgradeFailed("Upgrade failed with status " +
+                                    std::to_string(static_cast<int>(m_upgrade_response.header().code())));
+        }
+
+        if (!m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
+            return setUpgradeFailed("Missing Sec-WebSocket-Accept header");
+        }
+
+        std::string accept_key = m_upgrade_response.header().headerPairs().getValue("Sec-WebSocket-Accept");
+        std::string expected_accept = WsUpgrade::generateAcceptKey(m_ws_key);
+        if (accept_key != expected_accept) {
+            return setUpgradeFailed("Invalid Sec-WebSocket-Accept value");
+        }
+
+        return true;
+    }
+
+    bool setUpgradeFailed(std::string message) {
+        m_ws_error = WsError(kWsUpgradeFailed, std::move(message));
+        return false;
+    }
+
+    void setSslSendError(const galay::ssl::SslError& error) {
+        if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
+            m_ws_error = WsError(kWsConnectionClosed, "Connection closed by peer");
+            return;
+        }
+        m_ws_error = WsError(kWsSendError, error.message());
+    }
+
+    void setSslRecvError(const galay::ssl::SslError& error) {
+        if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
+            m_ws_error = WsError(kWsConnectionClosed, "Connection closed by peer");
+            return;
+        }
+        m_ws_error = WsError(kWsConnectionError, error.message());
+    }
+
+    void setProtocolError(std::string message) {
+        m_ws_error = WsError(kWsProtocolError, std::move(message));
+    }
+
     WsSessionUpgraderImpl<SocketType>* m_upgrader;
-    std::optional<RecvAwaitableType> m_recv_awaitable;
+    std::string m_ws_key;
+    std::string m_send_buffer;
+    HttpResponse m_upgrade_response;
+    size_t m_send_offset = 0;
+    bool m_send_completed = false;
+    char m_dummy_recv_buffer[1]{0};
+    UpgradeSendAwaitable m_send_awaitable;
+    UpgradeRecvAwaitable m_recv_awaitable;
+    std::optional<WsError> m_ws_error;
+    bool m_done = false;
+
+public:
+    std::expected<bool, galay::kernel::IOError> m_result;
 };
 #endif
 
@@ -229,309 +865,6 @@ private:
     bool m_upgraded;
 };
 
-// WsSessionUpgradeAwaitableImpl<SocketType, false> 的实现 - TcpSocket 版本
-template<typename SocketType>
-bool WsSessionUpgradeAwaitableImpl<SocketType, false>::await_suspend(std::coroutine_handle<> handle) {
-    auto& upgrader = *m_upgrader;
-    auto& session = *upgrader.m_session;
-
-    if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Invalid) {
-        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Sending;
-
-        // 生成WebSocket Key
-        upgrader.m_ws_key = generateWebSocketKey();
-
-        // 构建升级请求
-        auto request = Http1_1RequestBuilder::get(session.m_url.path)
-            .header("Host", session.m_url.host + ":" + std::to_string(session.m_url.port))
-            .header("Upgrade", "websocket")
-            .header("Connection", "Upgrade")
-            .header("Sec-WebSocket-Key", upgrader.m_ws_key)
-            .header("Sec-WebSocket-Version", "13")
-            .build();
-
-        upgrader.m_send_buffer = request.toString();
-        upgrader.m_send_offset = 0;
-
-        HTTP_LOG_INFO("[ws] [upgrade] [send]");
-
-        size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
-        const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
-        upgrader.m_send_awaitable.emplace(session.m_socket.send(send_ptr, remaining));
-        return upgrader.m_send_awaitable->await_suspend(handle);
-
-    } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Sending) {
-        size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
-        const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
-        upgrader.m_send_awaitable.emplace(session.m_socket.send(send_ptr, remaining));
-        return upgrader.m_send_awaitable->await_suspend(handle);
-
-    } else {
-        m_recv_awaitable.emplace(session.m_socket.readv(session.m_ring_buffer.getWriteIovecs()));
-        return m_recv_awaitable->await_suspend(handle);
-    }
-}
-
-template<typename SocketType>
-std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType, false>::await_resume() {
-    auto& upgrader = *m_upgrader;
-    auto& session = *upgrader.m_session;
-
-    if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Sending) {
-        auto send_result = upgrader.m_send_awaitable->await_resume();
-        upgrader.m_send_awaitable.reset();
-
-        if (!send_result) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", send_result.error().message());
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsConnectionClosed, "Failed to send upgrade request"));
-        }
-
-        size_t bytes_sent = send_result.value();
-        upgrader.m_send_offset += bytes_sent;
-
-        if (upgrader.m_send_offset < upgrader.m_send_buffer.size()) {
-            return false;  // 继续发送
-        }
-
-        HTTP_LOG_INFO("[ws] [upgrade] [sent]");
-        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Receiving;
-        return false;  // 继续接收响应
-
-    } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Receiving) {
-        auto recv_result = m_recv_awaitable->await_resume();
-        m_recv_awaitable.reset();
-
-        if (!recv_result) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", recv_result.error().message());
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsConnectionClosed, "Failed to read upgrade response"));
-        }
-
-        size_t bytes_read = recv_result.value();
-        if (bytes_read == 0) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [conn-closed]");
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsConnectionClosed, "Connection closed"));
-        }
-
-        session.m_ring_buffer.produce(bytes_read);
-
-        auto iovecs = session.m_ring_buffer.getReadIovecs();
-        auto [error_code, consumed] = upgrader.m_upgrade_response.fromIOVec(iovecs);
-
-        if (consumed > 0) {
-            session.m_ring_buffer.consume(consumed);
-        }
-
-        if (error_code == kIncomplete || error_code == kHeaderInComplete) {
-            return false;  // 需要更多数据
-        }
-
-        if (error_code != kNoError) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [parse-fail] [code={}]",
-                          static_cast<int>(error_code));
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsProtocolError, "Failed to parse upgrade response"));
-        }
-
-        // 验证升级响应
-        if (upgrader.m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}] [{}]",
-                          static_cast<int>(upgrader.m_upgrade_response.header().code()),
-                          httpStatusCodeToString(upgrader.m_upgrade_response.header().code()));
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsUpgradeFailed,
-                "Upgrade failed with status " +
-                std::to_string(static_cast<int>(upgrader.m_upgrade_response.header().code()))));
-        }
-
-        if (!upgrader.m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [accept-missing]");
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsUpgradeFailed, "Missing Sec-WebSocket-Accept header"));
-        }
-
-        std::string accept_key = upgrader.m_upgrade_response.header().headerPairs().getValue("Sec-WebSocket-Accept");
-        std::string expected_accept = WsUpgrade::generateAcceptKey(upgrader.m_ws_key);
-
-        if (accept_key != expected_accept) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [accept-invalid]");
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsUpgradeFailed, "Invalid Sec-WebSocket-Accept value"));
-        }
-
-        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
-        session.m_upgraded = true;
-        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-
-        return true;  // 升级完成
-
-    } else {
-        HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
-        return std::unexpected(WsError(kWsProtocolError, "Invalid state"));
-    }
-}
-
-#ifdef GALAY_HTTP_SSL_ENABLED
-// WsSessionUpgradeAwaitableImpl<SocketType, true> 的实现 - SslSocket 版本
-template<typename SocketType>
-bool WsSessionUpgradeAwaitableImpl<SocketType, true>::await_suspend(std::coroutine_handle<> handle) {
-    auto& upgrader = *m_upgrader;
-    auto& session = *upgrader.m_session;
-
-    if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Invalid) {
-        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Sending;
-
-        // 生成WebSocket Key
-        upgrader.m_ws_key = generateWebSocketKey();
-
-        // 构建升级请求
-        auto request = Http1_1RequestBuilder::get(session.m_url.path)
-            .header("Host", session.m_url.host + ":" + std::to_string(session.m_url.port))
-            .header("Upgrade", "websocket")
-            .header("Connection", "Upgrade")
-            .header("Sec-WebSocket-Key", upgrader.m_ws_key)
-            .header("Sec-WebSocket-Version", "13")
-            .build();
-
-        upgrader.m_send_buffer = request.toString();
-        upgrader.m_send_offset = 0;
-
-        HTTP_LOG_INFO("[ws] [upgrade] [send]");
-
-        size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
-        const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
-        upgrader.m_send_awaitable.emplace(session.m_socket.send(send_ptr, remaining));
-        return upgrader.m_send_awaitable->await_suspend(handle);
-
-    } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Sending) {
-        size_t remaining = upgrader.m_send_buffer.size() - upgrader.m_send_offset;
-        const char* send_ptr = upgrader.m_send_buffer.data() + upgrader.m_send_offset;
-        upgrader.m_send_awaitable.emplace(session.m_socket.send(send_ptr, remaining));
-        return upgrader.m_send_awaitable->await_suspend(handle);
-
-    } else {
-        if (!m_recv_awaitable) {
-            auto write_iovecs = session.m_ring_buffer.getWriteIovecs();
-            if (!write_iovecs.empty()) {
-                m_recv_awaitable.emplace(session.m_socket.recv(
-                    static_cast<char*>(write_iovecs[0].iov_base),
-                    write_iovecs[0].iov_len));
-            }
-        }
-        return m_recv_awaitable->await_suspend(handle);
-    }
-}
-
-template<typename SocketType>
-std::expected<bool, WsError> WsSessionUpgradeAwaitableImpl<SocketType, true>::await_resume() {
-    auto& upgrader = *m_upgrader;
-    auto& session = *upgrader.m_session;
-
-    if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Sending) {
-        auto send_result = upgrader.m_send_awaitable->await_resume();
-        upgrader.m_send_awaitable.reset();
-
-        if (!send_result) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", send_result.error().message());
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsConnectionClosed, "Failed to send upgrade request"));
-        }
-
-        size_t bytes_sent = send_result.value();
-        upgrader.m_send_offset += bytes_sent;
-
-        if (upgrader.m_send_offset < upgrader.m_send_buffer.size()) {
-            return false;  // 继续发送
-        }
-
-        HTTP_LOG_INFO("[ws] [upgrade] [sent]");
-        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Receiving;
-        return false;  // 继续接收响应
-
-    } else if (upgrader.m_state == WsSessionUpgraderImpl<SocketType>::State::Receiving) {
-        auto recv_result = m_recv_awaitable->await_resume();
-        m_recv_awaitable.reset();
-
-        if (!recv_result) {
-            auto& error = recv_result.error();
-            // SSL_ERROR_WANT_READ (2) 或 SSL_ERROR_WANT_WRITE (3) 表示需要重试
-            if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                HTTP_LOG_DEBUG("[ssl] [retry]");
-                return false;  // 返回 false 表示需要继续读取
-            }
-            HTTP_LOG_ERROR("[ws] [upgrade] [recv-fail] [{}]", recv_result.error().message());
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsConnectionClosed, "Failed to read upgrade response"));
-        }
-
-        size_t bytes_read = recv_result.value().size();
-        if (bytes_read == 0) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [conn-closed]");
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsConnectionClosed, "Connection closed"));
-        }
-
-        session.m_ring_buffer.produce(bytes_read);
-
-        auto iovecs = session.m_ring_buffer.getReadIovecs();
-        auto [error_code, consumed] = upgrader.m_upgrade_response.fromIOVec(iovecs);
-
-        if (consumed > 0) {
-            session.m_ring_buffer.consume(consumed);
-        }
-
-        if (error_code == kIncomplete || error_code == kHeaderInComplete) {
-            return false;  // 需要更多数据
-        }
-
-        if (error_code != kNoError) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [parse-fail] [code={}]",
-                          static_cast<int>(error_code));
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsProtocolError, "Failed to parse upgrade response"));
-        }
-
-        // 验证升级响应
-        if (upgrader.m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}] [{}]",
-                          static_cast<int>(upgrader.m_upgrade_response.header().code()),
-                          httpStatusCodeToString(upgrader.m_upgrade_response.header().code()));
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsUpgradeFailed,
-                "Upgrade failed with status " +
-                std::to_string(static_cast<int>(upgrader.m_upgrade_response.header().code()))));
-        }
-
-        if (!upgrader.m_upgrade_response.header().headerPairs().hasKey("Sec-WebSocket-Accept")) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [accept-missing]");
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsUpgradeFailed, "Missing Sec-WebSocket-Accept header"));
-        }
-
-        std::string accept_key = upgrader.m_upgrade_response.header().headerPairs().getValue("Sec-WebSocket-Accept");
-        std::string expected_accept = WsUpgrade::generateAcceptKey(upgrader.m_ws_key);
-
-        if (accept_key != expected_accept) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [accept-invalid]");
-            upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-            return std::unexpected(WsError(kWsUpgradeFailed, "Invalid Sec-WebSocket-Accept value"));
-        }
-
-        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
-        session.m_upgraded = true;
-        upgrader.m_state = WsSessionUpgraderImpl<SocketType>::State::Invalid;
-
-        return true;  // 升级完成
-
-    } else {
-        HTTP_LOG_ERROR("[state] [invalid] [await-resume]");
-        return std::unexpected(WsError(kWsProtocolError, "Invalid state"));
-    }
-}
-#endif
-
 // 类型别名 - WebSocket over TCP
 using WsSessionUpgradeAwaitable = WsSessionUpgradeAwaitableImpl<TcpSocket>;
 using WsSession = WsSessionImpl<TcpSocket>;
@@ -539,7 +872,7 @@ using WsSession = WsSessionImpl<TcpSocket>;
 } // namespace galay::websocket
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/SslSocket.h"
+#include "galay-ssl/async/SslSocket.h"
 
 namespace galay::websocket {
 

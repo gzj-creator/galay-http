@@ -247,11 +247,8 @@ private:
             HTTP_LOG_DEBUG("[h2] [prior-knowledge]");
             rb.consume(kHttp2ConnectionPrefaceLength);
 
-            while (true) {
-                auto settings_result = co_await conn.sendSettings();
-                if (!settings_result) co_return;
-                if (settings_result.value()) break;
-            }
+            auto settings_result = co_await conn.sendSettings();
+            if (!settings_result) co_return;
             success = true;
             co_return;
         }
@@ -355,11 +352,8 @@ private:
                 // 消费 preface，后续数据（客户端 SETTINGS 等）留在 RingBuffer
                 rb.consume(kHttp2ConnectionPrefaceLength);
 
-                while (true) {
-                    auto settings_result = co_await conn.sendSettings();
-                    if (!settings_result) co_return;
-                    if (settings_result.value()) break;
-                }
+                auto settings_result = co_await conn.sendSettings();
+                if (!settings_result) co_return;
                 success = true;
                 co_return;
             }

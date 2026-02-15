@@ -7,6 +7,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <cctype>
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Log.h"
 
@@ -32,8 +33,72 @@ std::atomic<int> g_passed{0};
 std::atomic<int> g_failed{0};
 std::atomic<bool> g_test_done{false};
 
+std::string normalizeExpectedEchoPath(std::string path) {
+    auto query_pos = path.find('?');
+    if (query_pos != std::string::npos) {
+        path.resize(query_pos);
+    }
+
+    std::string decoded;
+    decoded.reserve(path.size());
+
+    auto hex_value = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+        return -1;
+    };
+
+    for (size_t i = 0; i < path.size(); ++i) {
+        if (path[i] == '%' && i + 2 < path.size()) {
+            int hi = hex_value(path[i + 1]);
+            int lo = hex_value(path[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                decoded.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        decoded.push_back(path[i]);
+    }
+
+    return decoded;
+}
+
+bool parseExpectedResponseSize(const std::string& response, size_t& expected_size) {
+    auto header_end = response.find("\r\n\r\n");
+    if (header_end == std::string::npos) {
+        return false;
+    }
+
+    expected_size = header_end + 4;
+    auto content_length_pos = response.find("Content-Length:");
+    if (content_length_pos == std::string::npos || content_length_pos > header_end) {
+        return true;
+    }
+
+    content_length_pos += sizeof("Content-Length:") - 1;
+    while (content_length_pos < header_end &&
+           std::isspace(static_cast<unsigned char>(response[content_length_pos]))) {
+        ++content_length_pos;
+    }
+
+    size_t num_end = content_length_pos;
+    while (num_end < header_end &&
+           std::isdigit(static_cast<unsigned char>(response[num_end]))) {
+        ++num_end;
+    }
+
+    if (num_end > content_length_pos) {
+        expected_size += static_cast<size_t>(
+            std::stoull(response.substr(content_length_pos, num_end - content_length_pos)));
+    }
+
+    return true;
+}
+
 // 客户端测试
-Coroutine testClient(int test_id, const std::string& path) {
+Coroutine testClient(int test_id, std::string path) {
     LogInfo("=== Test #{}: {} ===", test_id, path);
 
     TcpSocket client;
@@ -69,31 +134,54 @@ Coroutine testClient(int test_id, const std::string& path) {
 
     LogInfo("Test #{}: Request sent: complete", test_id);
 
-    // 接收响应
-    char buffer[4096];
-    auto recvResult = co_await client.recv(buffer, sizeof(buffer));
-    if (!recvResult) {
-        LogError("Test #{} FAILED: Failed to receive response: {}", test_id, recvResult.error().message());
-        g_failed++;
-        co_await client.close();
-        co_return;
+    // 接收完整响应（处理分片场景）
+    std::string response;
+    size_t expected_size = 0;
+    bool header_ready = false;
+
+    while (true) {
+        char buffer[4096];
+        auto recvResult = co_await client.recv(buffer, sizeof(buffer));
+        if (!recvResult) {
+            if (response.empty()) {
+                LogError("Test #{} FAILED: Failed to receive response: {}", test_id, recvResult.error().message());
+                g_failed++;
+                co_await client.close();
+                co_return;
+            }
+            break;
+        }
+
+        auto& bytes = recvResult.value();
+        if (bytes.size() == 0) {
+            break;
+        }
+
+        response.append(bytes.c_str(), bytes.size());
+
+        if (!header_ready) {
+            header_ready = parseExpectedResponseSize(response, expected_size);
+        }
+
+        if (header_ready && response.size() >= expected_size) {
+            break;
+        }
     }
 
-    auto& bytes = recvResult.value();
-    if (bytes.size() == 0) {
+    if (response.empty()) {
         LogError("Test #{} FAILED: Empty response", test_id);
         g_failed++;
         co_await client.close();
         co_return;
     }
 
-    LogInfo("Test #{}: Response received: {} bytes", test_id, bytes.size());
-    LogInfo("Test #{}: Response content:\n{}", test_id, bytes.toStringView());
+    LogInfo("Test #{}: Response received: {} bytes", test_id, response.size());
+    LogInfo("Test #{}: Response content:\n{}", test_id, response);
 
     // 验证响应
-    std::string response(bytes.c_str(), bytes.size());
+    std::string expected_path = normalizeExpectedEchoPath(path);
     if (response.find("HTTP/1.1 200 OK") != std::string::npos &&
-        response.find("Echo: " + path) != std::string::npos) {
+        response.find("Echo: " + expected_path) != std::string::npos) {
         LogInfo("Test #{} PASSED", test_id);
         g_passed++;
     } else {

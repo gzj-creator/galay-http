@@ -164,7 +164,11 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
     // 发送多个请求
     std::vector<std::string> uris = {"/", "/hello", "/test"};
     auto session = client.getSession();
+    bool session_alive = true;
     for (const auto& uri : uris) {
+        if (!session_alive) {
+            break;
+        }
         LogInfo("Requesting: {}", uri);
 
         while (true) {
@@ -172,6 +176,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
 
             if (!result) {
                 LogError("Request failed: {}", result.error().message());
+                session_alive = false;
                 break;
             }
 

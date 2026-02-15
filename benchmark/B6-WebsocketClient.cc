@@ -100,15 +100,14 @@ Coroutine benchmarkWebSocketClient(
 
     auto session = client.getSession(WsWriterSetting::byClient());
     auto upgrader = session.upgrade();
-    while(true) {
-        auto res = co_await upgrader();
-        if(!res) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", res.error().message());
-            co_return;
-        }
-        if(res.value()) {
-            break;
-        } 
+    auto res = co_await upgrader();
+    if(!res) {
+        HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", res.error().message());
+        co_return;
+    }
+    if(!res.value()) {
+        HTTP_LOG_ERROR("[ws] [upgrade] [incomplete]");
+        co_return;
     }
 
     HTTP_LOG_INFO("[ws] [upgrade] [ok]");

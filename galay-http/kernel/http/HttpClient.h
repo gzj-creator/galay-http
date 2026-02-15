@@ -163,8 +163,9 @@ using HttpClient = HttpClientImpl<TcpSocket>;
 } // namespace galay::http
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/SslSocket.h"
-#include "galay-ssl/SslContext.h"
+#include "galay-ssl/async/SslSocket.h"
+#include "galay-ssl/ssl/SslContext.h"
+#include "SslHandshakeAwaitable.h"
 
 namespace galay::http {
 
@@ -233,10 +234,13 @@ public:
     }
 
     /**
-     * @brief 执行 SSL 握手（连接后必须调用）
+     * @brief 执行 SSL 握手（协议完成后再唤醒）
      */
     auto handshake() {
-        return m_socket->handshake();
+        if (!m_socket) {
+            throw std::runtime_error("Client not connected");
+        }
+        return handshakeCompletely(*m_socket);
     }
 
     /**

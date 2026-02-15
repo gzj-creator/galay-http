@@ -24,6 +24,8 @@ static std::atomic<bool> g_done{false};
  */
 Coroutine wssClientCoroutine(const std::string& url, int message_count) {
     try {
+        constexpr auto kOpTimeout = std::chrono::milliseconds(3000);
+
         // 1. 创建 WssClient
         WssClientConfig config;
         config.verify_peer = false;  // 跳过证书验证（用于自签名证书）
@@ -31,7 +33,7 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         WssClient client(config);
 
         // 2. TCP 连接
-        auto connect_result = co_await client.connect(url);
+        auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
             HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
             g_done = true;
@@ -40,38 +42,30 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         HTTP_LOG_INFO("[connect] [ok]");
 
         // 3. SSL 握手
-        while (!client.isHandshakeCompleted()) {
-            auto handshake_result = co_await client.handshake();
-            if (!handshake_result) {
-                auto& err = handshake_result.error();
-                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                    continue;
-                }
-                HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", err.message());
-                g_done = true;
-                co_await client.close();
-                co_return;
-            }
-            break;
+        auto handshake_result = co_await client.handshake();
+        if (!handshake_result) {
+            HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
+            g_done = true;
+            co_await client.close();
+            co_return;
         }
         HTTP_LOG_INFO("[ssl] [handshake-ok]");
 
         // 4. 获取 Session 并升级 WebSocket
         auto session = client.getSession(WsWriterSetting::byClient());
         auto upgrader = session.upgrade();
-
-        while (true) {
-            auto upgrade_result = co_await upgrader();
-            if (!upgrade_result) {
-                HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error().message());
-                g_done = true;
-                co_await client.close();
-                co_return;
-            }
-            if (upgrade_result.value()) {
-                break;  // 升级完成
-            }
+        auto upgrade_result = co_await upgrader().timeout(kOpTimeout);
+        if (!upgrade_result) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error().message());
+            g_done = true;
+            co_await client.close();
+            co_return;
+        }
+        if (!upgrade_result.value()) {
+            HTTP_LOG_ERROR("[ws] [upgrade] [incomplete]");
+            g_done = true;
+            co_await client.close();
+            co_return;
         }
         HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
@@ -79,7 +73,7 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         std::string welcome_msg;
         WsOpcode welcome_opcode;
         while (true) {
-            auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode);
+            auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode).timeout(kOpTimeout);
             if (!recv_result) {
                 HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", recv_result.error().message());
                 g_done = true;
@@ -115,7 +109,7 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
             std::string echo_msg;
             WsOpcode echo_opcode;
             while (true) {
-                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode);
+                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode).timeout(kOpTimeout);
                 if (!recv_result) {
                     HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", recv_result.error().message());
                     g_done = true;

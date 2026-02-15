@@ -42,21 +42,18 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_messages) {
     // Upgrade to WebSocket
     std::cout << "Upgrading to WebSocket..." << std::endl;
     auto upgrader = session.upgrade();
-    bool upgraded = false;
-    while (!upgraded) {
-        auto upgrade_result = co_await upgrader();
-        if (!upgrade_result) {
-            std::cerr << "Upgrade failed: " << upgrade_result.error().message() << std::endl;
-            fail_count++;
-            co_return;
-        }
-
-        if (upgrade_result.value()) {
-            upgraded = true;
-            std::cout << "Upgrade successful!" << std::endl;
-        }
-        // 如果返回 false，继续循环等待升级完成
+    auto upgrade_result = co_await upgrader();
+    if (!upgrade_result) {
+        std::cerr << "Upgrade failed: " << upgrade_result.error().message() << std::endl;
+        fail_count++;
+        co_return;
     }
+    if (!upgrade_result.value()) {
+        std::cerr << "Upgrade failed: incomplete result" << std::endl;
+        fail_count++;
+        co_return;
+    }
+    std::cout << "Upgrade successful!" << std::endl;
 
     auto& reader = session.getReader();
     auto& writer = session.getWriter();

@@ -130,7 +130,7 @@ using HttpConn = HttpConnImpl<TcpSocket>;
 } // namespace galay::http
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/SslSocket.h"
+#include "galay-ssl/async/SslSocket.h"
 namespace galay::http {
 using HttpsConn = HttpConnImpl<galay::ssl::SslSocket>;
 } // namespace galay::http

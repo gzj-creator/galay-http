@@ -3,6 +3,11 @@ project(galay-http VERSION 1.0.0 LANGUAGES CXX)
 
 set(CMAKE_PREFIX_PATH "/usr/local")
 
+# 选项（与 galay-rpc 风格保持一致）
+option(BUILD_TESTS "Build test programs" ON)
+option(BUILD_BENCHMARKS "Build benchmark programs" ON)
+option(BUILD_EXAMPLES "Build example programs" ON)
+
 # 设置默认构建类型为 Release（如果用户没有指定）
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Choose the type of build (Debug or Release)" FORCE)
@@ -12,6 +17,45 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # 包含编译选项（SSL 支持等）
 include(cmake/options.cmake)
+
+# C++23 命名模块示例（import/export）开关
+option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) support target" ON)
+
+set(GALAY_HTTP_MODULES_SUPPORTED FALSE)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+    set(GALAY_HTTP_MODULES_SUPPORTED TRUE)
+endif()
+
+if(BUILD_MODULE_EXAMPLES AND NOT GALAY_HTTP_MODULES_SUPPORTED)
+    message(WARNING "BUILD_MODULE_EXAMPLES requires CMake >= 3.28; disabling BUILD_MODULE_EXAMPLES.")
+    set(BUILD_MODULE_EXAMPLES OFF)
+endif()
+
+set(GALAY_HTTP_MODULES_GENERATOR_SUPPORTED FALSE)
+if(CMAKE_GENERATOR MATCHES "Ninja" OR CMAKE_GENERATOR MATCHES "Visual Studio")
+    set(GALAY_HTTP_MODULES_GENERATOR_SUPPORTED TRUE)
+endif()
+
+if(BUILD_MODULE_EXAMPLES AND NOT GALAY_HTTP_MODULES_GENERATOR_SUPPORTED)
+    message(WARNING "Generator '${CMAKE_GENERATOR}' does not support C++ modules; disabling BUILD_MODULE_EXAMPLES.")
+    set(BUILD_MODULE_EXAMPLES OFF)
+endif()
+
+set(GALAY_HTTP_MODULES_COMPILER_SUPPORTED FALSE)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+   CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+   CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    set(GALAY_HTTP_MODULES_COMPILER_SUPPORTED TRUE)
+endif()
+
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    set(GALAY_HTTP_MODULES_COMPILER_SUPPORTED FALSE)
+endif()
+
+if(BUILD_MODULE_EXAMPLES AND NOT GALAY_HTTP_MODULES_COMPILER_SUPPORTED)
+    message(WARNING "Compiler '${CMAKE_CXX_COMPILER_ID}' does not support required C++ module dependency scanning; disabling BUILD_MODULE_EXAMPLES.")
+    set(BUILD_MODULE_EXAMPLES OFF)
+endif()
 
 include_directories(${PROJECT_SOURCE_DIR})
 
@@ -29,9 +73,40 @@ endif()
 # ======================================
 
 add_subdirectory(galay-http)
-add_subdirectory(test)
-add_subdirectory(benchmark)
-add_subdirectory(example)
+
+if(BUILD_MODULE_EXAMPLES AND GALAY_HTTP_MODULES_SUPPORTED AND GALAY_HTTP_MODULES_GENERATOR_SUPPORTED)
+    add_library(galay-http-modules STATIC)
+    target_link_libraries(galay-http-modules PUBLIC galay-http)
+    target_compile_features(galay-http-modules PUBLIC cxx_std_23)
+    target_sources(galay-http-modules
+        PUBLIC
+            FILE_SET CXX_MODULES
+            FILES
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay.http.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay.http2.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay.websocket.cppm"
+    )
+
+    install(TARGETS galay-http-modules
+        EXPORT galay-http-targets
+        LIBRARY DESTINATION lib
+        ARCHIVE DESTINATION lib
+        RUNTIME DESTINATION bin
+        FILE_SET CXX_MODULES DESTINATION include/galay-http/module
+    )
+endif()
+
+if(BUILD_TESTS)
+    add_subdirectory(test)
+endif()
+
+if(BUILD_BENCHMARKS)
+    add_subdirectory(benchmark)
+endif()
+
+if(BUILD_EXAMPLES)
+    add_subdirectory(example)
+endif()
 
 # 配置并安装 CMake 配置文件
 include(CMakePackageConfigHelpers)

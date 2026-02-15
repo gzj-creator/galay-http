@@ -1,3 +1,9 @@
 build/
+build_ssl/
+build_mod/
+build_mod_llvm/
 .vscode/
 .cache/
+*.log
+cert/*.log
+files/*.bin

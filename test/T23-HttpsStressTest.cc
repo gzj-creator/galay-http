@@ -36,20 +36,12 @@ Coroutine keepAliveRequests(int conn_id, int requests_per_conn) {
         }
 
         // SSL 握手
-        while (!client.isHandshakeCompleted()) {
-            auto handshake_result = co_await client.handshake();
-            if (!handshake_result) {
-                auto& err = handshake_result.error();
-                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                    continue;
-                }
-                g_fail += requests_per_conn;
-                g_completed += requests_per_conn;
-                co_await client.close();
-                co_return;
-            }
-            break;
+        auto handshake_result = co_await client.handshake();
+        if (!handshake_result) {
+            g_fail += requests_per_conn;
+            g_completed += requests_per_conn;
+            co_await client.close();
+            co_return;
         }
 
         auto session = client.getSession();

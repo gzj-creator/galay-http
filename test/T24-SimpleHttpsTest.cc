@@ -38,20 +38,12 @@ Coroutine singleRequest(int id) {
 
         // SSL 握手
         std::cout << "[Request " << id << "] Handshaking..." << std::endl;
-        while (!client.isHandshakeCompleted()) {
-            auto handshake_result = co_await client.handshake();
-            if (!handshake_result) {
-                auto& err = handshake_result.error();
-                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                    continue;
-                }
-                std::cerr << "[Request " << id << "] Handshake failed: " << err.message() << std::endl;
-                g_fail++;
-                co_await client.close();
-                co_return;
-            }
-            break;
+        auto handshake_result = co_await client.handshake();
+        if (!handshake_result) {
+            std::cerr << "[Request " << id << "] Handshake failed: " << handshake_result.error().message() << std::endl;
+            g_fail++;
+            co_await client.close();
+            co_return;
         }
         std::cout << "[Request " << id << "] Handshake completed" << std::endl;
 

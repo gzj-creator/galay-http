@@ -40,15 +40,14 @@ Coroutine runWebSocketClient(const std::string& url) {
 
     // 4. 执行 WebSocket 升级
     auto upgrader = session.upgrade();
-    while (true) {
-        auto result = co_await upgrader();
-        if (!result) {
-            LogError("Upgrade failed: {}", result.error().message());
-            co_return;
-        }
-        if (result.value()) {
-            break;  // 升级完成
-        }
+    auto result = co_await upgrader();
+    if (!result) {
+        LogError("Upgrade failed: {}", result.error().message());
+        co_return;
+    }
+    if (!result.value()) {
+        LogError("Upgrade failed: incomplete result");
+        co_return;
     }
     LogInfo("WebSocket upgrade successful");
 

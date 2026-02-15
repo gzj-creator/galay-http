@@ -7,6 +7,7 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <cctype>
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
@@ -36,46 +37,46 @@ std::atomic<int> g_request_count{0};
 
 // HTTP请求处理器协程
 Coroutine handleRequest(HttpConn conn) {
-    g_request_count++;
-
-    // 获取 Reader 和 Writer
     auto reader = conn.getReader();
     auto writer = conn.getWriter();
 
-    // 读取HTTP请求
-    HttpRequest request;
-    bool requestComplete = false;
+    while (true) {
+        // 读取HTTP请求
+        HttpRequest request;
+        bool requestComplete = false;
 
-    while (!requestComplete) {
-        auto result = co_await reader.getRequest(request);
+        while (!requestComplete) {
+            auto result = co_await reader.getRequest(request);
 
-        if (!result) {
-            auto& error = result.error();
-            if (error.code() == kConnectionClose) {
-                LogInfo("Client disconnected");
-            } else {
-                LogError("Request parse error: {}", error.message());
+            if (!result) {
+                auto& error = result.error();
+                if (error.code() == kConnectionClose) {
+                    LogInfo("Client disconnected");
+                } else {
+                    LogError("Request parse error: {}", error.message());
+                }
+                co_await conn.close();
+                co_return;
             }
-            co_await conn.close();
-            co_return;
+
+            requestComplete = result.value();
         }
 
-        requestComplete = result.value();
-    }
+        int req_no = g_request_count.fetch_add(1) + 1;
 
-    LogInfo("Request #{} received: {} {}",
-            g_request_count.load(),
-            static_cast<int>(request.header().method()),
-            request.header().uri());
+        LogInfo("Request #{} received: {} {}",
+                req_no,
+                static_cast<int>(request.header().method()),
+                request.header().uri());
 
-    // 根据不同的路径返回不同的内容
-    HttpStatusCode code = HttpStatusCode::OK_200;
-    std::string content_type = "text/html; charset=utf-8";
-    std::string body;
-    std::string uri = request.header().uri();
+        // 根据不同的路径返回不同的内容
+        HttpStatusCode code = HttpStatusCode::OK_200;
+        std::string content_type = "text/html; charset=utf-8";
+        std::string body;
+        std::string uri = request.header().uri();
 
-    if (uri == "/" || uri == "/index.html") {
-        body = R"(<!DOCTYPE html>
+        if (uri == "/" || uri == "/index.html") {
+            body = R"(<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -91,8 +92,8 @@ Coroutine handleRequest(HttpConn conn) {
     </ul>
 </body>
 </html>)";
-    } else if (uri == "/hello") {
-        body = R"(<!DOCTYPE html>
+        } else if (uri == "/hello") {
+            body = R"(<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -103,8 +104,8 @@ Coroutine handleRequest(HttpConn conn) {
     <p><a href="/">Back to Home</a></p>
 </body>
 </html>)";
-    } else if (uri == "/test") {
-        body = R"(<!DOCTYPE html>
+        } else if (uri == "/test") {
+            body = R"(<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -116,17 +117,17 @@ Coroutine handleRequest(HttpConn conn) {
     <p><a href="/">Back to Home</a></p>
 </body>
 </html>)";
-    } else if (uri == "/api/info") {
-        content_type = "application/json";
-        body = R"({
+        } else if (uri == "/api/info") {
+            content_type = "application/json";
+            body = R"({
     "server": "galay-http",
     "version": "1.0.0",
     "status": "running",
     "timestamp": ")" + std::to_string(std::time(nullptr)) + R"("
 })";
-    } else {
-        code = HttpStatusCode::NotFound_404;
-        body = R"(<!DOCTYPE html>
+        } else {
+            code = HttpStatusCode::NotFound_404;
+            body = R"(<!DOCTYPE html>
 <html>
 <head>
     <meta charset="UTF-8">
@@ -138,24 +139,40 @@ Coroutine handleRequest(HttpConn conn) {
     <p><a href="/">Back to Home</a></p>
 </body>
 </html>)";
-    }
-
-    // 发送响应
-    auto response = Http1_1ResponseBuilder()
-        .status(code)
-        .header("Content-Type", content_type)
-        .header("Server", GALAY_SERVER)
-        .body(std::move(body))
-        .buildMove();
-
-    while (true) {
-        auto sendResult = co_await writer.sendResponse(response);
-        if (!sendResult) {
-            LogError("Failed to send response: {}", sendResult.error().message());
-            break;
         }
-        if (sendResult.value()) {
-            LogInfo("Response sent: complete");
+
+        bool keep_alive = true;
+        std::string conn_hdr = request.header().headerPairs().getValue("Connection");
+        if (!conn_hdr.empty()) {
+            for (auto& c : conn_hdr) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (conn_hdr == "close") {
+                keep_alive = false;
+            }
+        }
+
+        // 发送响应
+        auto response = Http1_1ResponseBuilder()
+            .status(code)
+            .header("Content-Type", content_type)
+            .header("Server", GALAY_SERVER)
+            .header("Connection", keep_alive ? "keep-alive" : "close")
+            .body(std::move(body))
+            .buildMove();
+
+        while (true) {
+            auto sendResult = co_await writer.sendResponse(response);
+            if (!sendResult) {
+                LogError("Failed to send response: {}", sendResult.error().message());
+                keep_alive = false;
+                break;
+            }
+            if (sendResult.value()) {
+                LogInfo("Response sent: complete");
+                break;
+            }
+        }
+
+        if (!keep_alive) {
             break;
         }
     }

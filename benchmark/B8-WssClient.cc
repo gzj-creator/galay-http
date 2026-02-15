@@ -66,6 +66,7 @@ Coroutine benchmarkWssClient(
 {
     ClientGuard guard(g_active_clients);
     g_total_connections.fetch_add(1);
+    constexpr auto kOpTimeout = std::chrono::milliseconds(3000);
 
     try {
         // 1. 创建 WssClient
@@ -75,7 +76,7 @@ Coroutine benchmarkWssClient(
         WssClient client(config);
 
         // 2. TCP 连接
-        auto connect_result = co_await client.connect(url);
+        auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
             HTTP_LOG_ERROR("[client-{}] [connect-fail] [{}]", client_id, connect_result.error().message());
             g_failed_connections.fetch_add(1);
@@ -83,37 +84,29 @@ Coroutine benchmarkWssClient(
         }
 
         // 3. SSL 握手
-        while (!client.isHandshakeCompleted()) {
-            auto handshake_result = co_await client.handshake();
-            if (!handshake_result) {
-                auto& err = handshake_result.error();
-                if (err.code() == galay::ssl::SslErrorCode::kHandshakeWantRead ||
-                    err.code() == galay::ssl::SslErrorCode::kHandshakeWantWrite) {
-                    continue;
-                }
-                HTTP_LOG_ERROR("[client-{}] [ssl-handshake-fail] [{}]", client_id, err.message());
-                g_failed_connections.fetch_add(1);
-                co_await client.close();
-                co_return;
-            }
-            break;
+        auto handshake_result = co_await client.handshake();
+        if (!handshake_result) {
+            HTTP_LOG_ERROR("[client-{}] [ssl-handshake-fail] [{}]", client_id, handshake_result.error().message());
+            g_failed_connections.fetch_add(1);
+            co_await client.close();
+            co_return;
         }
 
         // 4. 获取 Session 并升级 WebSocket
         auto session = client.getSession(WsWriterSetting::byClient());
         auto upgrader = session.upgrade();
-
-        while (true) {
-            auto upgrade_result = co_await upgrader();
-            if (!upgrade_result) {
-                HTTP_LOG_ERROR("[client-{}] [ws-upgrade-fail] [{}]", client_id, upgrade_result.error().message());
-                g_failed_connections.fetch_add(1);
-                co_await client.close();
-                co_return;
-            }
-            if (upgrade_result.value()) {
-                break;  // 升级完成
-            }
+        auto upgrade_result = co_await upgrader().timeout(kOpTimeout);
+        if (!upgrade_result) {
+            HTTP_LOG_ERROR("[client-{}] [ws-upgrade-fail] [{}]", client_id, upgrade_result.error().message());
+            g_failed_connections.fetch_add(1);
+            co_await client.close();
+            co_return;
+        }
+        if (!upgrade_result.value()) {
+            HTTP_LOG_ERROR("[client-{}] [ws-upgrade-incomplete]", client_id);
+            g_failed_connections.fetch_add(1);
+            co_await client.close();
+            co_return;
         }
 
         g_successful_connections.fetch_add(1);
@@ -122,7 +115,7 @@ Coroutine benchmarkWssClient(
         std::string welcome_msg;
         WsOpcode welcome_opcode;
         while (true) {
-            auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode);
+            auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode).timeout(kOpTimeout);
             if (!recv_result) {
                 HTTP_LOG_ERROR("[client-{}] [welcome-recv-fail] [{}]", client_id, recv_result.error().message());
                 co_await client.close();
@@ -158,7 +151,7 @@ Coroutine benchmarkWssClient(
             std::string echo_msg;
             WsOpcode echo_opcode;
             while (true) {
-                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode);
+                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode).timeout(kOpTimeout);
                 if (!recv_result) {
                     HTTP_LOG_ERROR("[client-{}] [recv-fail] [{}]", client_id, recv_result.error().message());
                     goto cleanup;
@@ -308,8 +301,14 @@ int main(int argc, char* argv[]) {
 
         // 等待所有客户端完成
         std::cout << "Waiting for clients to finish...\n";
-        while (g_active_clients.load() > 0) {
+        const auto wait_deadline = std::chrono::steady_clock::now() +
+            std::chrono::seconds(static_cast<int>(duration_sec) + 10);
+        while (g_active_clients.load() > 0 &&
+               std::chrono::steady_clock::now() < wait_deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        if (g_active_clients.load() > 0) {
+            std::cerr << "Warning: wait timeout, active_clients=" << g_active_clients.load() << "\n";
         }
 
         auto stop_time = std::chrono::steady_clock::now();

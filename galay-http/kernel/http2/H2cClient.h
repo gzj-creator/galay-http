@@ -6,10 +6,12 @@
 #include "Http2StreamManager.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
+#include "galay-http/protoc/http/HttpError.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
+#include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include <galay-utils/algorithm/Base64.hpp>
@@ -17,6 +19,7 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
+#include <optional>
 
 namespace galay::http2
 {
@@ -24,6 +27,517 @@ namespace galay::http2
 using namespace galay::kernel;
 using namespace galay::http;
 using namespace galay::async;
+
+class H2cSendAllAwaitable
+    : public CustomAwaitable
+    , public TimeoutSupport<H2cSendAllAwaitable>
+{
+public:
+    class ProtocolSendAwaitable : public SendAwaitable
+    {
+    public:
+        explicit ProtocolSendAwaitable(H2cSendAllAwaitable* owner)
+            : SendAwaitable(owner->m_socket->controller(), owner->sendPtr(), owner->remainingBytes())
+            , m_owner(owner)
+        {
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
+            if (m_owner->remainingBytes() == 0) {
+                return true;
+            }
+
+            if (cqe == nullptr) {
+                syncSendWindow();
+                return m_length == 0;
+            }
+
+            auto result = galay::kernel::io::handleSend(cqe);
+            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                return false;
+            }
+            if (!result) {
+                m_owner->setSendError(result.error());
+                return true;
+            }
+
+            size_t sent = result.value();
+            if (sent == 0) {
+                return false;
+            }
+
+            m_owner->consume(sent);
+            if (m_owner->remainingBytes() == 0) {
+                return true;
+            }
+
+            syncSendWindow();
+            return false;
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            while (m_owner->remainingBytes() > 0) {
+                syncSendWindow();
+
+                auto result = galay::kernel::io::handleSend(handle, m_buffer, m_length);
+                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                    return false;
+                }
+                if (!result) {
+                    m_owner->setSendError(result.error());
+                    return true;
+                }
+
+                size_t sent = result.value();
+                if (sent == 0) {
+                    return false;
+                }
+                m_owner->consume(sent);
+            }
+            return true;
+        }
+#endif
+
+    private:
+        void syncSendWindow() {
+            m_buffer = m_owner->sendPtr();
+            m_length = m_owner->remainingBytes();
+        }
+
+        H2cSendAllAwaitable* m_owner;
+    };
+
+    H2cSendAllAwaitable(TcpSocket& socket, const char* buffer, size_t length)
+        : CustomAwaitable(socket.controller())
+        , m_socket(&socket)
+        , m_buffer(buffer == nullptr ? "" : buffer)
+        , m_total_length(length)
+        , m_sent(0)
+        , m_send_awaitable(this)
+        , m_result(true)
+    {
+        if (m_total_length > 0) {
+            addTask(IOEventType::SEND, &m_send_awaitable);
+        }
+    }
+
+    bool await_ready() const noexcept {
+        return m_total_length == 0;
+    }
+
+    using CustomAwaitable::await_suspend;
+
+    std::expected<bool, HttpError> await_resume() {
+        if (!await_ready()) {
+            onCompleted();
+        }
+
+        if (!m_result.has_value()) {
+            return std::unexpected(HttpError(kSendError, m_result.error().message()));
+        }
+        if (m_http_error.has_value()) {
+            return std::unexpected(std::move(*m_http_error));
+        }
+        return true;
+    }
+
+private:
+    friend class ProtocolSendAwaitable;
+
+    size_t remainingBytes() const {
+        return m_total_length - m_sent;
+    }
+
+    const char* sendPtr() const {
+        return m_buffer + m_sent;
+    }
+
+    void consume(size_t bytes) {
+        m_sent = std::min(m_total_length, m_sent + bytes);
+    }
+
+    void setSendError(const IOError& io_error) {
+        m_http_error = HttpError(kSendError, io_error.message());
+    }
+
+    TcpSocket* m_socket;
+    const char* m_buffer;
+    size_t m_total_length;
+    size_t m_sent;
+    ProtocolSendAwaitable m_send_awaitable;
+    std::optional<HttpError> m_http_error;
+
+public:
+    std::expected<bool, IOError> m_result;
+};
+
+class H2cReadUpgradeResponseAwaitable
+    : public CustomAwaitable
+    , public TimeoutSupport<H2cReadUpgradeResponseAwaitable>
+{
+public:
+    class ProtocolRecvAwaitable : public RecvAwaitable
+    {
+    public:
+        explicit ProtocolRecvAwaitable(H2cReadUpgradeResponseAwaitable* owner)
+            : RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
+            , m_owner(owner)
+        {
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
+            if (m_owner->parseResponseFromRingBuffer()) {
+                return true;
+            }
+
+            if (cqe == nullptr) {
+                if (!prepareRecvWindow()) {
+                    m_owner->setParseError(HttpError(kHeaderTooLarge));
+                    return true;
+                }
+                return false;
+            }
+
+            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                return false;
+            }
+            if (!result) {
+                m_owner->setRecvError(result.error());
+                return true;
+            }
+
+            size_t recv_bytes = result.value().size();
+            if (recv_bytes == 0) {
+                m_owner->setParseError(HttpError(kConnectionClose));
+                return true;
+            }
+
+            m_owner->m_ring_buffer->produce(recv_bytes);
+
+            if (m_owner->parseResponseFromRingBuffer()) {
+                return true;
+            }
+
+            if (!prepareRecvWindow()) {
+                m_owner->setParseError(HttpError(kHeaderTooLarge));
+                return true;
+            }
+            return false;
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            if (m_owner->parseResponseFromRingBuffer()) {
+                return true;
+            }
+
+            while (true) {
+                if (!prepareRecvWindow()) {
+                    m_owner->setParseError(HttpError(kHeaderTooLarge));
+                    return true;
+                }
+
+                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                    return false;
+                }
+                if (!result) {
+                    m_owner->setRecvError(result.error());
+                    return true;
+                }
+
+                size_t recv_bytes = result.value().size();
+                if (recv_bytes == 0) {
+                    m_owner->setParseError(HttpError(kConnectionClose));
+                    return true;
+                }
+
+                m_owner->m_ring_buffer->produce(recv_bytes);
+
+                if (m_owner->parseResponseFromRingBuffer()) {
+                    return true;
+                }
+            }
+        }
+#endif
+
+    private:
+        bool prepareRecvWindow() {
+            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            if (write_iovecs.empty()) {
+                return false;
+            }
+            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
+            m_length = write_iovecs[0].iov_len;
+            return m_length > 0;
+        }
+
+        H2cReadUpgradeResponseAwaitable* m_owner;
+    };
+
+    H2cReadUpgradeResponseAwaitable(TcpSocket& socket, RingBuffer& ring_buffer, HttpResponse& response)
+        : CustomAwaitable(socket.controller())
+        , m_ring_buffer(&ring_buffer)
+        , m_response(&response)
+        , m_socket(&socket)
+        , m_recv_awaitable(this)
+        , m_result(true)
+    {
+        addTask(IOEventType::RECV, &m_recv_awaitable);
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    using CustomAwaitable::await_suspend;
+
+    std::expected<bool, HttpError> await_resume() {
+        onCompleted();
+
+        if (!m_result.has_value()) {
+            const auto& io_error = m_result.error();
+            if (IOError::contains(io_error.code(), kDisconnectError)) {
+                return std::unexpected(HttpError(kConnectionClose));
+            }
+            return std::unexpected(HttpError(kRecvError, io_error.message()));
+        }
+        if (m_http_error.has_value()) {
+            return std::unexpected(std::move(*m_http_error));
+        }
+        return true;
+    }
+
+private:
+    bool parseResponseFromRingBuffer() {
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        if (read_iovecs.empty()) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_response->fromIOVec(read_iovecs);
+        if (consumed > 0) {
+            m_ring_buffer->consume(consumed);
+        }
+
+        if (error_code == HttpErrorCode::kHeaderInComplete || error_code == HttpErrorCode::kIncomplete) {
+            return false;
+        }
+
+        if (error_code != HttpErrorCode::kNoError) {
+            setParseError(HttpError(error_code));
+            return true;
+        }
+
+        return m_response->isComplete();
+    }
+
+    void setRecvError(const IOError& io_error) {
+        m_http_error = HttpError(kRecvError, io_error.message());
+    }
+
+    void setParseError(HttpError&& error) {
+        m_http_error = std::move(error);
+    }
+
+    RingBuffer* m_ring_buffer;
+    HttpResponse* m_response;
+    TcpSocket* m_socket;
+    ProtocolRecvAwaitable m_recv_awaitable;
+    std::optional<HttpError> m_http_error;
+
+public:
+    std::expected<bool, IOError> m_result;
+};
+
+class H2cReadSettingsFrameAwaitable
+    : public CustomAwaitable
+    , public TimeoutSupport<H2cReadSettingsFrameAwaitable>
+{
+public:
+    class ProtocolRecvAwaitable : public RecvAwaitable
+    {
+    public:
+        explicit ProtocolRecvAwaitable(H2cReadSettingsFrameAwaitable* owner)
+            : RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
+            , m_owner(owner)
+        {
+        }
+
+#ifdef USE_IOURING
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
+            if (m_owner->tryConsumeSettingsFrame()) {
+                return true;
+            }
+
+            if (cqe == nullptr) {
+                if (!prepareRecvWindow()) {
+                    m_owner->setProtocolError("RingBuffer is full while waiting SETTINGS");
+                    return true;
+                }
+                return false;
+            }
+
+            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                return false;
+            }
+            if (!result) {
+                m_owner->setRecvError(result.error());
+                return true;
+            }
+
+            size_t recv_bytes = result.value().size();
+            if (recv_bytes == 0) {
+                m_owner->setProtocolError("peer closed while waiting SETTINGS");
+                return true;
+            }
+
+            m_owner->m_ring_buffer->produce(recv_bytes);
+
+            if (m_owner->tryConsumeSettingsFrame()) {
+                return true;
+            }
+
+            if (!prepareRecvWindow()) {
+                m_owner->setProtocolError("RingBuffer is full while waiting SETTINGS");
+                return true;
+            }
+            return false;
+        }
+#else
+        bool handleComplete(GHandle handle) override {
+            if (m_owner->tryConsumeSettingsFrame()) {
+                return true;
+            }
+
+            while (true) {
+                if (!prepareRecvWindow()) {
+                    m_owner->setProtocolError("RingBuffer is full while waiting SETTINGS");
+                    return true;
+                }
+
+                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                    return false;
+                }
+                if (!result) {
+                    m_owner->setRecvError(result.error());
+                    return true;
+                }
+
+                size_t recv_bytes = result.value().size();
+                if (recv_bytes == 0) {
+                    m_owner->setProtocolError("peer closed while waiting SETTINGS");
+                    return true;
+                }
+
+                m_owner->m_ring_buffer->produce(recv_bytes);
+                if (m_owner->tryConsumeSettingsFrame()) {
+                    return true;
+                }
+            }
+        }
+#endif
+
+    private:
+        bool prepareRecvWindow() {
+            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            if (write_iovecs.empty()) {
+                return false;
+            }
+            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
+            m_length = write_iovecs[0].iov_len;
+            return m_length > 0;
+        }
+
+        H2cReadSettingsFrameAwaitable* m_owner;
+    };
+
+    H2cReadSettingsFrameAwaitable(TcpSocket& socket, RingBuffer& ring_buffer)
+        : CustomAwaitable(socket.controller())
+        , m_ring_buffer(&ring_buffer)
+        , m_socket(&socket)
+        , m_recv_awaitable(this)
+        , m_result(true)
+    {
+        addTask(IOEventType::RECV, &m_recv_awaitable);
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    using CustomAwaitable::await_suspend;
+
+    std::expected<bool, Http2Error> await_resume() {
+        onCompleted();
+
+        if (!m_result.has_value()) {
+            return std::unexpected(Http2Error(Http2ErrorCode::InternalError, m_result.error().message()));
+        }
+        if (m_http2_error.has_value()) {
+            return std::unexpected(std::move(*m_http2_error));
+        }
+        return true;
+    }
+
+private:
+    bool tryConsumeSettingsFrame() {
+        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        size_t available = 0;
+        for (const auto& iov : read_iovecs) {
+            available += iov.iov_len;
+        }
+
+        if (available < kHttp2FrameHeaderLength) {
+            return false;
+        }
+
+        uint8_t header_buf[kHttp2FrameHeaderLength];
+        size_t copied = 0;
+        for (const auto& iov : read_iovecs) {
+            const size_t to_copy = std::min(kHttp2FrameHeaderLength - copied, iov.iov_len);
+            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+            copied += to_copy;
+            if (copied >= kHttp2FrameHeaderLength) {
+                break;
+            }
+        }
+
+        const Http2FrameHeader frame_header = Http2FrameHeader::deserialize(header_buf);
+        const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(frame_header.length);
+        if (available < frame_size) {
+            return false;
+        }
+
+        if (frame_header.type != Http2FrameType::Settings) {
+            setProtocolError("Unexpected frame type while waiting SETTINGS: " + http2FrameTypeToString(frame_header.type));
+            return true;
+        }
+
+        m_ring_buffer->consume(frame_size);
+        return true;
+    }
+
+    void setRecvError(const IOError& io_error) {
+        m_http2_error = Http2Error(Http2ErrorCode::InternalError, io_error.message());
+    }
+
+    void setProtocolError(std::string message) {
+        m_http2_error = Http2Error(Http2ErrorCode::ProtocolError, std::move(message));
+    }
+
+    RingBuffer* m_ring_buffer;
+    TcpSocket* m_socket;
+    ProtocolRecvAwaitable m_recv_awaitable;
+    std::optional<Http2Error> m_http2_error;
+
+public:
+    std::expected<bool, IOError> m_result;
+};
 
 /**
  * @brief H2c 客户端配置
@@ -179,34 +693,20 @@ inline Coroutine H2cClient::upgrade(const std::string& path) {
     // 2. 发送 Upgrade 请求
     HTTP_LOG_INFO("[h2c] [upgrade] [send]");
     {
-        size_t offset = 0;
-        while (offset < send_buffer.size()) {
-            auto result = co_await m_socket->send(send_buffer.data() + offset, send_buffer.size() - offset);
-            if (!result) {
-                HTTP_LOG_ERROR("[h2c] [upgrade] [send-fail] [{}]", result.error().message());
-                co_return;
-            }
-            offset += result.value();
+        auto result = co_await H2cSendAllAwaitable(*m_socket, send_buffer.data(), send_buffer.size());
+        if (!result) {
+            HTTP_LOG_ERROR("[h2c] [upgrade] [send-fail] [{}]", result.error().message());
+            co_return;
         }
     }
 
     // 3. 接收 101 Switching Protocols 响应
     HTTP_LOG_INFO("[h2c] [upgrade] [wait]");
     HttpResponse upgrade_response;
-    while (!upgrade_response.isComplete()) {
-        auto result = co_await m_socket->readv(m_ring_buffer->getWriteIovecs());
+    {
+        auto result = co_await H2cReadUpgradeResponseAwaitable(*m_socket, *m_ring_buffer, upgrade_response);
         if (!result) {
             HTTP_LOG_ERROR("[h2c] [upgrade] [recv-fail] [{}]", result.error().message());
-            co_return;
-        }
-        m_ring_buffer->produce(result.value());
-
-        auto [err, consumed] = upgrade_response.fromIOVec(m_ring_buffer->getReadIovecs());
-        if (consumed > 0) {
-            m_ring_buffer->consume(consumed);
-        }
-        if (err != HttpErrorCode::kNoError && err != HttpErrorCode::kIncomplete && err != HttpErrorCode::kHeaderInComplete) {
-            HTTP_LOG_ERROR("[h2c] [upgrade] [parse-fail] [code={}]", static_cast<int>(err));
             co_return;
         }
     }
@@ -235,15 +735,11 @@ inline Coroutine H2cClient::upgrade(const std::string& path) {
 
     // 4. 发送 HTTP/2 Connection Preface
     {
-        size_t offset = 0;
-        while (offset < kHttp2ConnectionPrefaceLength) {
-            auto result = co_await m_socket->send(
-                kHttp2ConnectionPreface.data() + offset, kHttp2ConnectionPrefaceLength - offset);
-            if (!result) {
-                HTTP_LOG_ERROR("[h2c] [preface] [send-fail] [{}]", result.error().message());
-                co_return;
-            }
-            offset += result.value();
+        auto result = co_await H2cSendAllAwaitable(
+            *m_socket, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength);
+        if (!result) {
+            HTTP_LOG_ERROR("[h2c] [preface] [send-fail] [{}]", result.error().message());
+            co_return;
         }
     }
     HTTP_LOG_INFO("[h2c] [preface] [sent]");
@@ -256,59 +752,22 @@ inline Coroutine H2cClient::upgrade(const std::string& path) {
         settings.header().stream_id = 0;
         std::string settings_data = settings.serialize();
 
-        size_t offset = 0;
-        while (offset < settings_data.size()) {
-            auto result = co_await m_socket->send(settings_data.data() + offset, settings_data.size() - offset);
-            if (!result) {
-                HTTP_LOG_ERROR("[h2c] [settings] [send-fail] [{}]", result.error().message());
-                co_return;
-            }
-            offset += result.value();
+        auto result = co_await H2cSendAllAwaitable(*m_socket, settings_data.data(), settings_data.size());
+        if (!result) {
+            HTTP_LOG_ERROR("[h2c] [settings] [send-fail] [{}]", result.error().message());
+            co_return;
         }
     }
     HTTP_LOG_INFO("[h2c] [settings] [sent] [wait]");
 
     // 6. 接收服务端 SETTINGS 帧
-    while (true) {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
-        size_t available = 0;
-        for (const auto& iov : read_iovecs) {
-            available += iov.iov_len;
-        }
-
-        if (available >= kHttp2FrameHeaderLength) {
-            // 读取帧头
-            uint8_t header_buf[kHttp2FrameHeaderLength];
-            size_t off = 0;
-            for (const auto& iov : read_iovecs) {
-                size_t to_copy = std::min(kHttp2FrameHeaderLength - off, iov.iov_len);
-                std::memcpy(header_buf + off, iov.iov_base, to_copy);
-                off += to_copy;
-                if (off >= kHttp2FrameHeaderLength) break;
-            }
-
-            Http2FrameHeader frame_header = Http2FrameHeader::deserialize(header_buf);
-
-            if (available >= kHttp2FrameHeaderLength + frame_header.length) {
-                if (frame_header.type != Http2FrameType::Settings) {
-                    HTTP_LOG_ERROR("[h2c] [settings] [unexpected] [type={}]",
-                                  http2FrameTypeToString(frame_header.type));
-                    co_return;
-                }
-
-                HTTP_LOG_INFO("[h2c] [settings] [recv-ok]");
-                m_ring_buffer->consume(kHttp2FrameHeaderLength + frame_header.length);
-                break;
-            }
-        }
-
-        // 需要更多数据
-        auto result = co_await m_socket->readv(m_ring_buffer->getWriteIovecs());
+    {
+        auto result = co_await H2cReadSettingsFrameAwaitable(*m_socket, *m_ring_buffer);
         if (!result) {
-            HTTP_LOG_ERROR("[h2c] [settings] [recv-fail] [{}]", result.error().message());
+            HTTP_LOG_ERROR("[h2c] [settings] [recv-fail] [{}]", result.error().toString());
             co_return;
         }
-        m_ring_buffer->produce(result.value());
+        HTTP_LOG_INFO("[h2c] [settings] [recv-ok]");
     }
 
     // 7. 发送 SETTINGS ACK
@@ -318,14 +777,10 @@ inline Coroutine H2cClient::upgrade(const std::string& path) {
         ack.header().stream_id = 0;
         std::string ack_data = ack.serialize();
 
-        size_t offset = 0;
-        while (offset < ack_data.size()) {
-            auto result = co_await m_socket->send(ack_data.data() + offset, ack_data.size() - offset);
-            if (!result) {
-                HTTP_LOG_ERROR("[h2c] [settings-ack] [send-fail] [{}]", result.error().message());
-                co_return;
-            }
-            offset += result.value();
+        auto result = co_await H2cSendAllAwaitable(*m_socket, ack_data.data(), ack_data.size());
+        if (!result) {
+            HTTP_LOG_ERROR("[h2c] [settings-ack] [send-fail] [{}]", result.error().message());
+            co_return;
         }
     }
     HTTP_LOG_INFO("[h2c] [settings-ack] [sent]");
@@ -391,6 +846,11 @@ inline Http2Stream::ptr H2cClient::post(const std::string& path,
 
 inline Coroutine H2cClient::shutdown() {
     if (!m_conn || !m_conn->streamManager()) {
+        if (m_socket) {
+            co_await m_socket->close();
+            m_socket.reset();
+        }
+        m_ring_buffer.reset();
         m_upgraded = false;
         co_return;
     }
@@ -404,16 +864,22 @@ inline Coroutine H2cClient::shutdown() {
             co_await waiter->wait();
         }
 
-        // 非 awaitable 关闭：设置 closing 标志 + shutdown(fd)，
-        // 触发 readerLoop 退出，避免 co_await close() 的调度问题
+        // 先触发 readerLoop 退出，再等待管理器自然停机。
         m_conn->initiateClose();
 
-        // 等待 start() 自然完成
+        // 等待 start() 自然完成（reader/writer 全部退出）
         while (mgr->isRunning()) {
             co_await galay::kernel::sleep(std::chrono::milliseconds(1));
         }
     }
 
+    // 确保执行 addClose 清理 kqueue 注册，并关闭 fd。
+    // 仅 initiateClose() 不会执行 addClose，直接销毁 m_conn 可能留下悬空 udata。
+    co_await m_conn->close();
+
+    m_conn.reset();
+    m_socket.reset();
+    m_ring_buffer.reset();
     m_upgraded = false;
     co_return;
 }
