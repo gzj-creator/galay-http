@@ -614,14 +614,18 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
         lastModified = std::time(nullptr);
     }
 
-    std::string etag = ETagGenerator::generateStrong(filePath, fileSize, lastModified);
+    const bool enableEtag = config.isEnableETag();
+    std::string etag;
+    if (enableEtag) {
+        etag = ETagGenerator::generateStrong(filePath, fileSize, lastModified);
+    }
     std::string lastModifiedStr = ETagGenerator::formatHttpDate(lastModified);
 
     auto writer = conn.getWriter();
 
     // 1. 处理 If-Match (前置条件)
     std::string ifMatch = req.header().headerPairs().getValue("If-Match");
-    if (!ifMatch.empty() && !ETagGenerator::matchIfMatch(etag, ifMatch)) {
+    if (enableEtag && !ifMatch.empty() && !ETagGenerator::matchIfMatch(etag, ifMatch)) {
         auto response = Http1_1ResponseBuilder()
             .status(HttpStatusCode::PreconditionFailed_412)
             .header("ETag", etag)
@@ -636,7 +640,7 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
 
     // 2. 处理 If-None-Match (ETag 条件请求)
     std::string ifNoneMatch = req.header().headerPairs().getValue("If-None-Match");
-    if (ETagGenerator::matchIfNoneMatch(etag, ifNoneMatch)) {
+    if (enableEtag && ETagGenerator::matchIfNoneMatch(etag, ifNoneMatch)) {
         // ETag 匹配，返回 304 Not Modified
         auto response = Http1_1ResponseBuilder()
             .status(HttpStatusCode::NotModified_304)
@@ -703,13 +707,15 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
     // 根据配置决定传输模式
     FileTransferMode mode = config.decideTransferMode(fileSize);
     // 构建响应头
-    auto response = Http1_1ResponseBuilder()
+    auto responseBuilder = Http1_1ResponseBuilder()
         .status(HttpStatusCode::OK_200)
         .header("Content-Type", mimeType)
-        .header("ETag", etag)
         .header("Last-Modified", lastModifiedStr)
-        .header("Accept-Ranges", "bytes")
-        .buildMove();
+        .header("Accept-Ranges", "bytes");
+    if (enableEtag) {
+        responseBuilder.header("ETag", etag);
+    }
+    auto response = responseBuilder.buildMove();
     HTTP_LOG_DEBUG("[send] [{}] [{}] [mode={}]", filePath, fileSize, static_cast<int>(mode));
 
     switch (mode) {
@@ -875,15 +881,17 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
     auto writer = conn.getWriter();
 
     // 构建 206 Partial Content 响应
-    auto response = Http1_1ResponseBuilder()
+    auto responseBuilder = Http1_1ResponseBuilder()
         .status(HttpStatusCode::PartialContent_206)
         .header("Content-Type", mimeType)
         .header("Content-Range", HttpRangeParser::makeContentRange(range, fileSize))
         .header("Content-Length", std::to_string(range.length))
-        .header("ETag", etag)
         .header("Last-Modified", lastModified)
-        .header("Accept-Ranges", "bytes")
-        .buildMove();
+        .header("Accept-Ranges", "bytes");
+    if (!etag.empty()) {
+        responseBuilder.header("ETag", etag);
+    }
+    auto response = responseBuilder.buildMove();
 
     // 发送响应头
     HttpResponseHeader header = response.header();
@@ -983,13 +991,15 @@ Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
 
     // 构建 206 Partial Content 响应（multipart/byteranges）
     std::string boundary = rangeResult.boundary;
-    auto response = Http1_1ResponseBuilder()
+    auto responseBuilder = Http1_1ResponseBuilder()
         .status(HttpStatusCode::PartialContent_206)
         .header("Content-Type", "multipart/byteranges; boundary=" + boundary)
-        .header("ETag", etag)
         .header("Last-Modified", lastModified)
-        .header("Accept-Ranges", "bytes")
-        .buildMove();
+        .header("Accept-Ranges", "bytes");
+    if (!etag.empty()) {
+        responseBuilder.header("ETag", etag);
+    }
+    auto response = responseBuilder.buildMove();
 
     // 计算总长度（包括所有边界和头部）
     size_t totalLength = 0;

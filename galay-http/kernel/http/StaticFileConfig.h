@@ -50,6 +50,7 @@ public:
      *          - 小文件阈值：64KB
      *          - 大文件阈值：1MB
      *          - Chunk 大小：64KB
+     *          - ETag：启用
      */
     StaticFileConfig()
         : m_transfer_mode(FileTransferMode::AUTO)
@@ -58,6 +59,7 @@ public:
         , m_chunk_size(64 * 1024)                  // 64KB
         , m_sendfile_chunk_size(10 * 1024 * 1024) // 10MB
         , m_enable_cache(false)
+        , m_enable_etag(true)
         , m_max_cache_size(100 * 1024 * 1024)     // 100MB
     {
     }
@@ -160,6 +162,23 @@ public:
     }
 
     /**
+     * @brief 设置是否启用 ETag 条件请求
+     * @param enable 是否启用
+     * @details 启用后支持 If-None-Match / If-Match，并可返回 304
+     */
+    void setEnableETag(bool enable) {
+        m_enable_etag = enable;
+    }
+
+    /**
+     * @brief 获取是否启用 ETag 条件请求
+     * @return 是否启用
+     */
+    bool isEnableETag() const {
+        return m_enable_etag;
+    }
+
+    /**
      * @brief 设置最大缓存大小
      * @param size 最大缓存大小（字节）
      */
@@ -202,6 +221,7 @@ private:
     size_t m_chunk_size;                 ///< Chunk 大小（字节）
     size_t m_sendfile_chunk_size;        ///< SendFile 块大小（字节）
     bool m_enable_cache;                 ///< 是否启用缓存
+    bool m_enable_etag;                  ///< 是否启用 ETag 条件请求
     size_t m_max_cache_size;             ///< 最大缓存大小（字节）
 };
 
