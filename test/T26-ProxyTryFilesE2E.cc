@@ -312,7 +312,7 @@ int main()
 
     HttpRouter proxy_router;
     proxy_router.mount("/static", static_dir);
-    proxy_router.proxy("127.0.0.1", upstream_port);
+    proxy_router.proxy("/", "127.0.0.1", upstream_port);
     proxy_router.proxy("/raw", "127.0.0.1", upstream_port, ProxyMode::Raw);
 
     HttpServerConfig proxy_config;

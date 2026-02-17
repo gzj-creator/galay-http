@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    router.proxy(upstream_host, upstream_port,
+    router.proxy("/", upstream_host, upstream_port,
                  use_raw_proxy ? ProxyMode::Raw : ProxyMode::Http);
 
     HttpServerConfig config;

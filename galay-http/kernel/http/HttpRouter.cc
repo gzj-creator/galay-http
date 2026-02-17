@@ -788,28 +788,19 @@ void HttpRouter::proxy(const std::string& routePrefix,
         addHandler<HttpMethod::GET, HttpMethod::POST, HttpMethod::PUT,
                    HttpMethod::PATCH, HttpMethod::DELETE, HttpMethod::HEAD,
                    HttpMethod::OPTIONS>(normalizedPrefix, handler);
+    } else {
+        // 统一语义：proxy("/") 同时作为本地路由未命中时的 fallback proxy
+        if (!m_fallbackProxyHandlerState) {
+            m_fallbackProxyHandlerState = std::make_shared<std::optional<HttpRouteHandler>>();
+        }
+        *m_fallbackProxyHandlerState = createProxyHandler("/", upstreamHost, upstreamPort, mode);
+        HTTP_LOG_INFO("[proxy-fallback] [enable] [{}:{}] [mode={}]",
+                      upstreamHost,
+                      upstreamPort,
+                      mode == ProxyMode::Raw ? "raw" : "http");
     }
 
     HTTP_LOG_INFO("[proxy] [mount] [{}:{}] [{}]", upstreamHost, upstreamPort, normalizedPrefix);
-}
-
-void HttpRouter::proxy(const std::string& upstreamHost,
-                       uint16_t upstreamPort,
-                       ProxyMode mode)
-{
-    if (upstreamHost.empty() || upstreamPort == 0) {
-        HTTP_LOG_ERROR("[proxy-fallback] [invalid-upstream] [{}:{}]", upstreamHost, upstreamPort);
-        return;
-    }
-
-    if (!m_fallbackProxyHandlerState) {
-        m_fallbackProxyHandlerState = std::make_shared<std::optional<HttpRouteHandler>>();
-    }
-    *m_fallbackProxyHandlerState = createProxyHandler("/", upstreamHost, upstreamPort, mode);
-    HTTP_LOG_INFO("[proxy-fallback] [enable] [{}:{}] [mode={}]",
-                  upstreamHost,
-                  upstreamPort,
-                  mode == ProxyMode::Raw ? "raw" : "http");
 }
 
 bool HttpRouter::hasFallbackProxy() const

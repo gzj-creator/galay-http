@@ -344,11 +344,10 @@ void testFallbackProxyConfig() {
     HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
-    assert(router.size() == 0);
-    router.proxy("127.0.0.1", 8080, ProxyMode::Http);
-    // fallback proxy 不注册路由，不影响本地路由表大小
-    assert(router.size() == 0);
-    HTTP_LOG_INFO("✓ Fallback proxy configured via proxy(host, port)");
+    router.proxy("/", "127.0.0.1", 8080, ProxyMode::Http);
+    auto match = router.findHandler(HttpMethod::GET, "/any/path");
+    assert(match.handler != nullptr);
+    HTTP_LOG_INFO("✓ Fallback proxy configured via proxy(\"/\")");
 
     HTTP_LOG_INFO("✓ All fallback proxy config tests passed\n");
 }

@@ -199,19 +199,10 @@ public:
      * @details 注册一个通配符路由，将请求转发到上游 HTTP 服务
      *          例如：proxy("/api", "127.0.0.1", 8080)
      *          访问 /api/users 会转发为 http://127.0.0.1:8080/users
+     *          当 routePrefix 为 "/" 时，也会作为本地路由未命中时的 fallback proxy
      */
     void proxy(const std::string& routePrefix,
                const std::string& upstreamHost,
-               uint16_t upstreamPort,
-               ProxyMode mode = ProxyMode::Http);
-
-    /**
-     * @brief 设置默认回退代理（仅在本地路由未命中时生效）
-     * @param upstreamHost 上游主机
-     * @param upstreamPort 上游端口
-     * @param mode 代理模式
-     */
-    void proxy(const std::string& upstreamHost,
                uint16_t upstreamPort,
                ProxyMode mode = ProxyMode::Http);
 
