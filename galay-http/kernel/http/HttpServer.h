@@ -93,12 +93,18 @@ public:
 
                 if (!read_result) {
                     const auto& error = read_result.error();
-                    if (error.code() == kConnectionClose) {
-                        HTTP_LOG_WARN("[disconnect]");
+                    const std::string message = error.message();
+                    const bool is_disconnect_like =
+                        error.code() == kConnectionClose ||
+                        ((error.code() == kRecvError || error.code() == kTcpRecvError) &&
+                         message.find("Connection disconnected") != std::string::npos);
+
+                    if (is_disconnect_like) {
+                        HTTP_LOG_WARN("[disconnect] [{}]", message);
                     } else if (error.code() == kRecvTimeOut || error.code() == kSendTimeOut || error.code() == kRequestTimeOut) {
-                        HTTP_LOG_WARN("[timeout] [request] [{}]", error.message());
+                        HTTP_LOG_WARN("[timeout] [request] [{}]", message);
                     } else {
-                        HTTP_LOG_ERROR("[recv] [fail] [{}]", error.message());
+                        HTTP_LOG_ERROR("[recv] [fail] [{}]", message);
                     }
                     break;
                 }

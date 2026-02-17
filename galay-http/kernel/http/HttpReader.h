@@ -243,6 +243,10 @@ private:
     }
 
     void setRecvError(const galay::kernel::IOError& io_error) {
+        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
+            m_http_error = HttpError(kConnectionClose, io_error.message());
+            return;
+        }
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 
@@ -677,6 +681,10 @@ private:
     }
 
     void setRecvError(const galay::kernel::IOError& io_error) {
+        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
+            m_http_error = HttpError(kConnectionClose, io_error.message());
+            return;
+        }
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 
@@ -1090,6 +1098,10 @@ private:
     }
 
     void setRecvError(const galay::kernel::IOError& io_error) {
+        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
+            m_http_error = HttpError(kConnectionClose, io_error.message());
+            return;
+        }
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 
