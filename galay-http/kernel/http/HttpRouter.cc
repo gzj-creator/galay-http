@@ -328,7 +328,8 @@ Coroutine relayRawUpstreamToDownstream(TcpSocket& upstream,
 } // namespace
 
 HttpRouter::HttpRouter()
-    : m_routeCount(0)
+    : m_fallbackProxyHandlerState(std::make_shared<std::optional<HttpRouteHandler>>())
+    , m_routeCount(0)
 {
 }
 
@@ -418,7 +419,9 @@ void HttpRouter::clear()
 {
     m_exactRoutes.clear();
     m_fuzzyRoutes.clear();
-    m_fallbackProxyHandler.reset();
+    if (m_fallbackProxyHandlerState) {
+        m_fallbackProxyHandlerState->reset();
+    }
     m_routeCount = 0;
 }
 
@@ -672,8 +675,27 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
     // 保存挂载信息
     m_mountedDirs[routePrefix] = dirPath;
 
-    // 创建动态文件处理器
-    auto handler = createStaticFileHandler(routePrefix, dirPath, config);
+    // 创建动态文件处理器。文件未命中时，优先走 fallback proxy（如已配置）
+    auto fallback_state = m_fallbackProxyHandlerState;
+    HttpRouteHandler fallback = [fallback_state](HttpConn& conn, HttpRequest req) -> Coroutine {
+        if (fallback_state && fallback_state->has_value()) {
+            co_await fallback_state->value()(conn, std::move(req)).wait();
+            co_return;
+        }
+
+        auto response = Http1_1ResponseBuilder()
+            .status(HttpStatusCode::NotFound_404)
+            .body("404 Not Found")
+            .buildMove();
+        auto writer = conn.getWriter();
+        while (true) {
+            auto send_result = co_await writer.sendResponse(response);
+            if (!send_result || send_result.value()) break;
+        }
+        co_return;
+    };
+
+    auto handler = createStaticFileHandler(routePrefix, dirPath, config, std::move(fallback));
 
     // 注册通配符路由：routePrefix/**
     std::string wildcardPath = routePrefix;
@@ -780,7 +802,10 @@ void HttpRouter::proxy(const std::string& upstreamHost,
         return;
     }
 
-    m_fallbackProxyHandler = createProxyHandler("/", upstreamHost, upstreamPort, mode);
+    if (!m_fallbackProxyHandlerState) {
+        m_fallbackProxyHandlerState = std::make_shared<std::optional<HttpRouteHandler>>();
+    }
+    *m_fallbackProxyHandlerState = createProxyHandler("/", upstreamHost, upstreamPort, mode);
     HTTP_LOG_INFO("[proxy-fallback] [enable] [{}:{}] [mode={}]",
                   upstreamHost,
                   upstreamPort,
@@ -789,15 +814,15 @@ void HttpRouter::proxy(const std::string& upstreamHost,
 
 bool HttpRouter::hasFallbackProxy() const
 {
-    return m_fallbackProxyHandler.has_value();
+    return m_fallbackProxyHandlerState && m_fallbackProxyHandlerState->has_value();
 }
 
 HttpRouteHandler* HttpRouter::fallbackProxyHandler()
 {
-    if (!m_fallbackProxyHandler.has_value()) {
+    if (!m_fallbackProxyHandlerState || !m_fallbackProxyHandlerState->has_value()) {
         return nullptr;
     }
-    return &m_fallbackProxyHandler.value();
+    return &m_fallbackProxyHandlerState->value();
 }
 
 HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePrefix,

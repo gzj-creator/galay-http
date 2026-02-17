@@ -14,6 +14,7 @@
 #include <vector>
 #include <map>
 #include <cstdint>
+#include <optional>
 
 namespace galay::http
 {
@@ -387,8 +388,8 @@ private:
     // 动态挂载的目录映射：路由前缀 -> 文件系统目录路径
     std::unordered_map<std::string, std::string> m_mountedDirs;
 
-    // 默认回退代理（本地路由 miss 时使用）
-    std::optional<HttpRouteHandler> m_fallbackProxyHandler;
+    // 默认回退代理（本地路由 miss 或 mount 文件未命中时使用）
+    std::shared_ptr<std::optional<HttpRouteHandler>> m_fallbackProxyHandlerState;
 
     // 路由计数
     size_t m_routeCount = 0;

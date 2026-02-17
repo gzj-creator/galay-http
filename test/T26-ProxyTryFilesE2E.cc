@@ -311,7 +311,7 @@ int main()
     upstream_server.start(std::move(upstream_router));
 
     HttpRouter proxy_router;
-    proxy_router.tryFiles("/static", static_dir, "127.0.0.1", upstream_port);
+    proxy_router.mount("/static", static_dir);
     proxy_router.proxy("127.0.0.1", upstream_port);
     proxy_router.proxy("/raw", "127.0.0.1", upstream_port, ProxyMode::Raw);
 
