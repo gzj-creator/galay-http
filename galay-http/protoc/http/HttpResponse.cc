@@ -1,4 +1,64 @@
 #include "HttpResponse.h"
+#include "HttpChunk.h"
+#include <algorithm>
+#include <cctype>
+
+namespace {
+
+void removeHeaderPairLoose(galay::http::HeaderPair& headers, const std::string& key)
+{
+    headers.removeHeaderPair(key);
+
+    std::string lower = key;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (lower != key) {
+        headers.removeHeaderPair(lower);
+    }
+
+    std::string upper = key;
+    std::transform(upper.begin(), upper.end(), upper.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    if (upper != key && upper != lower) {
+        headers.removeHeaderPair(upper);
+    }
+
+    std::string canonical = lower;
+    bool word_start = true;
+    for (char& ch : canonical) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        ch = static_cast<char>(word_start ? std::toupper(c) : std::tolower(c));
+        word_start = (ch == '-');
+    }
+    if (canonical != key && canonical != lower && canonical != upper) {
+        headers.removeHeaderPair(canonical);
+    }
+}
+
+std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t skip_bytes)
+{
+    std::vector<iovec> sliced;
+    sliced.reserve(iovecs.size());
+
+    size_t skip = skip_bytes;
+    for (const auto& iov : iovecs) {
+        if (skip >= iov.iov_len) {
+            skip -= iov.iov_len;
+            continue;
+        }
+
+        const char* base = static_cast<const char*>(iov.iov_base);
+        iovec part{};
+        part.iov_base = const_cast<char*>(base + skip);
+        part.iov_len = iov.iov_len - skip;
+        sliced.push_back(part);
+        skip = 0;
+    }
+
+    return sliced;
+}
+
+} // namespace
 
 namespace galay::http
 { 
@@ -67,23 +127,53 @@ namespace galay::http
             newly_consumed = header_consumed;
             m_headerParsed = true;
 
-            // header解析完成，获取Content-Length
-            std::string content_length_str = m_header.headerPairs().getValue("Content-Length");
-            if (content_length_str.empty() || m_header.isChunked()) {
-                // 没有body或者是chunked编码，解析完成
+            if (m_header.isChunked()) {
+                // chunked body 继续往下解析
+            } else {
+                // header解析完成，获取Content-Length
+                std::string content_length_str = m_header.headerPairs().getValue("Content-Length");
+                if (content_length_str.empty()) {
+                    // 没有body，解析完成
+                    return {kNoError, newly_consumed};
+                }
+
+                try {
+                    m_contentLength = std::stoull(content_length_str);
+                } catch (...) {
+                    return {kBadRequest, -1};
+                }
+
+                if (m_contentLength == 0) {
+                    return {kNoError, newly_consumed};
+                }
+                m_body.reserve(m_contentLength);
+            }
+        }
+
+        if (m_header.isChunked()) {
+            auto body_iovecs = sliceIovecs(iovecs, header_bytes);
+            if (body_iovecs.empty()) {
                 return {kNoError, newly_consumed};
             }
 
-            try {
-                m_contentLength = std::stoull(content_length_str);
-            } catch (...) {
-                return {kBadRequest, -1};
+            auto chunk_result = Chunk::fromIOVec(body_iovecs, m_body);
+            if (!chunk_result) {
+                if (chunk_result.error().code() == kIncomplete) {
+                    return {kNoError, newly_consumed};
+                }
+                return {chunk_result.error().code(), -1};
             }
 
-            if (m_contentLength == 0) {
-                return {kNoError, newly_consumed};
+            newly_consumed += chunk_result.value().second;
+
+            if (chunk_result.value().first) {
+                removeHeaderPairLoose(m_header.headerPairs(), "Transfer-Encoding");
+                m_header.headerPairs().addHeaderPair("Content-Length", std::to_string(m_body.size()));
+                m_contentLength = m_body.size();
+                m_bodyParsed = m_contentLength;
             }
-            m_body.reserve(m_contentLength);
+
+            return {kNoError, newly_consumed};
         }
 
         // 如果没有body需要解析，直接返回

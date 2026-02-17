@@ -430,14 +430,32 @@ public:
         }
     }
 
-    SendResponseAwaitableImpl<SocketType> sendRequest(HttpRequest& request) {
+    auto sendRequest(HttpRequest& request) {
         if (m_remaining_bytes == 0) {
-            m_buffer = request.toString();
-            m_remaining_bytes = m_buffer.size();
+            if constexpr (is_tcp_socket_v<SocketType>) {
+                m_body_buffer = request.bodyStr();
+
+                if (!request.header().isChunked()) {
+                    request.header().headerPairs().addHeaderPairIfNotExist("Content-Length", std::to_string(m_body_buffer.size()));
+                }
+
+                m_buffer = request.header().toString();
+                m_iovecs.clear();
+                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+                if (!m_body_buffer.empty()) {
+                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
+                }
+
+                m_remaining_bytes = m_buffer.size() + m_body_buffer.size();
+                m_writev_offset = 0;
+            } else {
+                m_buffer = request.toString();
+                m_remaining_bytes = m_buffer.size();
+            }
         }
 
         if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseAwaitableImpl<SocketType>(*this, *m_socket);
+            return SendResponseWritevAwaitableImpl<SocketType>(*this, *m_socket);
         } else {
             size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
             const char* send_ptr = m_buffer.data() + sent_bytes;

@@ -281,6 +281,78 @@ void testEdgeCases() {
     HTTP_LOG_INFO("✓ All edge case tests passed\n");
 }
 
+void testProxyMounting() {
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 8: Proxy Mounting");
+    HTTP_LOG_INFO("========================================");
+
+    HttpRouter router;
+
+    router.proxy("/api", "127.0.0.1", 8080);
+
+    auto match1 = router.findHandler(HttpMethod::GET, "/api");
+    assert(match1.handler != nullptr);
+    HTTP_LOG_INFO("✓ GET /api matched proxy root");
+
+    auto match2 = router.findHandler(HttpMethod::GET, "/api/users");
+    assert(match2.handler != nullptr);
+    HTTP_LOG_INFO("✓ GET /api/users matched proxy wildcard");
+
+    auto match3 = router.findHandler(HttpMethod::POST, "/api/orders");
+    assert(match3.handler != nullptr);
+    HTTP_LOG_INFO("✓ POST /api/orders matched proxy wildcard");
+
+    auto match4 = router.findHandler(HttpMethod::GET, "/other/path");
+    assert(match4.handler == nullptr);
+    HTTP_LOG_INFO("✓ GET /other/path not matched (expected)");
+
+    HttpRouter root_proxy_router;
+    root_proxy_router.proxy("/", "127.0.0.1", 8080);
+    auto match5 = root_proxy_router.findHandler(HttpMethod::GET, "/any/path");
+    assert(match5.handler != nullptr);
+    HTTP_LOG_INFO("✓ GET /any/path matched root proxy");
+
+    HTTP_LOG_INFO("✓ All proxy mounting tests passed\n");
+}
+
+void testTryFilesMounting() {
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 9: Nginx Try-Files Mounting");
+    HTTP_LOG_INFO("========================================");
+
+    HttpRouter router;
+    router.tryFiles("/static", "./test/static_files", "127.0.0.1", 8080);
+
+    auto match1 = router.findHandler(HttpMethod::GET, "/static/index.html");
+    assert(match1.handler != nullptr);
+    HTTP_LOG_INFO("✓ GET /static/index.html matched try-files route");
+
+    auto match2 = router.findHandler(HttpMethod::HEAD, "/static/does-not-exist.txt");
+    assert(match2.handler != nullptr);
+    HTTP_LOG_INFO("✓ HEAD /static/does-not-exist.txt matched try-files route");
+
+    auto match3 = router.findHandler(HttpMethod::GET, "/other/path");
+    assert(match3.handler == nullptr);
+    HTTP_LOG_INFO("✓ GET /other/path not matched (expected)");
+
+    HTTP_LOG_INFO("✓ All try-files mounting tests passed\n");
+}
+
+void testFallbackProxyConfig() {
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Test 10: Fallback Proxy Config");
+    HTTP_LOG_INFO("========================================");
+
+    HttpRouter router;
+    assert(router.size() == 0);
+    router.proxy("127.0.0.1", 8080, ProxyMode::Http);
+    // fallback proxy 不注册路由，不影响本地路由表大小
+    assert(router.size() == 0);
+    HTTP_LOG_INFO("✓ Fallback proxy configured via proxy(host, port)");
+
+    HTTP_LOG_INFO("✓ All fallback proxy config tests passed\n");
+}
+
 int main() {
     HTTP_LOG_INFO("========================================");
     HTTP_LOG_INFO("HttpRouter Unit Tests");
@@ -294,6 +366,9 @@ int main() {
         testPriorityMatching();
         testRouterOperations();
         testEdgeCases();
+        testProxyMounting();
+        testTryFilesMounting();
+        testFallbackProxyConfig();
 
         HTTP_LOG_INFO("========================================");
         HTTP_LOG_INFO("✓ ALL TESTS PASSED!");

@@ -1,22 +1,331 @@
 #include "HttpRouter.h"
+#include "HttpClient.h"
 #include "HttpLog.h"
 #include "FileDescriptor.h"
 #include "HttpETag.h"
 #include "HttpRange.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
+#include <algorithm>
+#include <array>
 #include <sstream>
 #include <set>
 #include <cctype>
+#include <memory>
+#include <unordered_map>
+#include <vector>
 #include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
 
 namespace galay::http
 {
+
+namespace {
+
+constexpr size_t kProxyMaxIdleConnectionsPerUpstream = 32;
+constexpr size_t kProxyRawRelayBufferSize = 16 * 1024;
+thread_local std::unordered_map<std::string, std::vector<std::unique_ptr<HttpClient>>> g_proxyClientPools;
+
+std::string toLowerAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+std::string toUpperAscii(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return value;
+}
+
+std::string toCanonicalHeaderKey(std::string value) {
+    bool word_start = true;
+    for (char& ch : value) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        if (word_start) {
+            ch = static_cast<char>(std::toupper(c));
+        } else {
+            ch = static_cast<char>(std::tolower(c));
+        }
+        word_start = (ch == '-');
+    }
+    return value;
+}
+
+void removeHeaderPairLoose(HeaderPair& headers, const std::string& key) {
+    if (key.empty()) {
+        return;
+    }
+
+    headers.removeHeaderPair(key);
+
+    const std::string lower = toLowerAscii(key);
+    const std::string upper = toUpperAscii(key);
+    const std::string canonical = toCanonicalHeaderKey(key);
+
+    if (lower != key) {
+        headers.removeHeaderPair(lower);
+    }
+    if (upper != key && upper != lower) {
+        headers.removeHeaderPair(upper);
+    }
+    if (canonical != key && canonical != lower && canonical != upper) {
+        headers.removeHeaderPair(canonical);
+    }
+}
+
+std::string getHeaderValueLoose(const HeaderPair& headers, const std::string& key) {
+    const std::string value1 = headers.getValue(key);
+    if (!value1.empty()) {
+        return value1;
+    }
+
+    const std::string canonical = toCanonicalHeaderKey(key);
+    if (canonical != key) {
+        const std::string value2 = headers.getValue(canonical);
+        if (!value2.empty()) {
+            return value2;
+        }
+    }
+
+    const std::string lower = toLowerAscii(key);
+    if (lower != key && lower != canonical) {
+        const std::string value3 = headers.getValue(lower);
+        if (!value3.empty()) {
+            return value3;
+        }
+    }
+
+    const std::string upper = toUpperAscii(key);
+    if (upper != key && upper != canonical && upper != lower) {
+        return headers.getValue(upper);
+    }
+
+    return "";
+}
+
+std::vector<std::string> splitConnectionTokens(const std::string& value) {
+    std::vector<std::string> tokens;
+    std::set<std::string> seen;
+    std::string current;
+
+    auto flush_token = [&]() {
+        size_t begin = 0;
+        while (begin < current.size() && std::isspace(static_cast<unsigned char>(current[begin]))) {
+            ++begin;
+        }
+
+        size_t end = current.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(current[end - 1]))) {
+            --end;
+        }
+
+        if (end > begin) {
+            std::string token = toLowerAscii(current.substr(begin, end - begin));
+            if (seen.insert(token).second) {
+                tokens.push_back(std::move(token));
+            }
+        }
+        current.clear();
+    };
+
+    for (char ch : value) {
+        if (ch == ',') {
+            flush_token();
+        } else {
+            current.push_back(ch);
+        }
+    }
+    flush_token();
+
+    return tokens;
+}
+
+std::string normalizeRoutePrefix(std::string routePrefix) {
+    if (routePrefix.empty()) {
+        return "/";
+    }
+
+    if (routePrefix.front() != '/') {
+        routePrefix.insert(routePrefix.begin(), '/');
+    }
+
+    if (routePrefix.size() > 1 && routePrefix.back() == '/') {
+        routePrefix.pop_back();
+    }
+
+    return routePrefix;
+}
+
+std::string buildUpstreamKey(const std::string& host, uint16_t port) {
+    return host + ":" + std::to_string(port);
+}
+
+std::string getClientIpFromConn(HttpConn& conn) {
+    sockaddr_storage addr{};
+    socklen_t len = sizeof(addr);
+
+    if (::getpeername(conn.getSocket().handle().fd, reinterpret_cast<sockaddr*>(&addr), &len) != 0) {
+        return "";
+    }
+
+    char ipstr[INET6_ADDRSTRLEN] = {0};
+    if (addr.ss_family == AF_INET) {
+        auto* in = reinterpret_cast<sockaddr_in*>(&addr);
+        if (::inet_ntop(AF_INET, &in->sin_addr, ipstr, sizeof(ipstr)) != nullptr) {
+            return ipstr;
+        }
+    } else if (addr.ss_family == AF_INET6) {
+        auto* in6 = reinterpret_cast<sockaddr_in6*>(&addr);
+        if (::inet_ntop(AF_INET6, &in6->sin6_addr, ipstr, sizeof(ipstr)) != nullptr) {
+            return ipstr;
+        }
+    }
+
+    return "";
+}
+
+void applyForwardHeaders(HttpConn& conn, HeaderPair& headers, const std::string& original_host) {
+    const std::string client_ip = getClientIpFromConn(conn);
+    std::string xff = getHeaderValueLoose(headers, "X-Forwarded-For");
+
+    if (!client_ip.empty()) {
+        if (xff.empty()) {
+            xff = client_ip;
+        } else {
+            xff += ", " + client_ip;
+        }
+        headers.addHeaderPair("X-Forwarded-For", xff);
+        headers.addHeaderPair("X-Real-IP", client_ip);
+    }
+
+    headers.addHeaderPair("X-Forwarded-Proto", "http");
+    if (!original_host.empty()) {
+        headers.addHeaderPair("X-Forwarded-Host", original_host);
+    }
+}
+
+std::string rewriteProxyUri(const std::string& routePrefix, const std::string& requestUri) {
+    if (requestUri.empty()) {
+        return "/";
+    }
+
+    if (routePrefix == "/") {
+        return requestUri;
+    }
+
+    if (requestUri == routePrefix) {
+        return "/";
+    }
+
+    if (requestUri.rfind(routePrefix, 0) == 0) {
+        std::string suffix = requestUri.substr(routePrefix.size());
+        if (suffix.empty()) {
+            return "/";
+        }
+        if (suffix.front() == '?') {
+            return "/" + suffix;
+        }
+        if (suffix.front() != '/') {
+            return "/" + suffix;
+        }
+        return suffix;
+    }
+
+    return requestUri;
+}
+
+Coroutine sendProxyError(HttpConn& conn, HttpStatusCode code, const std::string& message) {
+    auto response = Http1_1ResponseBuilder()
+        .status(code)
+        .header("Server", "Galay-Proxy/1.0")
+        .text(message)
+        .buildMove();
+
+    auto writer = conn.getWriter();
+    while (true) {
+        auto result = co_await writer.sendResponse(response);
+        if (!result || result.value()) {
+            break;
+        }
+    }
+    co_return;
+}
+
+Coroutine connectProxyUpstream(HttpClient& client,
+                               const std::string& url,
+                               bool& ok,
+                               std::string& err_msg)
+{
+    ok = false;
+    err_msg.clear();
+
+    try {
+        auto connect_result = co_await client.connect(url);
+        if (!connect_result) {
+            err_msg = connect_result.error().message();
+            co_return;
+        }
+        ok = true;
+    } catch (const std::exception& ex) {
+        err_msg = ex.what();
+    } catch (...) {
+        err_msg = "unknown exception";
+    }
+
+    co_return;
+}
+
+Coroutine relayRawUpstreamToDownstream(TcpSocket& upstream,
+                                       TcpSocket& downstream,
+                                       bool& ok,
+                                       std::string& err_msg)
+{
+    ok = false;
+    err_msg.clear();
+
+    std::array<char, kProxyRawRelayBufferSize> buffer{};
+    while (true) {
+        auto recv_result = co_await upstream.recv(buffer.data(), buffer.size());
+        if (!recv_result) {
+            err_msg = recv_result.error().message();
+            co_return;
+        }
+
+        const auto& bytes = recv_result.value();
+        if (bytes.size() == 0) {
+            ok = true;
+            co_return;
+        }
+
+        size_t offset = 0;
+        while (offset < bytes.size()) {
+            const char* data = reinterpret_cast<const char*>(bytes.data() + offset);
+            auto send_result = co_await downstream.send(data, bytes.size() - offset);
+            if (!send_result) {
+                err_msg = send_result.error().message();
+                co_return;
+            }
+
+            const size_t sent = send_result.value();
+            if (sent == 0) {
+                err_msg = "downstream send returned 0";
+                co_return;
+            }
+
+            offset += sent;
+        }
+    }
+}
+
+} // namespace
 
 HttpRouter::HttpRouter()
     : m_routeCount(0)
@@ -109,6 +418,7 @@ void HttpRouter::clear()
 {
     m_exactRoutes.clear();
     m_fuzzyRoutes.clear();
+    m_fallbackProxyHandler.reset();
     m_routeCount = 0;
 }
 
@@ -395,12 +705,117 @@ void HttpRouter::mountHardly(const std::string& routePrefix, const std::string& 
     HTTP_LOG_INFO("[mount-hard] [{}] [{}]", dirPath, routePrefix);
 }
 
+void HttpRouter::tryFiles(const std::string& routePrefix,
+                          const std::string& dirPath,
+                          const std::string& upstreamHost,
+                          uint16_t upstreamPort,
+                          const StaticFileConfig& config,
+                          ProxyMode mode)
+{
+    namespace fs = std::filesystem;
+
+    if (!fs::exists(dirPath) || !fs::is_directory(dirPath)) {
+        HTTP_LOG_ERROR("[try-files] [mount-fail] [{}]", dirPath);
+        return;
+    }
+
+    if (upstreamHost.empty() || upstreamPort == 0) {
+        HTTP_LOG_ERROR("[try-files] [invalid-upstream] [{}:{}]", upstreamHost, upstreamPort);
+        return;
+    }
+
+    std::string normalizedPrefix = normalizeRoutePrefix(routePrefix);
+    auto fallbackProxy = createProxyHandler("/", upstreamHost, upstreamPort, mode);
+    auto handler = createStaticFileHandler(normalizedPrefix, dirPath, config, std::move(fallbackProxy));
+
+    std::string wildcardPath = normalizedPrefix;
+    if (wildcardPath.back() != '/') {
+        wildcardPath += '/';
+    }
+    wildcardPath += "**";
+
+    addHandler<HttpMethod::GET, HttpMethod::HEAD>(wildcardPath, handler);
+    if (normalizedPrefix != "/") {
+        addHandler<HttpMethod::GET, HttpMethod::HEAD>(normalizedPrefix, handler);
+    }
+
+    HTTP_LOG_INFO("[try-files] [{}] [{}] [fallback={}:{}]",
+                  dirPath, normalizedPrefix, upstreamHost, upstreamPort);
+}
+
+void HttpRouter::proxy(const std::string& routePrefix,
+                       const std::string& upstreamHost,
+                       uint16_t upstreamPort,
+                       ProxyMode mode)
+{
+    if (upstreamHost.empty() || upstreamPort == 0) {
+        HTTP_LOG_ERROR("[proxy] [invalid-upstream] [{}:{}]", upstreamHost, upstreamPort);
+        return;
+    }
+
+    std::string normalizedPrefix = normalizeRoutePrefix(routePrefix);
+    auto handler = createProxyHandler(normalizedPrefix, upstreamHost, upstreamPort, mode);
+
+    std::string wildcardPath = normalizedPrefix == "/" ? "/**" : normalizedPrefix + "/**";
+    addHandler<HttpMethod::GET, HttpMethod::POST, HttpMethod::PUT,
+               HttpMethod::PATCH, HttpMethod::DELETE, HttpMethod::HEAD,
+               HttpMethod::OPTIONS>(wildcardPath, handler);
+
+    // 让 /api 本身也命中代理，等价转发为上游 /
+    if (normalizedPrefix != "/") {
+        addHandler<HttpMethod::GET, HttpMethod::POST, HttpMethod::PUT,
+                   HttpMethod::PATCH, HttpMethod::DELETE, HttpMethod::HEAD,
+                   HttpMethod::OPTIONS>(normalizedPrefix, handler);
+    }
+
+    HTTP_LOG_INFO("[proxy] [mount] [{}:{}] [{}]", upstreamHost, upstreamPort, normalizedPrefix);
+}
+
+void HttpRouter::proxy(const std::string& upstreamHost,
+                       uint16_t upstreamPort,
+                       ProxyMode mode)
+{
+    if (upstreamHost.empty() || upstreamPort == 0) {
+        HTTP_LOG_ERROR("[proxy-fallback] [invalid-upstream] [{}:{}]", upstreamHost, upstreamPort);
+        return;
+    }
+
+    m_fallbackProxyHandler = createProxyHandler("/", upstreamHost, upstreamPort, mode);
+    HTTP_LOG_INFO("[proxy-fallback] [enable] [{}:{}] [mode={}]",
+                  upstreamHost,
+                  upstreamPort,
+                  mode == ProxyMode::Raw ? "raw" : "http");
+}
+
+bool HttpRouter::hasFallbackProxy() const
+{
+    return m_fallbackProxyHandler.has_value();
+}
+
+HttpRouteHandler* HttpRouter::fallbackProxyHandler()
+{
+    if (!m_fallbackProxyHandler.has_value()) {
+        return nullptr;
+    }
+    return &m_fallbackProxyHandler.value();
+}
+
 HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePrefix,
                                                      const std::string& dirPath,
-                                                     const StaticFileConfig& config)
+                                                     const StaticFileConfig& config,
+                                                     HttpRouteHandler fallbackHandler)
 {
+    namespace fs = std::filesystem;
+
+    fs::path canonicalDir;
+    try {
+        canonicalDir = fs::canonical(dirPath);
+    } catch (const fs::filesystem_error&) {
+        canonicalDir = fs::path(dirPath);
+    }
+
     // 捕获 routePrefix、dirPath 和 config，返回一个协程处理器
-    return [routePrefix, dirPath, config](HttpConn& conn, HttpRequest req) -> Coroutine {
+    return [routePrefix, dirPath, canonicalDir, config, fallbackHandler](HttpConn& conn, HttpRequest req) -> Coroutine {
         namespace fs = std::filesystem;
 
         // 获取请求的路径参数（通配符匹配的部分）
@@ -422,7 +837,6 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         fs::path fullPath = fs::path(dirPath) / relativePath;
 
         // 安全检查：防止路径遍历攻击
-        fs::path canonicalDir = fs::canonical(dirPath);
         fs::path canonicalFile;
         bool fileNotFound = false;
         try {
@@ -432,6 +846,10 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         }
 
         if (fileNotFound) {
+            if (fallbackHandler) {
+                co_await fallbackHandler(conn, std::move(req)).wait();
+                co_return;
+            }
             // 文件不存在
             auto response = Http1_1ResponseBuilder()
                 .status(HttpStatusCode::NotFound_404)
@@ -465,6 +883,10 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
 
         // 检查文件是否存在且是普通文件
         if (!fs::exists(canonicalFile) || !fs::is_regular_file(canonicalFile)) {
+            if (fallbackHandler) {
+                co_await fallbackHandler(conn, std::move(req)).wait();
+                co_return;
+            }
             HTTP_LOG_WARN("[file] [missing] [{}]", canonicalFile.string());
             auto response = Http1_1ResponseBuilder()
                 .status(HttpStatusCode::NotFound_404)
@@ -567,6 +989,228 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
 
         // 使用配置的传输方式发送文件
         co_await sendFileContent(conn, req, filePath, fileSize, mimeType, config).wait();
+        co_return;
+    };
+}
+
+HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
+                                                const std::string& upstreamHost,
+                                                uint16_t upstreamPort,
+                                                ProxyMode mode)
+{
+    return [routePrefix, upstreamHost, upstreamPort, mode](HttpConn& conn, HttpRequest req) -> Coroutine {
+        const std::string request_uri = req.header().uri();
+        const std::string upstream_uri = rewriteProxyUri(routePrefix, request_uri);
+        const std::string pool_key = buildUpstreamKey(upstreamHost, upstreamPort);
+        const std::string upstream_connect_url = "http://" + upstreamHost + ":" +
+                                                 std::to_string(upstreamPort) + "/";
+
+        auto& headers = req.header().headerPairs();
+        const std::string original_host = getHeaderValueLoose(headers, "Host");
+        const std::string connection = getHeaderValueLoose(headers, "Connection");
+        std::vector<std::string> hop_by_hop_tokens = splitConnectionTokens(connection);
+
+        removeHeaderPairLoose(headers, "Connection");
+        removeHeaderPairLoose(headers, "Proxy-Connection");
+        removeHeaderPairLoose(headers, "Keep-Alive");
+        removeHeaderPairLoose(headers, "TE");
+        removeHeaderPairLoose(headers, "Trailer");
+        removeHeaderPairLoose(headers, "Transfer-Encoding");
+        removeHeaderPairLoose(headers, "Upgrade");
+        for (const auto& token : hop_by_hop_tokens) {
+            removeHeaderPairLoose(headers, token);
+        }
+
+        applyForwardHeaders(conn, headers, original_host);
+        removeHeaderPairLoose(headers, "Host");
+        headers.addHeaderPair("Host", upstreamHost + ":" + std::to_string(upstreamPort));
+        headers.addHeaderPair("Connection", mode == ProxyMode::Raw ? "close" : "keep-alive");
+
+        req.header().uri() = upstream_uri;
+
+        if (mode == ProxyMode::Raw) {
+            auto client = std::make_unique<HttpClient>();
+            bool connect_ok = false;
+            std::string connect_err;
+            co_await connectProxyUpstream(*client, upstream_connect_url, connect_ok, connect_err).wait();
+            if (!connect_ok) {
+                HTTP_LOG_ERROR("[proxy-raw] [connect-fail] [{}]", connect_err);
+                co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                        "Bad Gateway: connect upstream failed").wait();
+                co_return;
+            }
+
+            auto session = client->getSession();
+            auto& upstream_writer = session.getWriter();
+            bool send_ok = false;
+            while (true) {
+                auto send_result = co_await upstream_writer.sendRequest(req);
+                if (!send_result) {
+                    HTTP_LOG_WARN("[proxy-raw] [send-fail] [{}]", send_result.error().message());
+                    break;
+                }
+                if (send_result.value()) {
+                    send_ok = true;
+                    break;
+                }
+            }
+
+            if (!send_ok) {
+                co_await client->close();
+                co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                        "Bad Gateway: send upstream failed").wait();
+                co_return;
+            }
+
+            bool relay_ok = false;
+            std::string relay_err;
+            co_await relayRawUpstreamToDownstream(client->socket(),
+                                                  conn.getSocket(),
+                                                  relay_ok,
+                                                  relay_err).wait();
+            if (!relay_ok && !relay_err.empty()) {
+                HTTP_LOG_WARN("[proxy-raw] [relay-fail] [{}]", relay_err);
+            }
+
+            co_await client->close();
+            co_return;
+        }
+        
+        auto& pool = g_proxyClientPools[pool_key];
+        std::unique_ptr<HttpClient> client;
+        bool borrowed_from_pool = false;
+        if (!pool.empty()) {
+            client = std::move(pool.back());
+            pool.pop_back();
+            borrowed_from_pool = true;
+        }
+
+        if (!client) {
+            client = std::make_unique<HttpClient>();
+            bool connect_ok = false;
+            std::string connect_err;
+            co_await connectProxyUpstream(*client, upstream_connect_url, connect_ok, connect_err).wait();
+            if (!connect_ok) {
+                HTTP_LOG_ERROR("[proxy] [connect-fail] [{}]", connect_err);
+                co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                        "Bad Gateway: connect upstream failed").wait();
+                co_return;
+            }
+        }
+
+        HttpResponse upstream_response;
+        bool request_ok = false;
+        bool retried = false;
+
+        while (!request_ok) {
+            auto session = client->getSession();
+            auto& upstream_writer = session.getWriter();
+            bool send_ok = false;
+            while (true) {
+                auto send_result = co_await upstream_writer.sendRequest(req);
+                if (!send_result) {
+                    HTTP_LOG_WARN("[proxy] [send-fail] [{}]", send_result.error().message());
+                    break;
+                }
+                if (send_result.value()) {
+                    send_ok = true;
+                    break;
+                }
+            }
+
+            if (!send_ok) {
+                co_await client->close();
+                if (borrowed_from_pool && !retried) {
+                    retried = true;
+                    borrowed_from_pool = false;
+                    client = std::make_unique<HttpClient>();
+                    bool reconnect_ok = false;
+                    std::string reconnect_err;
+                    co_await connectProxyUpstream(*client, upstream_connect_url, reconnect_ok, reconnect_err).wait();
+                    if (!reconnect_ok) {
+                        HTTP_LOG_ERROR("[proxy] [reconnect-fail] [{}]", reconnect_err);
+                        co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                                "Bad Gateway: send upstream failed").wait();
+                        co_return;
+                    }
+                    continue;
+                }
+
+                co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                        "Bad Gateway: send upstream failed").wait();
+                co_return;
+            }
+
+            auto& upstream_reader = session.getReader();
+            upstream_response.reset();
+            bool recv_ok = false;
+            while (true) {
+                auto recv_result = co_await upstream_reader.getResponse(upstream_response);
+                if (!recv_result) {
+                    HTTP_LOG_WARN("[proxy] [recv-fail] [{}]", recv_result.error().message());
+                    break;
+                }
+                if (recv_result.value()) {
+                    recv_ok = true;
+                    break;
+                }
+            }
+
+            if (!recv_ok) {
+                co_await client->close();
+                if (borrowed_from_pool && !retried) {
+                    retried = true;
+                    borrowed_from_pool = false;
+                    client = std::make_unique<HttpClient>();
+                    bool reconnect_ok = false;
+                    std::string reconnect_err;
+                    co_await connectProxyUpstream(*client, upstream_connect_url, reconnect_ok, reconnect_err).wait();
+                    if (!reconnect_ok) {
+                        HTTP_LOG_ERROR("[proxy] [reconnect-fail] [{}]", reconnect_err);
+                        co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                                "Bad Gateway: recv upstream failed").wait();
+                        co_return;
+                    }
+                    continue;
+                }
+
+                co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
+                                        "Bad Gateway: recv upstream failed").wait();
+                co_return;
+            }
+
+            request_ok = true;
+        }
+
+        auto downstream_writer = conn.getWriter();
+        bool downstream_ok = false;
+        while (true) {
+            auto forward_result = co_await downstream_writer.sendResponse(upstream_response);
+            if (!forward_result) {
+                HTTP_LOG_ERROR("[proxy] [forward-fail] [{}]", forward_result.error().message());
+                break;
+            }
+            if (forward_result.value()) {
+                downstream_ok = true;
+                break;
+            }
+        }
+
+        bool keep_upstream = downstream_ok &&
+                             upstream_response.header().isKeepAlive() &&
+                             !upstream_response.header().isConnectionClose();
+
+        if (keep_upstream) {
+            auto& idle = g_proxyClientPools[pool_key];
+            if (idle.size() < kProxyMaxIdleConnectionsPerUpstream) {
+                idle.push_back(std::move(client));
+            } else if (client) {
+                co_await client->close();
+            }
+        } else if (client) {
+            co_await client->close();
+        }
+
         co_return;
     };
 }

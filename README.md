@@ -105,7 +105,7 @@ cmake --build build-mod --target galay-http-modules -j
 ### 其他核心示例
 
 - `E11-StaticServer`：静态文件服务器
-- `E12-HttpProxy`：HTTP 反向代理
+- `E12-HttpProxy`：HTTP 反向代理（支持和 `mount` 集成）
 
 ## 快速运行
 
@@ -152,11 +152,24 @@ cmake --build build-mod --target galay-http-modules -j
 # upstream
 ./build/example/E1-EchoServer 8080
 
-# proxy (listen=8081, upstream=127.0.0.1:8080)
-./build/example/E12-HttpProxy 8081 127.0.0.1 8080
+# proxy + mount (listen=8081, upstream=127.0.0.1:8080, /static -> ./html)
+./build/example/E12-HttpProxy 8081 127.0.0.1 8080 /static ./html dynamic
 
-# request through proxy
+# request through proxy (falls back to upstream)
 curl -X POST http://127.0.0.1:8081/echo -d "via proxy"
+
+# request local static file (served by mount, not proxied)
+curl http://127.0.0.1:8081/static/ResumeDownload.html
+```
+
+参数说明（`E12-HttpProxy`）：
+
+```text
+E12-HttpProxy [listen_port] [upstream_host] [upstream_port]
+             [mount_prefix] [mount_dir] [mount_mode]
+
+mount_mode: dynamic(默认) | hard | nginx(try_files)
+关闭 mount: mount_prefix 或 mount_dir 传 none/off
 ```
 
 ## 项目结构

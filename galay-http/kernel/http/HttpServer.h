@@ -114,6 +114,13 @@ public:
 
                 auto match = m_router->findHandler(request.header().method(), request.header().uri());
 
+                if (!match.handler && m_router->hasFallbackProxy()) {
+                    match.handler = m_router->fallbackProxyHandler();
+                    HTTP_LOG_DEBUG("[proxy-fallback] [hit] [{}] [{}]",
+                                   httpMethodToString(request.header().method()),
+                                   request.header().uri());
+                }
+
                 if (!match.handler) {
                     HTTP_LOG_WARN("[route] [miss] [{}] [{}]",
                                  httpMethodToString(request.header().method()),

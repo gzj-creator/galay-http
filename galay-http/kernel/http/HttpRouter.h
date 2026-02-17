@@ -13,17 +13,33 @@
 #include <memory>
 #include <vector>
 #include <map>
+#include <cstdint>
 
 namespace galay::http
 {
 
 using namespace galay::kernel;
 
+template<typename SocketType>
+class HttpServerImpl;
+
 /**
  * @brief HTTP路由处理器类型
  * @details 用户提供的处理函数，接收HttpConn引用和HttpRequest
  */
 using HttpRouteHandler = std::function<Coroutine(HttpConn&, HttpRequest)>;
+
+/**
+ * @brief 代理转发模式
+ * @details
+ * - Http: HTTP 语义转发（可改写头部、支持连接池）
+ * - Raw: 原始字节流回包透传（更适合流式响应）
+ */
+enum class ProxyMode
+{
+    Http,
+    Raw
+};
 
 /**
  * @brief 路由匹配结果
@@ -61,6 +77,9 @@ struct RouteTrieNode
  */
 class HttpRouter
 {
+    template<typename SocketType>
+    friend class HttpServerImpl;
+
 public:
     /**
      * @brief 构造函数
@@ -154,7 +173,51 @@ public:
     void mountHardly(const std::string& routePrefix, const std::string& dirPath,
                      const StaticFileConfig& config = StaticFileConfig());
 
+    /**
+     * @brief Nginx 风格 try_files（静态命中优先，未命中回源代理）
+     * @param routePrefix 路由前缀，例如 "/static"
+     * @param dirPath 本地文件系统目录路径
+     * @param upstreamHost 上游主机
+     * @param upstreamPort 上游端口
+     * @param config 静态文件传输配置（可选）
+     * @details 行为等价于：
+     *          location /static/ { try_files $uri @upstream; }
+     */
+    void tryFiles(const std::string& routePrefix,
+                  const std::string& dirPath,
+                  const std::string& upstreamHost,
+                  uint16_t upstreamPort,
+                  const StaticFileConfig& config = StaticFileConfig(),
+                  ProxyMode mode = ProxyMode::Http);
+
+    /**
+     * @brief 挂载反向代理路由（运行时转发到上游）
+     * @param routePrefix 路由前缀，例如 "/api" 或 "/"（全量代理）
+     * @param upstreamHost 上游主机
+     * @param upstreamPort 上游端口
+     * @details 注册一个通配符路由，将请求转发到上游 HTTP 服务
+     *          例如：proxy("/api", "127.0.0.1", 8080)
+     *          访问 /api/users 会转发为 http://127.0.0.1:8080/users
+     */
+    void proxy(const std::string& routePrefix,
+               const std::string& upstreamHost,
+               uint16_t upstreamPort,
+               ProxyMode mode = ProxyMode::Http);
+
+    /**
+     * @brief 设置默认回退代理（仅在本地路由未命中时生效）
+     * @param upstreamHost 上游主机
+     * @param upstreamPort 上游端口
+     * @param mode 代理模式
+     */
+    void proxy(const std::string& upstreamHost,
+               uint16_t upstreamPort,
+               ProxyMode mode = ProxyMode::Http);
+
 private:
+    bool hasFallbackProxy() const;
+    HttpRouteHandler* fallbackProxyHandler();
+
     /**
      * @brief 内部添加路由处理器的实现
      * @param method HTTP方法
@@ -213,7 +276,8 @@ private:
      */
     HttpRouteHandler createStaticFileHandler(const std::string& routePrefix,
                                              const std::string& dirPath,
-                                             const StaticFileConfig& config);
+                                             const StaticFileConfig& config,
+                                             HttpRouteHandler fallbackHandler = HttpRouteHandler());
 
     /**
      * @brief 递归遍历目录并注册所有文件
@@ -235,6 +299,18 @@ private:
      */
     HttpRouteHandler createSingleFileHandler(const std::string& filePath,
                                              const StaticFileConfig& config);
+
+    /**
+     * @brief 创建反向代理处理器
+     * @param routePrefix 路由前缀
+     * @param upstreamHost 上游主机
+     * @param upstreamPort 上游端口
+     * @return 处理函数
+     */
+    HttpRouteHandler createProxyHandler(const std::string& routePrefix,
+                                        const std::string& upstreamHost,
+                                        uint16_t upstreamPort,
+                                        ProxyMode mode);
 
     /**
      * @brief 发送文件内容（根据配置选择传输方式）
@@ -310,6 +386,9 @@ private:
 
     // 动态挂载的目录映射：路由前缀 -> 文件系统目录路径
     std::unordered_map<std::string, std::string> m_mountedDirs;
+
+    // 默认回退代理（本地路由 miss 时使用）
+    std::optional<HttpRouteHandler> m_fallbackProxyHandler;
 
     // 路由计数
     size_t m_routeCount = 0;
