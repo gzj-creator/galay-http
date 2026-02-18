@@ -4,11 +4,8 @@
 #include "HttpSession.h"
 #include "HttpLog.h"
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/protoc/http/HttpResponse.h"
 #include <string>
 #include <optional>
-#include <map>
 #include <regex>
 
 namespace galay::websocket {
