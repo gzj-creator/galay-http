@@ -4,6 +4,7 @@
 #include "Http2Base.h"
 #include "Http2Error.h"
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <memory>
