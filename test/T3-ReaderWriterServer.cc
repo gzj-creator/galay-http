@@ -13,6 +13,7 @@
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/common/Log.h"
+#include "galay-kernel/kernel/Runtime.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -217,12 +218,19 @@ int main() {
     LogInfo("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
-    IOSchedulerType scheduler;
-    scheduler.start();
+    Runtime rt(1, 0);
+    rt.start();
     LogInfo("Scheduler started");
 
+    auto* scheduler = rt.getNextIOScheduler();
+    if (!scheduler) {
+        LogError("Failed to get IO scheduler");
+        rt.stop();
+        return 1;
+    }
+
     // 启动服务器
-    scheduler.spawn(echoServer());
+    scheduler->spawn(echoServer());
 
     LogInfo("Server is ready. Press Ctrl+C to stop.\n");
 
@@ -231,7 +239,7 @@ int main() {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    scheduler.stop();
+    rt.stop();
 #else
     LogWarn("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;

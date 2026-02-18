@@ -66,7 +66,6 @@ public:
 #ifdef GALAY_HTTP_SSL_ENABLED
     friend class WsSessionUpgradeAwaitableImpl<SocketType, true>;
 #endif
-    friend class WsSessionUpgraderImpl<SocketType>;
 
 private:
     WsSessionImpl<SocketType>* m_session;
