@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <iomanip>
+#include <map>
 
 using namespace galay::http;
 using namespace galay::kernel;
@@ -24,14 +25,15 @@ std::atomic<int> g_active_connections{0};
 /**
  * @brief 持续压测工作协程（类似 wrk）
  */
+#if defined(__GNUC__) && !defined(__clang__)
+__attribute__((noinline))
+#endif
 Coroutine continuousWorker(int worker_id, const std::string& host, int port, const std::string& path,
                            std::chrono::steady_clock::time_point end_time,
                            std::atomic<bool>& stop_flag) {
     (void)worker_id;
     g_active_connections++;
     HttpClient client;
-    bool connected = false;
-    bool exit_loop = false;
 
     std::string url = "http://" + host + ":" + std::to_string(port) + path;
 
@@ -42,53 +44,42 @@ Coroutine continuousWorker(int worker_id, const std::string& host, int port, con
         co_return;
     }
 
-    connected = true;
-    auto session = client.getSession();
+    HttpSession session(client.socket());
+    const std::string request_path = client.url().path;
+    std::map<std::string, std::string> headers{
+        {"Host", host},
+        {"Connection", "keep-alive"}
+    };
 
     // 持续发送请求直到时间到或收到停止信号
     while (!stop_flag.load(std::memory_order_relaxed) &&
            std::chrono::steady_clock::now() < end_time) {
         auto request_start = std::chrono::steady_clock::now();
-
-        while (true) {
-            auto result = co_await session.get(client.url().path, {
-                {"Host", host},
-                {"Connection", "keep-alive"}
-            });
-
-            if (!result) {
-                g_fail++;
-                exit_loop = true;
-                break;
-            }
-
-            if (!result.value()) {
-                continue;
-            }
-
-            auto response = result.value().value();
-            auto request_end = std::chrono::steady_clock::now();
-
-            g_request_time_us += std::chrono::duration_cast<std::chrono::microseconds>(request_end - request_start).count();
-
-            if (static_cast<int>(response.header().code()) == 200) {
-                g_success++;
-                g_bytes_recv += response.getBodyStr().size();
-                g_bytes_sent += 100;  // 估算请求大小
-            } else {
-                g_fail++;
-            }
+        auto result = co_await session.get(request_path, headers);
+        if (!result) {
+            g_fail++;
             break;
         }
 
-        if (exit_loop) {
-            break;
+        auto response_opt = result.value();
+        if (!response_opt.has_value()) {
+            continue;
+        }
+
+        auto& response = response_opt.value();
+        auto request_end = std::chrono::steady_clock::now();
+        g_request_time_us += std::chrono::duration_cast<std::chrono::microseconds>(request_end - request_start).count();
+
+        if (static_cast<int>(response.header().code()) == 200) {
+            g_success++;
+            g_bytes_recv += response.getBodyStr().size();
+            g_bytes_sent += 100;  // 估算请求大小
+        } else {
+            g_fail++;
         }
     }
 
-    if (connected) {
-        co_await client.close();
-    }
+    // GCC13 协程在复杂析构路径上存在已知 ICE，这里依赖析构关闭 socket。
 
     g_active_connections--;
     co_return;
