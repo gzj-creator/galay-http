@@ -27,62 +27,67 @@ std::atomic<int> g_active_connections{0};
 Coroutine continuousWorker(int worker_id, const std::string& host, int port, const std::string& path,
                            std::chrono::steady_clock::time_point end_time,
                            std::atomic<bool>& stop_flag) {
+    (void)worker_id;
     g_active_connections++;
     HttpClient client;
+    bool connected = false;
+    bool exit_loop = false;
 
-    try {
-        std::string url = "http://" + host + ":" + std::to_string(port) + path;
+    std::string url = "http://" + host + ":" + std::to_string(port) + path;
 
-        auto connect_result = co_await client.connect(url);
-        if (!connect_result) {
-            g_fail++;
-            g_active_connections--;
-            co_return;
-        }
+    auto connect_result = co_await client.connect(url);
+    if (!connect_result) {
+        g_fail++;
+        g_active_connections--;
+        co_return;
+    }
 
-        auto session = client.getSession();
+    connected = true;
+    auto session = client.getSession();
 
-        // 持续发送请求直到时间到或收到停止信号
-        while (!stop_flag.load(std::memory_order_relaxed) &&
-               std::chrono::steady_clock::now() < end_time) {
-            auto request_start = std::chrono::steady_clock::now();
+    // 持续发送请求直到时间到或收到停止信号
+    while (!stop_flag.load(std::memory_order_relaxed) &&
+           std::chrono::steady_clock::now() < end_time) {
+        auto request_start = std::chrono::steady_clock::now();
 
-            while (true) {
-                auto result = co_await session.get(client.url().path, {
-                    {"Host", host},
-                    {"Connection", "keep-alive"}
-                });
+        while (true) {
+            auto result = co_await session.get(client.url().path, {
+                {"Host", host},
+                {"Connection", "keep-alive"}
+            });
 
-                if (!result) {
-                    g_fail++;
-                    goto cleanup;
-                }
-
-                if (!result.value()) {
-                    continue;
-                }
-
-                auto response = result.value().value();
-                auto request_end = std::chrono::steady_clock::now();
-
-                g_request_time_us += std::chrono::duration_cast<std::chrono::microseconds>(request_end - request_start).count();
-
-                if (static_cast<int>(response.header().code()) == 200) {
-                    g_success++;
-                    g_bytes_recv += response.getBodyStr().size();
-                    g_bytes_sent += 100;  // 估算请求大小
-                } else {
-                    g_fail++;
-                }
+            if (!result) {
+                g_fail++;
+                exit_loop = true;
                 break;
             }
+
+            if (!result.value()) {
+                continue;
+            }
+
+            auto response = result.value().value();
+            auto request_end = std::chrono::steady_clock::now();
+
+            g_request_time_us += std::chrono::duration_cast<std::chrono::microseconds>(request_end - request_start).count();
+
+            if (static_cast<int>(response.header().code()) == 200) {
+                g_success++;
+                g_bytes_recv += response.getBodyStr().size();
+                g_bytes_sent += 100;  // 估算请求大小
+            } else {
+                g_fail++;
+            }
+            break;
         }
 
-cleanup:
-        co_await client.close();
+        if (exit_loop) {
+            break;
+        }
+    }
 
-    } catch (...) {
-        g_fail++;
+    if (connected) {
+        co_await client.close();
     }
 
     g_active_connections--;
