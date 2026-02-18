@@ -27,6 +27,10 @@ endif()
 
 add_library(${PROJECT_NAME} SHARED ${SRC_LIST})
 
+if(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED)
+    target_compile_options(${PROJECT_NAME} PRIVATE ${GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS})
+endif()
+
 # 链接 galay-kernel 库
 target_link_libraries(${PROJECT_NAME}
     PUBLIC galay-kernel::galay-kernel

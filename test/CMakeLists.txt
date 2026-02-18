@@ -20,6 +20,9 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
         galay-http
         pthread
     )
+    if(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED)
+        target_compile_options(${TEST_NAME} PRIVATE ${GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS})
+    endif()
     target_include_directories(${TEST_NAME} PRIVATE
         ${CMAKE_SOURCE_DIR}/galay-http
         /usr/local/include

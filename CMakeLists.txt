@@ -7,6 +7,30 @@ set(CMAKE_PREFIX_PATH "/usr/local")
 option(BUILD_TESTS "Build test programs" ON)
 option(BUILD_BENCHMARKS "Build benchmark programs" ON)
 option(BUILD_EXAMPLES "Build example programs" ON)
+option(GALAY_HTTP_GCC13_COROUTINE_COMPAT
+       "Enable GCC 13 coroutine ICE build workaround flags"
+       ON)
+
+set(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED FALSE)
+set(GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS "")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+   AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 13
+   AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
+    if(GALAY_HTTP_GCC13_COROUTINE_COMPAT)
+        set(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED TRUE)
+        list(APPEND GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS
+             -fno-inline
+             -fno-ipa-cp-clone)
+        message(WARNING
+            "Detected GCC ${CMAKE_CXX_COMPILER_VERSION}. "
+            "Enabling coroutine ICE workaround flags: "
+            "${GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS}")
+    else()
+        message(WARNING
+            "Detected GCC ${CMAKE_CXX_COMPILER_VERSION} with coroutine ICE risk. "
+            "Consider enabling GALAY_HTTP_GCC13_COROUTINE_COMPAT, or use GCC >= 14 / Clang.")
+    endif()
+endif()
 
 # 设置默认构建类型为 Release（如果用户没有指定）
 if(NOT CMAKE_BUILD_TYPE)
