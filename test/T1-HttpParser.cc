@@ -1012,6 +1012,58 @@ void test_body_split_multiple_times()
     TEST_PASS("Body split multiple times");
 }
 
+void test_request_lowercase_content_length()
+{
+    std::cout << "\n=== Test: Request lowercase content-length ===" << std::endl;
+
+    RingBuffer buffer(4096);
+    HttpRequest request;
+
+    std::string body = "{\"k\":\"v\"}";
+    std::string raw = "POST /lower HTTP/1.1\r\n"
+                      "host: localhost\r\n"
+                      "content-type: application/json\r\n"
+                      "content-length: " + std::to_string(body.size()) + "\r\n"
+                      "\r\n" + body;
+
+    buffer.write(raw);
+    auto iovecs = buffer.getReadIovecs();
+    auto [err, consumed] = request.fromIOVec(iovecs);
+
+    TEST_ASSERT(err == kNoError, "Should parse without error");
+    TEST_ASSERT(consumed == static_cast<ssize_t>(raw.size()), "Should consume full request");
+    TEST_ASSERT(request.isComplete(), "Request should be complete");
+    TEST_ASSERT(request.getBodyStr() == body, "Body should match");
+
+    TEST_PASS("Request lowercase content-length");
+}
+
+void test_response_chunked_case_insensitive()
+{
+    std::cout << "\n=== Test: Response chunked case-insensitive ===" << std::endl;
+
+    RingBuffer buffer(4096);
+    HttpResponse response;
+
+    std::string raw = "HTTP/1.1 200 OK\r\n"
+                      "transfer-encoding: Chunked\r\n"
+                      "connection: keep-alive\r\n"
+                      "\r\n"
+                      "5\r\nhello\r\n"
+                      "0\r\n\r\n";
+
+    buffer.write(raw);
+    auto iovecs = buffer.getReadIovecs();
+    auto [err, consumed] = response.fromIOVec(iovecs);
+
+    TEST_ASSERT(err == kNoError, "Should parse without error");
+    TEST_ASSERT(consumed == static_cast<ssize_t>(raw.size()), "Should consume full response");
+    TEST_ASSERT(response.isComplete(), "Response should be complete");
+    TEST_ASSERT(response.getBodyStr() == "hello", "Body should match");
+
+    TEST_PASS("Response chunked case-insensitive");
+}
+
 // ============ 主函数 ============
 
 int main()
@@ -1057,6 +1109,8 @@ int main()
     test_zero_content_length();
     test_header_split_in_middle_of_crlf();
     test_body_split_multiple_times();
+    test_request_lowercase_content_length();
+    test_response_chunked_case_insensitive();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "Test Results: " << g_passed << " passed, " << g_failed << " failed" << std::endl;

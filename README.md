@@ -30,13 +30,39 @@
 - `galay-kernel`
 - 可选：`galay-ssl` + OpenSSL（启用 TLS 时）
 
+## 依赖安装（macOS / Homebrew）
+
+```bash
+brew install cmake spdlog
+# 仅在开启 TLS 时需要
+brew install openssl
+```
+
+## 依赖安装（Ubuntu / Debian）
+
+```bash
+sudo apt-get update
+sudo apt-get install -y cmake g++ libspdlog-dev
+# 仅在开启 TLS 时需要
+sudo apt-get install -y libssl-dev
+```
+
+## 拉取源码（统一联调推荐）
+
+```bash
+git clone https://github.com/gzj-creator/galay-kernel.git
+git clone https://github.com/gzj-creator/galay-http.git
+# 可选：启用 TLS 时一并拉取
+git clone https://github.com/gzj-creator/galay-ssl.git
+```
+
 ## 构建
 
 ```bash
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
+cmake --build . --parallel
 ```
 
 ## 常用 CMake 选项
@@ -87,7 +113,7 @@ import galay.websocket;
 cmake -S . -B build-mod -G Ninja \
   -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++ \
   -DGALAY_HTTP_ENABLE_SSL=OFF
-cmake --build build-mod --target galay-http-modules -j
+cmake --build build-mod --target galay-http-modules --parallel
 ```
 
 ## Example（精简）

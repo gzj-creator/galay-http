@@ -1,8 +1,101 @@
 #include "HttpHeader.h"
 #include <cassert>
+#include <algorithm>
+#include <cctype>
 
 namespace galay::http 
 {
+    namespace {
+
+    std::string toLowerAscii(std::string value)
+    {
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        return value;
+    }
+
+    std::string toCanonicalHeaderKey(const std::string& value)
+    {
+        std::string result = value;
+        bool word_start = true;
+        for (char& ch : result) {
+            unsigned char c = static_cast<unsigned char>(ch);
+            if (word_start) {
+                ch = static_cast<char>(std::toupper(c));
+            } else {
+                ch = static_cast<char>(std::tolower(c));
+            }
+            word_start = (ch == '-');
+        }
+        return result;
+    }
+
+    std::string getHeaderValueLoose(const HeaderPair& headers, const std::string& key)
+    {
+        const std::string value = headers.getValue(key);
+        if (!value.empty()) {
+            return value;
+        }
+
+        const std::string canonical = toCanonicalHeaderKey(key);
+        if (canonical != key) {
+            const std::string value2 = headers.getValue(canonical);
+            if (!value2.empty()) {
+                return value2;
+            }
+        }
+
+        const std::string lower = toLowerAscii(key);
+        if (lower != key && lower != canonical) {
+            const std::string value3 = headers.getValue(lower);
+            if (!value3.empty()) {
+                return value3;
+            }
+        }
+
+        return "";
+    }
+
+    bool headerValueContainsToken(const std::string& value, const std::string& token)
+    {
+        const std::string needle = toLowerAscii(token);
+        std::string current;
+
+        auto flush = [&]() -> bool {
+            size_t begin = 0;
+            while (begin < current.size() && std::isspace(static_cast<unsigned char>(current[begin]))) {
+                ++begin;
+            }
+            size_t end = current.size();
+            while (end > begin && std::isspace(static_cast<unsigned char>(current[end - 1]))) {
+                --end;
+            }
+
+            bool matched = false;
+            if (end > begin) {
+                const std::string normalized = toLowerAscii(current.substr(begin, end - begin));
+                matched = (normalized == needle);
+            }
+            current.clear();
+            return matched;
+        };
+
+        for (char ch : value) {
+            if (ch == ',') {
+                if (flush()) {
+                    return true;
+                }
+            } else {
+                current.push_back(ch);
+            }
+        }
+
+        return flush();
+    }
+
+    } // namespace
+
     HeaderPair::HeaderPair()
     {
     }
@@ -234,7 +327,7 @@ namespace galay::http
             if (c == ' ') {
                 m_parseState = RequestParseState::HeaderSpace;
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = RequestParseState::HeaderCR;
@@ -248,7 +341,7 @@ namespace galay::http
             if (c == ' ') {
                 // skip extra spaces
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = RequestParseState::HeaderCR;
@@ -260,7 +353,7 @@ namespace galay::http
 
         case RequestParseState::HeaderValue:
             if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = RequestParseState::HeaderCR;
@@ -390,31 +483,29 @@ namespace galay::http
     bool HttpRequestHeader::isKeepAlive() const
     {
         // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
-        if (!m_headerPairs.hasKey("Connection")) {
+        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        if (conn.empty()) {
             return m_version == HttpVersion::HttpVersion_1_1;
         }
-        const std::string& conn = m_headerPairs.getValue("Connection");
-        return conn == "keep-alive";
+        if (headerValueContainsToken(conn, "close")) {
+            return false;
+        }
+        if (headerValueContainsToken(conn, "keep-alive")) {
+            return true;
+        }
+        return m_version == HttpVersion::HttpVersion_1_1;
     }
 
     bool HttpRequestHeader::isChunked() const
     {
-        // 使用 hasKey 避免不必要的查找
-        if (!m_headerPairs.hasKey("Transfer-Encoding")) {
-            return false;
-        }
-        const std::string& te = m_headerPairs.getValue("Transfer-Encoding");
-        return te == "chunked";
+        const std::string te = getHeaderValueLoose(m_headerPairs, "Transfer-Encoding");
+        return headerValueContainsToken(te, "chunked");
     }
 
     bool HttpRequestHeader::isConnectionClose() const
     {
-        // 使用 hasKey 避免不必要的查找
-        if (!m_headerPairs.hasKey("Connection")) {
-            return false;
-        }
-        const std::string& conn = m_headerPairs.getValue("Connection");
-        return conn == "close";
+        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        return headerValueContainsToken(conn, "close");
     }
 
     void HttpRequestHeader::copyFrom(const HttpRequestHeader& header)
@@ -698,20 +789,29 @@ namespace galay::http
     bool HttpResponseHeader::isKeepAlive() const
     {
         // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
-        if (!m_headerPairs.hasKey("Connection")) {
+        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        if (conn.empty()) {
             return m_version == HttpVersion::HttpVersion_1_1;
         }
-        return m_headerPairs.getValue("Connection") == "keep-alive";
+        if (headerValueContainsToken(conn, "close")) {
+            return false;
+        }
+        if (headerValueContainsToken(conn, "keep-alive")) {
+            return true;
+        }
+        return m_version == HttpVersion::HttpVersion_1_1;
     }
 
     bool HttpResponseHeader::isChunked() const
     {
-        return m_headerPairs.getValue("Transfer-Encoding") == "chunked";
+        const std::string te = getHeaderValueLoose(m_headerPairs, "Transfer-Encoding");
+        return headerValueContainsToken(te, "chunked");
     }
 
     bool HttpResponseHeader::isConnectionClose() const
     {
-        return m_headerPairs.getValue("Connection") == "close";
+        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        return headerValueContainsToken(conn, "close");
     }
 
     std::string HttpResponseHeader::toString() const
@@ -848,7 +948,7 @@ namespace galay::http
             if (c == ' ') {
                 m_parseState = ResponseParseState::HeaderSpace;
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = ResponseParseState::HeaderCR;
@@ -862,7 +962,7 @@ namespace galay::http
             if (c == ' ') {
                 // skip extra spaces
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = ResponseParseState::HeaderCR;
@@ -874,7 +974,7 @@ namespace galay::http
 
         case ResponseParseState::HeaderValue:
             if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = ResponseParseState::HeaderCR;

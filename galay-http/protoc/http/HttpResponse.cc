@@ -35,6 +35,85 @@ void removeHeaderPairLoose(galay::http::HeaderPair& headers, const std::string& 
     }
 }
 
+std::string toLowerAscii(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+std::string toCanonicalHeaderKey(std::string value)
+{
+    bool word_start = true;
+    for (char& ch : value) {
+        unsigned char c = static_cast<unsigned char>(ch);
+        ch = static_cast<char>(word_start ? std::toupper(c) : std::tolower(c));
+        word_start = (ch == '-');
+    }
+    return value;
+}
+
+std::string getHeaderValueLoose(const galay::http::HeaderPair& headers, const std::string& key)
+{
+    const std::string value1 = headers.getValue(key);
+    if (!value1.empty()) {
+        return value1;
+    }
+
+    const std::string canonical = toCanonicalHeaderKey(key);
+    if (canonical != key) {
+        const std::string value2 = headers.getValue(canonical);
+        if (!value2.empty()) {
+            return value2;
+        }
+    }
+
+    const std::string lower = toLowerAscii(key);
+    if (lower != key && lower != canonical) {
+        const std::string value3 = headers.getValue(lower);
+        if (!value3.empty()) {
+            return value3;
+        }
+    }
+
+    return "";
+}
+
+bool headerValueContainsToken(const std::string& value, const std::string& token)
+{
+    const std::string needle = toLowerAscii(token);
+    std::string current;
+
+    auto flush = [&]() -> bool {
+        size_t begin = 0;
+        while (begin < current.size() && std::isspace(static_cast<unsigned char>(current[begin]))) {
+            ++begin;
+        }
+        size_t end = current.size();
+        while (end > begin && std::isspace(static_cast<unsigned char>(current[end - 1]))) {
+            --end;
+        }
+        bool matched = false;
+        if (end > begin) {
+            matched = (toLowerAscii(current.substr(begin, end - begin)) == needle);
+        }
+        current.clear();
+        return matched;
+    };
+
+    for (char ch : value) {
+        if (ch == ',') {
+            if (flush()) {
+                return true;
+            }
+        } else {
+            current.push_back(ch);
+        }
+    }
+
+    return flush();
+}
+
 std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t skip_bytes)
 {
     std::vector<iovec> sliced;
@@ -111,6 +190,7 @@ namespace galay::http
     {
         ssize_t newly_consumed = 0;
         size_t header_bytes = 0;  // 本次调用中需要跳过的header字节数
+        bool is_chunked = false;
 
         // 如果header还没解析完，先解析header
         if (!m_headerParsed) {
@@ -126,12 +206,15 @@ namespace galay::http
             header_bytes = header_consumed;
             newly_consumed = header_consumed;
             m_headerParsed = true;
+            is_chunked = headerValueContainsToken(
+                getHeaderValueLoose(m_header.headerPairs(), "Transfer-Encoding"),
+                "chunked");
 
-            if (m_header.isChunked()) {
+            if (is_chunked) {
                 // chunked body 继续往下解析
             } else {
                 // header解析完成，获取Content-Length
-                std::string content_length_str = m_header.headerPairs().getValue("Content-Length");
+                std::string content_length_str = getHeaderValueLoose(m_header.headerPairs(), "Content-Length");
                 if (content_length_str.empty()) {
                     // 没有body，解析完成
                     return {kNoError, newly_consumed};
@@ -148,9 +231,13 @@ namespace galay::http
                 }
                 m_body.reserve(m_contentLength);
             }
+        } else {
+            is_chunked = headerValueContainsToken(
+                getHeaderValueLoose(m_header.headerPairs(), "Transfer-Encoding"),
+                "chunked");
         }
 
-        if (m_header.isChunked()) {
+        if (is_chunked) {
             auto body_iovecs = sliceIovecs(iovecs, header_bytes);
             if (body_iovecs.empty()) {
                 return {kNoError, newly_consumed};

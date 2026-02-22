@@ -17,14 +17,14 @@
 
 ```bash
 cmake -S . -B build -DBUILD_EXAMPLES=ON
-cmake --build build -j
+cmake --build build --parallel
 ```
 
 SSL 示例需启用：
 
 ```bash
 cmake -S . -B build_ssl -DBUILD_EXAMPLES=ON -DGALAY_HTTP_ENABLE_SSL=ON
-cmake --build build_ssl -j
+cmake --build build_ssl --parallel
 ```
 
 运行（Proxy + Mount）：

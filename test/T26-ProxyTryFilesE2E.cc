@@ -391,7 +391,7 @@ int main()
         std::abort();
     }
 
-    std::string req7 = Http1_1RequestBuilder::get("/raw/stream")
+    std::string req7 = Http1_1RequestBuilder::get("/stream")
         .host("127.0.0.1")
         .connection("close")
         .buildMove()
@@ -403,6 +403,30 @@ int main()
     assertContains(resp7, "5\r\nworld\r\n");
     assertContains(resp7, "0\r\n\r\n");
     assertNotContains(resp7, "Content-Length:");
+
+    std::string req8 = Http1_1RequestBuilder::get("/raw/stream")
+        .host("127.0.0.1")
+        .connection("close")
+        .buildMove()
+        .toString();
+    std::string resp8 = sendRawHttp(req8, proxy_port);
+    assertContains(resp8, "HTTP/1.1 200 OK");
+    assertContains(resp8, "Transfer-Encoding: chunked");
+    assertContains(resp8, "5\r\nhello\r\n");
+    assertContains(resp8, "5\r\nworld\r\n");
+    assertContains(resp8, "0\r\n\r\n");
+    assertNotContains(resp8, "Content-Length:");
+
+    std::string req9 = Http1_1RequestBuilder::post("/raw/echo")
+        .host("127.0.0.1")
+        .connection("close")
+        .contentType("application/json")
+        .body("{\"q\":\"stream\"}")
+        .buildMove()
+        .toString();
+    std::string resp9 = sendRawHttp(req9, proxy_port);
+    assertContains(resp9, "HTTP/1.1 200 OK");
+    assertContains(resp9, "Echo: {\"q\":\"stream\"}");
 
     proxy_server.stop();
     upstream_server.stop();

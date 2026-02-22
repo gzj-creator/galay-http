@@ -242,6 +242,33 @@ std::string rewriteProxyUri(const std::string& routePrefix, const std::string& r
     return requestUri;
 }
 
+bool isLikelyStreamingRequest(const std::string& uri, const HeaderPair& headers)
+{
+    const std::string accept = toLowerAscii(getHeaderValueLoose(headers, "Accept"));
+    if (accept.find("text/event-stream") != std::string::npos) {
+        return true;
+    }
+
+    const std::string content_type = toLowerAscii(getHeaderValueLoose(headers, "Content-Type"));
+    if (content_type.find("text/event-stream") != std::string::npos) {
+        return true;
+    }
+
+    const std::string proxy_stream = toLowerAscii(getHeaderValueLoose(headers, "X-Proxy-Stream"));
+    if (proxy_stream == "1" || proxy_stream == "true" || proxy_stream == "yes") {
+        return true;
+    }
+
+    const std::string lower_uri = toLowerAscii(uri);
+    if (lower_uri.find("/stream") != std::string::npos ||
+        lower_uri.find("stream=true") != std::string::npos ||
+        lower_uri.find("stream=1") != std::string::npos) {
+        return true;
+    }
+
+    return false;
+}
+
 Coroutine sendProxyError(HttpConn& conn, HttpStatusCode code, const std::string& message) {
     auto response = Http1_1ResponseBuilder()
         .status(code)
@@ -1026,6 +1053,13 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
         const std::string connection = getHeaderValueLoose(headers, "Connection");
         std::vector<std::string> hop_by_hop_tokens = splitConnectionTokens(connection);
 
+        ProxyMode effective_mode = mode;
+        if (mode == ProxyMode::Http && isLikelyStreamingRequest(upstream_uri, headers)) {
+            effective_mode = ProxyMode::Raw;
+            HTTP_LOG_INFO("[proxy] [stream-upgrade] [uri={}] [upstream={}:{}]",
+                          upstream_uri, upstreamHost, upstreamPort);
+        }
+
         removeHeaderPairLoose(headers, "Connection");
         removeHeaderPairLoose(headers, "Proxy-Connection");
         removeHeaderPairLoose(headers, "Keep-Alive");
@@ -1040,11 +1074,11 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
         applyForwardHeaders(conn, headers, original_host);
         removeHeaderPairLoose(headers, "Host");
         headers.addHeaderPair("Host", upstreamHost + ":" + std::to_string(upstreamPort));
-        headers.addHeaderPair("Connection", mode == ProxyMode::Raw ? "close" : "keep-alive");
+        headers.addHeaderPair("Connection", effective_mode == ProxyMode::Raw ? "close" : "keep-alive");
 
         req.header().uri() = upstream_uri;
 
-        if (mode == ProxyMode::Raw) {
+        if (effective_mode == ProxyMode::Raw) {
             auto client = std::make_unique<HttpClient>();
             bool connect_ok = false;
             std::string connect_err;

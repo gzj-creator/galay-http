@@ -7,3 +7,5 @@ build_mod_llvm/
 *.log
 cert/*.log
 files/*.bin
+
+.claude/
