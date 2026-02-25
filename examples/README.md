@@ -31,10 +31,10 @@ cmake --build build_ssl --parallel
 
 ```bash
 # 终端 1：upstream
-./build/example/E1-EchoServer 8080
+./build/examples/E1-EchoServer 8080
 
 # 终端 2：proxy，挂载 /static -> ./html（Nginx try_files 风格）
-./build/example/E12-HttpProxy 8081 127.0.0.1 8080 /static ./html nginx
+./build/examples/E12-HttpProxy 8081 127.0.0.1 8080 /static ./html nginx
 
 # 走代理转发到 upstream
 curl -X POST http://127.0.0.1:8081/echo -d "via proxy"

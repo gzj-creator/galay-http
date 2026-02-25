@@ -1,6 +1,6 @@
 # Galay-HTTP
 
-高性能 **C++23** 协程 HTTP/WebSocket/HTTP2 库，构建于 `galay-kernel` 之上。
+高性能 **C++23** 协程 HTTP/WebSocket/HTTP2 库，构建于 `galay-kernel` 与 `galay-utils` 之上。
 
 ## 特性
 
@@ -13,14 +13,17 @@
 
 ## 文档导航
 
-建议从 `docs/3-使用指南.md` 开始：
+完整文档位于 `docs/` 目录，建议按以下顺序阅读：
 
-1. [架构设计](docs/1-架构设计.md)
-2. [API参考](docs/2-API参考.md)
-3. [使用指南](docs/3-使用指南.md)
-4. [性能测试](docs/04性能测试.md)
+1. [快速开始](docs/01-快速开始.md) - 安装、编译、运行第一个示例
+2. [架构设计](docs/02-架构设计.md) - 理解设计理念和核心架构
+3. [API 文档](docs/03-API文档.md) - 完整的 API 参考手册
+4. [示例代码](docs/04-示例代码.md) - 常见使用场景的代码示例
+5. [高级主题](docs/05-高级主题.md) - 性能优化、中间件、安全性
+6. [常见问题](docs/06-常见问题.md) - 常见问题解答
+7. [性能测试](docs/07-性能测试.md) - 性能测试数据和基准测试
 
-原先分散的 `B*.md` 说明已合并为单一性能测试文档，减少文档文件数量。
+更多详情请查看 [文档目录](docs/README.md)。
 
 ## 构建要求
 
@@ -28,6 +31,7 @@
 - C++23 编译器（GCC 11+ / Clang 14+ / AppleClang 15+）
 - `spdlog`
 - `galay-kernel`
+- `galay-utils`
 - 可选：`galay-ssl` + OpenSSL（启用 TLS 时）
 
 ## 依赖安装（macOS / Homebrew）
@@ -51,6 +55,7 @@ sudo apt-get install -y libssl-dev
 
 ```bash
 git clone https://github.com/gzj-creator/galay-kernel.git
+git clone https://github.com/gzj-creator/galay-utils.git
 git clone https://github.com/gzj-creator/galay-http.git
 # 可选：启用 TLS 时一并拉取
 git clone https://github.com/gzj-creator/galay-ssl.git
@@ -139,36 +144,36 @@ cmake --build build-mod --target galay-http-modules --parallel
 
 ```bash
 # 终端 1
-./build/example/E1-EchoServer 8080
+./build/examples/E1-EchoServer 8080
 
 # 终端 2
-./build/example/E2-EchoClient http://127.0.0.1:8080/echo "hello"
+./build/examples/E2-EchoClient http://127.0.0.1:8080/echo "hello"
 ```
 
 ### WebSocket Echo
 
 ```bash
 # 终端 1
-./build/example/E3-WebsocketServer
+./build/examples/E3-WebsocketServer
 
 # 终端 2
-./build/example/E4-WebsocketClient ws://127.0.0.1:8080/ws
+./build/examples/E4-WebsocketClient ws://127.0.0.1:8080/ws
 ```
 
 ### H2c Echo
 
 ```bash
 # 终端 1
-./build/example/E9-H2cEchoServer 9080
+./build/examples/E9-H2cEchoServer 9080
 
 # 终端 2
-./build/example/E10-H2cEchoClient 127.0.0.1 9080
+./build/examples/E10-H2cEchoClient 127.0.0.1 9080
 ```
 
 ### 静态文件服务
 
 ```bash
-./build/example/E11-StaticServer 8090 ./html
+./build/examples/E11-StaticServer 8090 ./html
 # 打开 http://127.0.0.1:8090/
 ```
 
@@ -176,10 +181,10 @@ cmake --build build-mod --target galay-http-modules --parallel
 
 ```bash
 # upstream
-./build/example/E1-EchoServer 8080
+./build/examples/E1-EchoServer 8080
 
 # proxy + mount (listen=8081, upstream=127.0.0.1:8080, /static -> ./html)
-./build/example/E12-HttpProxy 8081 127.0.0.1 8080 /static ./html dynamic
+./build/examples/E12-HttpProxy 8081 127.0.0.1 8080 /static ./html dynamic
 
 # request through proxy (falls back to upstream)
 curl -X POST http://127.0.0.1:8081/echo -d "via proxy"
@@ -207,7 +212,7 @@ galay-http/
 │   ├── protoc/        # 协议数据结构（http/http2/websocket）
 │   ├── utils/         # builder / logger / utils
 │   └── module/        # C++23 命名模块接口
-├── example/
+├── examples/
 │   ├── common/        # 示例公共配置
 │   └── include/       # 示例实现（E1~E12）
 ├── test/              # 测试（T*）

@@ -1,6 +1,6 @@
 #!/bin/bash
 # run.sh - 运行测试和示例的通用脚本
-# 用法: ./scripts/run.sh [test|example|benchmark] [文件名]
+# 用法: ./scripts/run.sh [test|examples|benchmark] [文件名]
 
 set -e
 
@@ -19,13 +19,13 @@ print_help() {
     echo ""
     echo "类型:"
     echo "  test       - 运行测试文件"
-    echo "  example    - 运行示例文件"
+    echo "  examples   - 运行示例文件"
     echo "  benchmark  - 运行压测文件"
     echo "  all-tests  - 运行所有测试"
     echo ""
     echo "示例:"
     echo "  $0 test T1-HttpParser"
-    echo "  $0 example E1-EchoServer"
+    echo "  $0 examples E1-EchoServer"
     echo "  $0 benchmark B1-Chunked"
     echo "  $0 all-tests"
 }
@@ -115,12 +115,12 @@ main() {
             fi
             run_executable "test" "$@"
             ;;
-        example)
+        example|examples)
             if [ $# -eq 0 ]; then
                 echo -e "${RED}错误: 请指定示例文件名${NC}"
                 exit 1
             fi
-            run_executable "example" "$@"
+            run_executable "examples" "$@"
             ;;
         benchmark)
             if [ $# -eq 0 ]; then

@@ -37,7 +37,7 @@ check_build() {
         return 1
     fi
 
-    local required_dirs=("test" "example" "benchmark")
+    local required_dirs=("test" "examples" "benchmark")
     local all_exist=true
 
     for dir in "${required_dirs[@]}"; do
@@ -148,7 +148,7 @@ check_naming() {
 
     # 检查示例文件
     echo -e "  检查示例文件命名..."
-    local example_files=$(find "${PROJECT_ROOT}/example" -name "*.cc" ! -name "E*-*.cc" -type f)
+    local example_files=$(find "${PROJECT_ROOT}/examples" -name "*.cc" ! -name "E*-*.cc" -type f)
     if [ -n "$example_files" ]; then
         echo -e "${RED}✗ 示例文件命名不规范:${NC}"
         echo "$example_files"

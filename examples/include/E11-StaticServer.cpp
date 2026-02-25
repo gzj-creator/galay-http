@@ -1,4 +1,4 @@
-#include "example/common/ExampleCommon.h"
+#include "examples/common/ExampleCommon.h"
 #include "galay-http/kernel/http/HttpRouter.h"
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/protoc/http/HttpRequest.h"

@@ -129,7 +129,7 @@ if(BUILD_BENCHMARKS)
 endif()
 
 if(BUILD_EXAMPLES)
-    add_subdirectory(example)
+    add_subdirectory(examples)
 endif()
 
 # 配置并安装 CMake 配置文件
