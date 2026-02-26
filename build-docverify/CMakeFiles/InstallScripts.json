@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/gongzhijie/Desktop/projects/git/galay-http/build-docverify/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-http/build-docverify/galay-http/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-http/build-docverify/test/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-http/build-docverify/benchmark/cmake_install.cmake",
+		"/Users/gongzhijie/Desktop/projects/git/galay-http/build-docverify/examples/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

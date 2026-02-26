@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/T18-WsServer.dir/T18-WsServer.cc.o" -o T18-WsServer  -Wl,-rpath,/Users/gongzhijie/Desktop/projects/git/galay-http/build-docverify/galay-http ../galay-http/libgalay-http.1.0.0.dylib -lpthread /usr/local/lib/libgalay-kernel.a
