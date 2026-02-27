@@ -3,7 +3,6 @@
  * @brief H2 (HTTP/2 over TLS) 客户端测试程序
  */
 
-#include "galay-http/kernel/http2/H2Client.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
@@ -11,10 +10,14 @@
 #include <chrono>
 #include <cstdlib>
 
-using namespace galay::http2;
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-http/kernel/http2/H2Client.h"
+#endif
+
 using namespace galay::kernel;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+using namespace galay::http2;
 
 static std::atomic<int> g_success{0};
 static std::atomic<int> g_fail{0};

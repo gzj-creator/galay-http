@@ -3,12 +3,15 @@
  * @brief h2 (HTTP/2 over TLS) Echo 客户端示例
  */
 
-#include "galay-http/kernel/http2/H2Client.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <cstdlib>
 #include <thread>
 #include <chrono>
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-http/kernel/http2/H2Client.h"
+#endif
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 

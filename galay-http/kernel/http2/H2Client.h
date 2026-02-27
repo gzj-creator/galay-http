@@ -6,17 +6,20 @@
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/kernel/http/HttpLog.h"
-#include "galay-http/kernel/http/SslHandshakeAwaitable.h"
 #include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/kernel/Timeout.hpp"
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-http/kernel/http/SslHandshakeAwaitable.h"
 #include "galay-ssl/async/SslSocket.h"
 #include "galay-ssl/ssl/SslContext.h"
+#endif
 #include <memory>
 #include <optional>
 
 namespace galay::http2
 {
 
+#ifdef GALAY_HTTP_SSL_ENABLED
 using namespace galay::kernel;
 using namespace galay::ssl;
 
@@ -534,6 +537,8 @@ private:
     std::unique_ptr<SslSocket> m_socket;
     std::unique_ptr<Http2ConnImpl<SslSocket>> m_conn;
 };
+
+#endif // GALAY_HTTP_SSL_ENABLED
 
 } // namespace galay::http2
 
