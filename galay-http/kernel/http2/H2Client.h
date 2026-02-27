@@ -149,7 +149,10 @@ public:
             std::string alpn = client.m_socket->getALPNProtocol();
             client.m_alpn_protocol = alpn;
             if (alpn != "h2") {
-                HTTP_LOG_WARN("[h2] [alpn-fail] [got={}] [expect=h2]", alpn);
+                HTTP_LOG_ERROR("[h2] [alpn-fail] [got={}] [expect=h2]", alpn);
+                self->m_error = Http2ErrorCode::ConnectError;
+                self->m_done = true;
+                co_return;
             }
             HTTP_LOG_DEBUG("[h2] [handshake-ok] [alpn={}]", alpn);
 

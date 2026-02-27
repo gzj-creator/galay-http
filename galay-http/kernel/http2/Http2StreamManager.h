@@ -356,54 +356,76 @@ private:
                 }
             }
 
-            // 使用 writev 一次性发送所有帧
             if (!iovecs.empty()) {
-                size_t total_bytes = 0;
-                for (const auto& iov : iovecs) {
-                    total_bytes += iov.iov_len;
-                }
+                if constexpr (requires(SocketType& socket, std::vector<iovec>& vec) { socket.writev(vec); }) {
+                    // 支持 writev 的 socket（如 TcpSocket）：一次批量发送
+                    size_t total_bytes = 0;
+                    for (const auto& iov : iovecs) {
+                        total_bytes += iov.iov_len;
+                    }
 
-                size_t sent = 0;
-                while (sent < total_bytes) {
-                    auto result = co_await m_conn.socket().writev(iovecs);
-                    if (!result) {
-                        if (m_conn.isClosing() || m_conn.isPeerClosed() ||
-                            m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
-                            HTTP_LOG_DEBUG("[stream-mgr] [writer] [writev-fail] [closing]");
-                        } else {
-                            HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-fail]");
-                        }
-                        // 通知所有 waiter 发送失败
-                        for (auto& item : batch) {
-                            if (item.waiter) {
-                                item.waiter->notify();
+                    size_t sent = 0;
+                    while (sent < total_bytes) {
+                        auto result = co_await m_conn.socket().writev(iovecs);
+                        if (!result) {
+                            if (m_conn.isClosing() || m_conn.isPeerClosed() ||
+                                m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
+                                HTTP_LOG_DEBUG("[stream-mgr] [writer] [writev-fail] [closing]");
+                            } else {
+                                HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-fail]");
                             }
+                            for (auto& item : batch) {
+                                if (item.waiter) {
+                                    item.waiter->notify();
+                                }
+                            }
+                            co_return;
                         }
-                        co_return;
-                    }
 
-                    sent += result.value();
-                    if (sent >= total_bytes) {
-                        break;
-                    }
-
-                    // 部分发送，调整 iovecs
-                    size_t remaining = result.value();
-                    for (auto& iov : iovecs) {
-                        if (remaining >= iov.iov_len) {
-                            remaining -= iov.iov_len;
-                            iov.iov_len = 0;
-                        } else {
-                            iov.iov_base = static_cast<char*>(iov.iov_base) + remaining;
-                            iov.iov_len -= remaining;
+                        sent += result.value();
+                        if (sent >= total_bytes) {
                             break;
                         }
+
+                        size_t remaining = result.value();
+                        for (auto& iov : iovecs) {
+                            if (remaining >= iov.iov_len) {
+                                remaining -= iov.iov_len;
+                                iov.iov_len = 0;
+                            } else {
+                                iov.iov_base = static_cast<char*>(iov.iov_base) + remaining;
+                                iov.iov_len -= remaining;
+                                break;
+                            }
+                        }
+                        iovecs.erase(
+                            std::remove_if(iovecs.begin(), iovecs.end(),
+                                           [](const iovec& iov) { return iov.iov_len == 0; }),
+                            iovecs.end());
                     }
-                    // 移除已发送完的 iovec
-                    iovecs.erase(
-                        std::remove_if(iovecs.begin(), iovecs.end(),
-                                      [](const iovec& iov) { return iov.iov_len == 0; }),
-                        iovecs.end());
+                } else {
+                    // 不支持 writev 的 socket（如 SslSocket）：按帧串行 send
+                    for (const auto& buffer : frame_buffers) {
+                        size_t offset = 0;
+                        while (offset < buffer.size()) {
+                            auto result = co_await m_conn.socket().send(buffer.data() + offset, buffer.size() - offset);
+                            if (!result || result.value() == 0) {
+                                if (m_conn.isClosing() || m_conn.isPeerClosed() ||
+                                    m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
+                                    HTTP_LOG_DEBUG("[stream-mgr] [writer] [send-fail] [closing]");
+                                } else {
+                                    HTTP_LOG_ERROR("[stream-mgr] [writer] [send-fail]");
+                                }
+                                for (auto& item : batch) {
+                                    if (item.waiter) {
+                                        item.waiter->notify();
+                                    }
+                                }
+                                co_return;
+                            }
+                            offset += result.value();
+                        }
+                    }
                 }
             }
 
