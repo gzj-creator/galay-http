@@ -37,14 +37,10 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
     WsFrame welcome_frame = WsFrameParser::createTextFrame("Welcome to WSS Benchmark Server!");
     std::string welcome_data = WsFrameParser::toBytes(welcome_frame, false);
 
-    size_t sent = 0;
-    while (sent < welcome_data.size()) {
-        auto result = co_await socket.send(welcome_data.data() + sent, welcome_data.size() - sent);
-        if (!result) {
-            HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", result.error().message());
-            co_return;
-        }
-        sent += result.value();
+    auto result = co_await socket.send(welcome_data.data(), welcome_data.size());
+    if (!result) {
+        HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", result.error().message());
+        co_return;
     }
 
     // 接收缓冲区
@@ -90,14 +86,20 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
                 HTTP_LOG_DEBUG("[wss] [close] [recv]");
                 WsFrame close_frame = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
                 std::string close_data = WsFrameParser::toBytes(close_frame, false);
-                co_await socket.send(close_data.data(), close_data.size());
+                auto result = co_await socket.send(close_data.data(), close_data.size());
+                if (!result) {
+                    HTTP_LOG_WARN("[close] [fail] [{}]", result.error().message());
+                }
                 goto cleanup;
             }
             else if (frame.header.opcode == WsOpcode::Ping) {
                 HTTP_LOG_DEBUG("[wss] [ping] [recv] [pong] [send]");
                 WsFrame pong_frame = WsFrameParser::createPongFrame(frame.payload);
                 std::string pong_data = WsFrameParser::toBytes(pong_frame, false);
-                co_await socket.send(pong_data.data(), pong_data.size());
+                auto result = co_await socket.send(pong_data.data(), pong_data.size());
+                if (!result) {
+                    HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
+                }
             }
             else if (frame.header.opcode == WsOpcode::Text || frame.header.opcode == WsOpcode::Binary) {
                 // 回显消息
@@ -106,12 +108,8 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
                     : WsFrameParser::createBinaryFrame(frame.payload);
                 std::string echo_data = WsFrameParser::toBytes(echo_frame, false);
 
-                size_t echo_sent = 0;
-                while (echo_sent < echo_data.size()) {
-                    auto r = co_await socket.send(echo_data.data() + echo_sent, echo_data.size() - echo_sent);
-                    if (!r) break;
-                    echo_sent += r.value();
-                }
+                auto r = co_await socket.send(echo_data.data(), echo_data.size());
+                if (!r) break;
             }
         }
     }
@@ -151,9 +149,9 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
         if (!upgrade_result.success) {
             HTTP_LOG_ERROR("[wss] [upgrade] [fail] [{}]", upgrade_result.error_message);
             auto writer = conn.getWriter();
-            while (true) {
-                auto r = co_await writer.sendResponse(upgrade_result.response);
-                if (!r || r.value()) break;
+            auto result = co_await writer.sendResponse(upgrade_result.response);
+            if (!result) {
+                HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
             }
             co_await conn.close();
             co_return;
@@ -163,14 +161,11 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
 
         // 发送 101 Switching Protocols
         auto writer = conn.getWriter();
-        while (true) {
-            auto r = co_await writer.sendResponse(upgrade_result.response);
-            if (!r) {
-                HTTP_LOG_ERROR("[wss] [upgrade] [send-fail] [{}]", r.error().message());
-                co_await conn.close();
-                co_return;
-            }
-            if (r.value()) break;
+        auto r = co_await writer.sendResponse(upgrade_result.response);
+        if (!r) {
+            HTTP_LOG_ERROR("[wss] [upgrade] [send-fail] [{}]", r.error().message());
+            co_await conn.close();
+            co_return;
         }
 
         // 获取底层 socket 并处理 WebSocket 连接
@@ -186,9 +181,9 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
         .buildMove();
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto r = co_await writer.sendResponse(response);
-        if (!r || r.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
     }
     co_await conn.close();
     co_return;
@@ -223,14 +218,13 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        HttpsServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.cert_path = cert_path;
-        config.key_path = key_path;
-        config.io_scheduler_count = io_threads;
-
-        HttpsServer server(config);
+        HttpsServer server(HttpsServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .certPath(cert_path)
+            .keyPath(key_path)
+            .ioSchedulerCount(static_cast<size_t>(io_threads))
+            .build());
 
         server.start(httpsHandler);
 

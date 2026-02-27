@@ -56,13 +56,9 @@ Coroutine handleHttpRequest(HttpConn conn) {
             .buildMove();
 
         auto writer = conn.getWriter();
-
-        while (true) {
-            auto result = co_await writer.sendResponse(response);
-            if (!result) {
-                break;
-            }
-            if (result.value()) break;
+        auto result = co_await writer.sendResponse(response);
+        if (!result) {
+            HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
         }
     }
 
@@ -99,15 +95,14 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        HttpServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.io_scheduler_count = io_threads;
-        config.compute_scheduler_count = 0;
+        HttpServer server(HttpServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .ioSchedulerCount(static_cast<size_t>(io_threads))
+            .computeSchedulerCount(0)
+            .build());
 
-        HttpServer server(config);
-
-        HTTP_LOG_INFO("[server] [listen] [http] [{}:{}]", config.host, config.port);
+        HTTP_LOG_INFO("[server] [listen] [http] [{}:{}]", "0.0.0.0", port);
 
         server.start(handleHttpRequest);
 

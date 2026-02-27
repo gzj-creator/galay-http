@@ -20,10 +20,9 @@ std::atomic<int> g_fail{0};
 Coroutine singleRequest(int id) {
     std::cout << "[Request " << id << "] Starting..." << std::endl;
 
-    HttpsClientConfig config;
-    config.verify_peer = false;
-
-    HttpsClient client(config);
+    HttpsClient client(HttpsClientBuilder()
+        .verifyPeer(false)
+        .build());
 
     try {
         // 连接

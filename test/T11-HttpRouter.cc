@@ -5,12 +5,36 @@
 
 #include <iostream>
 #include <cassert>
+#include <filesystem>
 #include "galay-http/kernel/http/HttpRouter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/kernel/http/HttpLog.h"
 
 using namespace galay::http;
+
+namespace {
+
+std::string resolveStaticDir() {
+    namespace fs = std::filesystem;
+
+    const std::string candidates[] = {
+        "./test/static_files",
+        "./static_files",
+        "../test/static_files",
+        "../../test/static_files"
+    };
+
+    for (const auto& path : candidates) {
+        if (fs::exists(path) && fs::is_directory(path)) {
+            return path;
+        }
+    }
+
+    return "./test/static_files";
+}
+
+} // namespace
 
 // 测试用的简单处理器
 Coroutine testHandler(HttpConn& conn, HttpRequest req) {
@@ -321,7 +345,7 @@ void testTryFilesMounting() {
     HTTP_LOG_INFO("========================================");
 
     HttpRouter router;
-    router.tryFiles("/static", "./test/static_files", "127.0.0.1", 8080);
+    router.tryFiles("/static", resolveStaticDir(), "127.0.0.1", 8080);
 
     auto match1 = router.findHandler(HttpMethod::GET, "/static/index.html");
     assert(match1.handler != nullptr);

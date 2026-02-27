@@ -104,7 +104,10 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         else if (opcode == WsOpcode::Close) {
             // 收到关闭请求
             HTTP_LOG_INFO("[ws] [close] [recv]");
-            co_await writer.sendClose();
+            auto close_result = co_await writer.sendClose();
+            if (!close_result) {
+                HTTP_LOG_ERROR("[ws] [close] [send-fail] [{}]", close_result.error().message());
+            }
             break;
         }
         else if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
@@ -125,7 +128,10 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
 
     // 关闭连接
     HTTP_LOG_INFO("[ws] [conn] [close]");
-    co_await ws_conn.close();
+    auto close_result = co_await ws_conn.close();
+    if (!close_result) {
+        HTTP_LOG_ERROR("[ws] [conn] [close-fail] [{}]", close_result.error().message());
+    }
     co_return;
 }
 
@@ -141,7 +147,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
         HTTP_LOG_ERROR("[http] [req] [read-fail] [{}]", read_result.error().message());
-        co_await conn.close();
+        auto close_result = co_await conn.close();
+        if (!close_result) {
+            HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
+        }
         co_return;
     }
 
@@ -157,8 +166,14 @@ Coroutine handleHttpRequest(HttpConn conn) {
 
             // 发送错误响应
             auto writer = conn.getWriter();
-            co_await writer.sendResponse(upgrade_result.response);
-            co_await conn.close();
+            auto result = co_await writer.sendResponse(upgrade_result.response);
+            if (!result) {
+                HTTP_LOG_ERROR("[upgrade] [send-fail] [{}]", result.error().message());
+            }
+            auto close_result = co_await conn.close();
+            if (!close_result) {
+                HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
+            }
             co_return;
         }
 
@@ -170,7 +185,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
 
         if (!send_result) {
             HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", send_result.error().message());
-            co_await conn.close();
+            auto close_result = co_await conn.close();
+            if (!close_result) {
+                HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
+            }
             co_return;
         }
 
@@ -226,11 +244,14 @@ ws.onclose = () => {
     response.setBodyStr(std::move(body));
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto send_result = co_await writer.sendResponse(response);
-        if (!send_result || send_result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
     }
-    co_await conn.close();
+    auto close_result = co_await conn.close();
+    if (!close_result) {
+        HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
+    }
     co_return;
 }
 
@@ -241,18 +262,17 @@ int main() {
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     // 配置服务器
-    HttpServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = 8080;
-    config.backlog = 128;
-    config.io_scheduler_count = 4;
-    config.compute_scheduler_count = 2;
-
     // 创建 HTTP 服务器
-    HttpServer server(config);
+    HttpServer server(HttpServerBuilder()
+        .host("0.0.0.0")
+        .port(8080)
+        .backlog(128)
+        .ioSchedulerCount(4)
+        .computeSchedulerCount(2)
+        .build());
 
     // 启动服务器
-    HTTP_LOG_INFO("[listen] [ws] [{}:{}]", config.host, config.port);
+    HTTP_LOG_INFO("[listen] [ws] [{}:{}]", "0.0.0.0", 8080);
     HTTP_LOG_INFO("[endpoint] [ws] [ws://localhost:8080/ws]");
     HTTP_LOG_INFO("[endpoint] [http] [http://localhost:8080/]");
     HTTP_LOG_INFO("[ctrl] [stop]");

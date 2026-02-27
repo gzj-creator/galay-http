@@ -21,10 +21,9 @@ std::atomic<int> g_completed{0};
 
 // 单连接多请求 (keep-alive)
 Coroutine keepAliveRequests(int conn_id, int requests_per_conn) {
-    HttpsClientConfig config;
-    config.verify_peer = false;
-
-    HttpsClient client(config);
+    HttpsClient client(HttpsClientBuilder()
+        .verifyPeer(false)
+        .build());
 
     try {
         // 连接

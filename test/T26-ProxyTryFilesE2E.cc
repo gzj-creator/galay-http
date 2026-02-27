@@ -30,9 +30,9 @@ Coroutine upstreamEcho(HttpConn& conn, HttpRequest req)
         .buildMove();
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto result = co_await writer.sendResponse(response);
-        if (!result || result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        std::cerr << "[upstreamEcho] [send-fail] " << result.error().message() << "\n";
     }
     co_return;
 }
@@ -45,9 +45,9 @@ Coroutine upstreamCatchAll(HttpConn& conn, HttpRequest req)
         .buildMove();
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto result = co_await writer.sendResponse(response);
-        if (!result || result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        std::cerr << "[upstreamCatchAll] [send-fail] " << result.error().message() << "\n";
     }
     co_return;
 }
@@ -75,9 +75,9 @@ Coroutine upstreamHeaders(HttpConn& conn, HttpRequest req)
         .buildMove();
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto result = co_await writer.sendResponse(response);
-        if (!result || result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        std::cerr << "[upstreamHeaders] [send-fail] " << result.error().message() << "\n";
     }
     co_return;
 }
@@ -101,9 +101,9 @@ Coroutine upstreamConnPort(HttpConn& conn, HttpRequest req)
         .buildMove();
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto result = co_await writer.sendResponse(response);
-        if (!result || result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        std::cerr << "[upstreamConnPort] [send-fail] " << result.error().message() << "\n";
     }
     co_return;
 }
@@ -114,14 +114,9 @@ Coroutine upstreamStream(HttpConn& conn, HttpRequest req)
     auto writer = conn.getWriter();
 
     auto send_blob = [&writer](std::string blob) -> Coroutine {
-        while (true) {
-            auto result = co_await writer.send(std::move(blob));
-            if (!result) {
-                co_return;
-            }
-            if (result.value()) {
-                break;
-            }
+        auto result = co_await writer.send(std::move(blob));
+        if (!result) {
+            co_return;
         }
         co_return;
     };
@@ -301,13 +296,12 @@ int main()
     upstream_router.addHandler<HttpMethod::GET>("/stream", upstreamStream);
     upstream_router.addHandler<HttpMethod::GET>("/**", upstreamCatchAll);
 
-    HttpServerConfig upstream_config;
-    upstream_config.host = "127.0.0.1";
-    upstream_config.port = upstream_port;
-    upstream_config.io_scheduler_count = 1;
-    upstream_config.compute_scheduler_count = 1;
-
-    HttpServer upstream_server(upstream_config);
+    HttpServer upstream_server(HttpServerBuilder()
+        .host("127.0.0.1")
+        .port(upstream_port)
+        .ioSchedulerCount(1)
+        .computeSchedulerCount(1)
+        .build());
     upstream_server.start(std::move(upstream_router));
 
     HttpRouter proxy_router;
@@ -315,13 +309,12 @@ int main()
     proxy_router.proxy("/", "127.0.0.1", upstream_port);
     proxy_router.proxy("/raw", "127.0.0.1", upstream_port, ProxyMode::Raw);
 
-    HttpServerConfig proxy_config;
-    proxy_config.host = "127.0.0.1";
-    proxy_config.port = proxy_port;
-    proxy_config.io_scheduler_count = 1;
-    proxy_config.compute_scheduler_count = 1;
-
-    HttpServer proxy_server(proxy_config);
+    HttpServer proxy_server(HttpServerBuilder()
+        .host("127.0.0.1")
+        .port(proxy_port)
+        .ioSchedulerCount(1)
+        .computeSchedulerCount(1)
+        .build());
     proxy_server.start(std::move(proxy_router));
 
     std::this_thread::sleep_for(std::chrono::milliseconds(400));

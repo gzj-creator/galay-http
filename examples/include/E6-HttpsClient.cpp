@@ -17,10 +17,9 @@ using namespace galay::kernel;
 Coroutine httpsClientExample(const std::string& url) {
     std::cout << "Connecting to " << url << "...\n";
 
-    HttpsClientConfig config;
-    config.verify_peer = false;  // 测试时不验证证书
-
-    HttpsClient client(config);
+    HttpsClient client(HttpsClientBuilder()
+        .verifyPeer(false)  // 测试时不验证证书
+        .build());
 
     try {
         // 连接

@@ -25,15 +25,11 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
         .text(requestBody.empty() ? "Echo: (empty body)" : "Echo: " + requestBody)
         .build();
 
-    // 发送响应（循环发送直到完成）
+    // 发送响应
     auto writer = conn.getWriter();
-    while (true) {
-        auto result = co_await writer.sendResponse(response);
-        if (!result) {
-            std::cerr << "Failed to send response: " << result.error().message() << "\n";
-            break;
-        }
-        if (result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        std::cerr << "Failed to send response: " << result.error().message() << "\n";
     }
 
     // 不要在handler中关闭连接，让HttpServer的路由处理器根据Keep-Alive决定
@@ -63,9 +59,9 @@ Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
         .build();
 
     auto writer = conn.getWriter();
-    while (true) {
-        auto send_result = co_await writer.sendResponse(response);
-        if (!send_result || send_result.value()) break;
+    auto result = co_await writer.sendResponse(response);
+    if (!result) {
+        std::cerr << "Failed to send response: " << result.error().message() << "\n";
     }
 
     // 不要在handler中关闭连接，让HttpServer的路由处理器根据Keep-Alive决定
@@ -93,14 +89,12 @@ int main(int argc, char* argv[]) {
         router.addHandler<HttpMethod::GET>("/", indexHandler);
         router.addHandler<HttpMethod::POST>("/echo", echoHandler);
 
-        // 配置服务器
-        HttpServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.backlog = 128;
-
         // 创建并启动服务器
-        HttpServer server(config);
+        HttpServer server(HttpServerBuilder()
+            .host("0.0.0.0")
+            .port(static_cast<uint16_t>(port))
+            .backlog(128)
+            .build());
 
         std::cout << "========================================\n";
         std::cout << "Server is running on http://0.0.0.0:" << port << "\n";

@@ -61,14 +61,13 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        H2cServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.io_scheduler_count = 4;
-        config.max_concurrent_streams = 100;
-        config.enable_push = false;
-
-        H2cServer server(config);
+        H2cServer server(H2cServerBuilder()
+            .host("0.0.0.0")
+            .port(static_cast<uint16_t>(port))
+            .ioSchedulerCount(4)
+            .maxConcurrentStreams(100)
+            .enablePush(false)
+            .build());
 
         std::cout << "Server running on http://0.0.0.0:" << port << "\n";
         std::cout << "Test: curl --http2-prior-knowledge http://localhost:" << port << "/echo -d \"Hello\"\n";

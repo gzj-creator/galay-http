@@ -6,6 +6,7 @@
 #include "Http2Stream.h"
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
+#include "galay-http/protoc/http/HttpHeader.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
@@ -13,6 +14,8 @@
 #include <memory>
 #include <atomic>
 #include <functional>
+#include <algorithm>
+#include <cctype>
 
 namespace galay::http2
 {
@@ -30,13 +33,30 @@ struct H2cServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
-    
+
     // HTTP/2 设置
     uint32_t max_concurrent_streams = 100;
     uint32_t initial_window_size = 65535;
     uint32_t max_frame_size = 16384;
     uint32_t max_header_list_size = 8192;
     bool enable_push = false;  // 默认禁用 Server Push（curl 不支持）
+};
+
+class H2cServerBuilder {
+public:
+    H2cServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
+    H2cServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; }
+    H2cServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
+    H2cServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
+    H2cServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
+    H2cServerBuilder& maxConcurrentStreams(uint32_t v)  { m_config.max_concurrent_streams = v; return *this; }
+    H2cServerBuilder& initialWindowSize(uint32_t v)    { m_config.initial_window_size = v; return *this; }
+    H2cServerBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
+    H2cServerBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
+    H2cServerBuilder& enablePush(bool v)               { m_config.enable_push = v; return *this; }
+    H2cServerConfig build() const                      { return m_config; }
+private:
+    H2cServerConfig m_config;
 };
 
 /**
@@ -288,11 +308,22 @@ private:
                 co_return;
             }
 
-            std::string_view hdr(header_data.data(), header_end + 4);
-            bool has_upgrade = hdr.find("Upgrade: h2c") != std::string_view::npos ||
-                              hdr.find("upgrade: h2c") != std::string_view::npos;
-            bool has_http2_settings = hdr.find("HTTP2-Settings:") != std::string_view::npos ||
-                                     hdr.find("http2-settings:") != std::string_view::npos;
+            galay::http::HttpRequestHeader upgrade_request;
+            auto parse_result = upgrade_request.fromString(
+                std::string_view(header_data.data(), header_end + 4));
+            if (parse_result.first != galay::http::kNoError || parse_result.second <= 0) {
+                HTTP_LOG_ERROR("[upgrade] [parse-fail]");
+                co_return;
+            }
+
+            auto& headers = upgrade_request.headerPairs();
+            std::string upgrade_value = headers.getValue("Upgrade");
+            std::transform(upgrade_value.begin(), upgrade_value.end(), upgrade_value.begin(), [](unsigned char ch) {
+                return static_cast<char>(std::tolower(ch));
+            });
+
+            bool has_upgrade = (upgrade_value == "h2c");
+            bool has_http2_settings = headers.hasKey("HTTP2-Settings");
 
             if (has_upgrade && has_http2_settings) {
                 HTTP_LOG_DEBUG("[h1] [upgrade] [h2c]");

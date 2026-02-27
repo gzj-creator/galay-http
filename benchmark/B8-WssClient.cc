@@ -70,10 +70,9 @@ Coroutine benchmarkWssClient(
 
     try {
         // 1. 创建 WssClient
-        WssClientConfig config;
-        config.verify_peer = false;  // 跳过证书验证（用于自签名证书）
-
-        WssClient client(config);
+        WssClient client(WssClientBuilder()
+            .verifyPeer(false)  // 跳过证书验证（用于自签名证书）
+            .build());
 
         // 2. TCP 连接
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
@@ -134,18 +133,13 @@ Coroutine benchmarkWssClient(
             auto round_start = std::chrono::steady_clock::now();
 
             // 发送消息
-            while (true) {
-                auto send_result = co_await session.sendText(message_payload);
-                if (!send_result) {
-                    HTTP_LOG_ERROR("[client-{}] [send-fail] [{}]", client_id, send_result.error().message());
-                    goto cleanup;
-                }
-                if (send_result.value()) {
-                    g_total_messages_sent.fetch_add(1);
-                    g_total_bytes_sent.fetch_add(message_payload.size());
-                    break;
-                }
+            auto send_result = co_await session.sendText(message_payload);
+            if (!send_result) {
+                HTTP_LOG_ERROR("[client-{}] [send-fail] [{}]", client_id, send_result.error().message());
+                goto cleanup;
             }
+            g_total_messages_sent.fetch_add(1);
+            g_total_bytes_sent.fetch_add(message_payload.size());
 
             // 接收回显消息
             std::string echo_msg;
@@ -180,11 +174,9 @@ Coroutine benchmarkWssClient(
 
 cleanup:
         // 7. 发送关闭帧
-        while (true) {
-            auto close_result = co_await session.sendClose(WsCloseCode::Normal);
-            if (!close_result || close_result.value()) {
-                break;
-            }
+        auto result = co_await session.sendClose(WsCloseCode::Normal);
+        if (!result) {
+            HTTP_LOG_WARN("[close] [fail] [{}]", result.error().message());
         }
 
         co_await client.close();

@@ -32,19 +32,10 @@ Coroutine corsHandler(HttpConn& conn, HttpRequest req) {
         .build();
 
     auto writer = conn.getWriter();
-
-    // 循环发送响应，直到完全发送完毕
-    while (true) {
-        auto send_result = co_await writer.sendResponse(response);
-        if (!send_result) {
-            std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
-            co_return;
-        }
-        if (send_result.value()) {
-            // 发送完成
-            break;
-        }
-        // 继续发送剩余数据
+    auto send_result = co_await writer.sendResponse(response);
+    if (!send_result) {
+        std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
+        co_return;
     }
 
     std::cout << "  -> 204 No Content (CORS preflight)" << std::endl;
@@ -76,19 +67,10 @@ Coroutine fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
             .build();
 
         auto writer = conn.getWriter();
-
-        // 循环发送响应，直到完全发送完毕
-        while (true) {
-            auto send_result = co_await writer.sendResponse(response);
-            if (!send_result) {
-                std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
-                co_return;
-            }
-            if (send_result.value()) {
-                // 发送完成
-                break;
-            }
-            // 继续发送剩余数据
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result) {
+            std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
+            co_return;
         }
 
         // 不要手动关闭连接，让服务器自动管理
@@ -114,19 +96,10 @@ Coroutine fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
             .build();
 
         auto writer = conn.getWriter();
-
-        // 循环发送响应，直到完全发送完毕
-        while (true) {
-            auto send_result = co_await writer.sendResponse(response);
-            if (!send_result) {
-                std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
-                co_return;
-            }
-            if (send_result.value()) {
-                // 发送完成
-                break;
-            }
-            // 继续发送剩余数据
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result) {
+            std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
+            co_return;
         }
 
         // 不要手动关闭连接，让服务器自动管理
@@ -168,19 +141,10 @@ Coroutine fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
             .build();
 
         auto writer = conn.getWriter();
-
-        // 循环发送响应，直到完全发送完毕
-        while (true) {
-            auto send_result = co_await writer.sendResponse(response);
-            if (!send_result) {
-                std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
-                co_return;
-            }
-            if (send_result.value()) {
-                // 发送完成
-                break;
-            }
-            // 继续发送剩余数据
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result) {
+            std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
+            co_return;
         }
 
     } else {
@@ -197,19 +161,10 @@ Coroutine fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
                 .build();
 
             auto writer = conn.getWriter();
-
-            // 循环发送响应，直到完全发送完毕
-            while (true) {
-                auto send_result = co_await writer.sendResponse(response);
-                if (!send_result) {
-                    std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
-                    co_return;
-                }
-                if (send_result.value()) {
-                    // 发送完成
-                    break;
-                }
-                // 继续发送剩余数据
+            auto send_result = co_await writer.sendResponse(response);
+            if (!send_result) {
+                std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
+                co_return;
             }
 
             co_return;
@@ -239,19 +194,10 @@ Coroutine fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
             .build();
 
         auto writer = conn.getWriter();
-
-        // 循环发送响应，直到完全发送完毕
-        while (true) {
-            auto send_result = co_await writer.sendResponse(response);
-            if (!send_result) {
-                std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
-                co_return;
-            }
-            if (send_result.value()) {
-                // 发送完成
-                break;
-            }
-            // 继续发送剩余数据
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result) {
+            std::cout << "  -> Send error: " << send_result.error().message() << std::endl;
+            co_return;
         }
     }
 
@@ -301,13 +247,11 @@ int main(int argc, char* argv[]) {
         // 添加文件处理器（带 CORS 支持）
         router.addHandler<HttpMethod::GET>("/files/*", fileHandlerWithCORS);
 
-        // 配置服务器
-        HttpServerConfig serverConfig;
-        serverConfig.host = "0.0.0.0";
-        serverConfig.port = port;
-
         // 创建并启动服务器
-        HttpServer server(serverConfig);
+        HttpServer server(HttpServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .build());
 
         std::cout << "========================================\n";
         std::cout << "Server is running on http://0.0.0.0:" << port << "\n";

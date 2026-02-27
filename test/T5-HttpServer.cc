@@ -159,17 +159,12 @@ Coroutine handleRequest(HttpConn conn) {
             .body(std::move(body))
             .buildMove();
 
-        while (true) {
-            auto sendResult = co_await writer.sendResponse(response);
-            if (!sendResult) {
-                LogError("Failed to send response: {}", sendResult.error().message());
-                keep_alive = false;
-                break;
-            }
-            if (sendResult.value()) {
-                LogInfo("Response sent: complete");
-                break;
-            }
+        auto sendResult = co_await writer.sendResponse(response);
+        if (!sendResult) {
+            LogError("Failed to send response: {}", sendResult.error().message());
+            keep_alive = false;
+        } else {
+            LogInfo("Response sent: complete");
         }
 
         if (!keep_alive) {
@@ -188,12 +183,11 @@ int main() {
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     // 配置并启动服务器
-    HttpServerConfig server_config;
-    server_config.host = "127.0.0.1";
-    server_config.port = 8080;
-    server_config.backlog = 128;
-
-    HttpServer server(server_config);
+    HttpServer server(HttpServerBuilder()
+        .host("127.0.0.1")
+        .port(8080)
+        .backlog(128)
+        .build());
 
     g_server_running = true;
     LogInfo("========================================");

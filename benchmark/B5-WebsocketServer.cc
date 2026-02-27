@@ -51,17 +51,12 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
 
     // 发送欢迎消息
     HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sending]", conn_id);
-    while (true) {
-        auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
-        if(!res) {
-            HTTP_LOG_ERROR("[ws] [conn-{}] [welcome] [send-fail] [{}]", conn_id, res.error().message());
-            co_return;
-        }
-        if(res.value()) {
-            HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sent]", conn_id);
-            break;
-        }
+    auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
+    if(!res) {
+        HTTP_LOG_ERROR("[ws] [conn-{}] [welcome] [send-fail] [{}]", conn_id, res.error().message());
+        co_return;
     }
+    HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sent]", conn_id);
 
     // 消息循环
     while (true) {
@@ -96,60 +91,40 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
             // 回显消息
             if (opcode == WsOpcode::Text) {
                 HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sending]", conn_id);
-                while (true) {
-                    auto send_res = co_await writer.sendText(message);
-                    if (!send_res) {
-                        HTTP_LOG_ERROR("[ws] [conn-{}] [echo-text] [send-fail] [{}]", conn_id, send_res.error().message());
-                        goto cleanup;
-                    }
-                    if (send_res.value()) {
-                        HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sent]", conn_id);
-                        break;
-                    }
+                auto send_res = co_await writer.sendText(message);
+                if (!send_res) {
+                    HTTP_LOG_ERROR("[ws] [conn-{}] [echo-text] [send-fail] [{}]", conn_id, send_res.error().message());
+                    goto cleanup;
                 }
+                HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sent]", conn_id);
             } else {
                 HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sending]", conn_id);
-                while (true) {
-                    auto send_res = co_await writer.sendBinary(message);
-                    if (!send_res) {
-                        HTTP_LOG_ERROR("[ws] [conn-{}] [echo-binary] [send-fail] [{}]", conn_id, send_res.error().message());
-                        goto cleanup;
-                    }
-                    if (send_res.value()) {
-                        HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sent]", conn_id);
-                        break;
-                    }
+                auto send_res = co_await writer.sendBinary(message);
+                if (!send_res) {
+                    HTTP_LOG_ERROR("[ws] [conn-{}] [echo-binary] [send-fail] [{}]", conn_id, send_res.error().message());
+                    goto cleanup;
                 }
+                HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sent]", conn_id);
             }
 
         } else if (opcode == WsOpcode::Ping) {
             // 响应 Ping
             HTTP_LOG_INFO("[ws] [conn-{}] [ping] [responding]", conn_id);
-            while (true) {
-                auto pong_res = co_await writer.sendPong(message);
-                if (!pong_res) {
-                    HTTP_LOG_ERROR("[ws] [conn-{}] [pong] [send-fail] [{}]", conn_id, pong_res.error().message());
-                    goto cleanup;
-                }
-                if (pong_res.value()) {
-                    HTTP_LOG_INFO("[ws] [conn-{}] [pong] [sent]", conn_id);
-                    break;
-                }
+            auto pong_res = co_await writer.sendPong(message);
+            if (!pong_res) {
+                HTTP_LOG_ERROR("[ws] [conn-{}] [pong] [send-fail] [{}]", conn_id, pong_res.error().message());
+                goto cleanup;
             }
+            HTTP_LOG_INFO("[ws] [conn-{}] [pong] [sent]", conn_id);
 
         } else if (opcode == WsOpcode::Close) {
             // 客户端关闭连接
             HTTP_LOG_INFO("[ws] [conn-{}] [close-requested]", conn_id);
-            while (true) {
-                auto close_res = co_await writer.sendClose();
-                if (!close_res) {
-                    HTTP_LOG_ERROR("[ws] [conn-{}] [close] [send-fail] [{}]", conn_id, close_res.error().message());
-                    break;
-                }
-                if (close_res.value()) {
-                    HTTP_LOG_INFO("[ws] [conn-{}] [close] [sent]", conn_id);
-                    break;
-                }
+            auto close_res = co_await writer.sendClose();
+            if (!close_res) {
+                HTTP_LOG_ERROR("[ws] [conn-{}] [close] [send-fail] [{}]", conn_id, close_res.error().message());
+            } else {
+                HTTP_LOG_INFO("[ws] [conn-{}] [close] [sent]", conn_id);
             }
             break;
         }
@@ -195,7 +170,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
         if (!upgrade_result.success) {
             HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [fail]", current_req_id);
             auto writer = conn.getWriter();
-            co_await writer.sendResponse(upgrade_result.response);
+            auto result = co_await writer.sendResponse(upgrade_result.response);
+            if (!result) {
+                HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
+            }
             co_await conn.close();
             co_return;
         }
@@ -226,7 +204,10 @@ Coroutine handleHttpRequest(HttpConn conn) {
             .buildMove();
 
         auto writer = conn.getWriter();
-        co_await writer.sendResponse(response);
+        auto result = co_await writer.sendResponse(response);
+        if (!result) {
+            HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
+        }
         co_await conn.close();
     }
 
@@ -255,15 +236,14 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        HttpServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.io_scheduler_count = 4;
-        config.compute_scheduler_count = 0;
+        HttpServer server(HttpServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .ioSchedulerCount(4)
+            .computeSchedulerCount(0)
+            .build());
 
-        HttpServer server(config);
-
-        HTTP_LOG_INFO("[server] [listen] [ws] [{}:{}]", config.host, config.port);
+        HTTP_LOG_INFO("[server] [listen] [ws] [{}:{}]", "0.0.0.0", port);
 
         server.start(handleHttpRequest);
 

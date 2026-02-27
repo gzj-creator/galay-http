@@ -138,16 +138,11 @@ Coroutine echoServer() {
                     .body(std::move(body))
                     .buildMove();
 
-                while (true) {
-                    auto sendResult = co_await writer.sendResponse(response);
-                    if (!sendResult) {
-                        LogError("Failed to send response: {}", sendResult.error().message());
-                        break;
-                    }
-                    if (sendResult.value()) {
-                        LogInfo("Response sent (sendResponse): complete");
-                        break;
-                    }
+                auto sendResult = co_await writer.sendResponse(response);
+                if (!sendResult) {
+                    LogError("Failed to send response: {}", sendResult.error().message());
+                } else {
+                    LogInfo("Response sent (sendResponse): complete");
                 }
             } else if (testCase == 1) {
                 // 方式2: 使用 sendHeader + send(string) 分离发送

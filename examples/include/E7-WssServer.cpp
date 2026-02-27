@@ -308,14 +308,13 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        HttpsServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.cert_path = cert_path;
-        config.key_path = key_path;
-        config.io_scheduler_count = 4;
-
-        HttpsServer server(config);
+        HttpsServer server(HttpsServerBuilder()
+            .host("0.0.0.0")
+            .port(static_cast<uint16_t>(port))
+            .certPath(cert_path)
+            .keyPath(key_path)
+            .ioSchedulerCount(4)
+            .build());
 
         std::cout << "Server running on https://0.0.0.0:" << port << "\n";
         std::cout << "WSS endpoint: wss://localhost:" << port << "/ws\n";

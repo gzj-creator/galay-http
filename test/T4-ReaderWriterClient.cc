@@ -73,26 +73,32 @@ bool parseExpectedResponseSize(const std::string& response, size_t& expected_siz
     }
 
     expected_size = header_end + 4;
-    auto content_length_pos = response.find("Content-Length:");
-    if (content_length_pos == std::string::npos || content_length_pos > header_end) {
+
+    std::string header_part = response.substr(0, header_end);
+    for (auto& c : header_part) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+
+    auto content_length_pos = header_part.find("content-length:");
+    if (content_length_pos == std::string::npos) {
         return true;
     }
 
     content_length_pos += sizeof("Content-Length:") - 1;
-    while (content_length_pos < header_end &&
-           std::isspace(static_cast<unsigned char>(response[content_length_pos]))) {
+    while (content_length_pos < header_part.size() &&
+           std::isspace(static_cast<unsigned char>(header_part[content_length_pos]))) {
         ++content_length_pos;
     }
 
     size_t num_end = content_length_pos;
-    while (num_end < header_end &&
-           std::isdigit(static_cast<unsigned char>(response[num_end]))) {
+    while (num_end < header_part.size() &&
+           std::isdigit(static_cast<unsigned char>(header_part[num_end]))) {
         ++num_end;
     }
 
     if (num_end > content_length_pos) {
         expected_size += static_cast<size_t>(
-            std::stoull(response.substr(content_length_pos, num_end - content_length_pos)));
+            std::stoull(header_part.substr(content_length_pos, num_end - content_length_pos)));
     }
 
     return true;

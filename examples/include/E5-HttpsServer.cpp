@@ -33,7 +33,10 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
         while (true) {
             auto r = co_await reader.getRequest(request);
             if (!r) {
-                co_await conn.close();
+                auto close_result = co_await conn.close();
+                if (!close_result) {
+                    std::cerr << "Failed to close connection: " << close_result.error().message() << "\n";
+                }
                 co_return;
             }
             if (r.value()) break;
@@ -74,16 +77,19 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
                 .build();
 
         // 发送响应
-        while (true) {
-            auto r = co_await writer.sendResponse(response);
-            if (!r || r.value()) break;
+        auto result = co_await writer.sendResponse(response);
+        if (!result) {
+            std::cerr << "Failed to send response: " << result.error().message() << "\n";
         }
 
         if (!keep_alive) break;
         request = HttpRequest();
     }
 
-    co_await conn.close();
+    auto close_result = co_await conn.close();
+    if (!close_result) {
+        std::cerr << "Failed to close connection: " << close_result.error().message() << "\n";
+    }
     co_return;
 }
 
@@ -104,14 +110,13 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        HttpsServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.cert_path = cert_path;
-        config.key_path = key_path;
-        config.io_scheduler_count = 4;
-
-        HttpsServer server(config);
+        HttpsServer server(HttpsServerBuilder()
+            .host("0.0.0.0")
+            .port(static_cast<uint16_t>(port))
+            .certPath(cert_path)
+            .keyPath(key_path)
+            .ioSchedulerCount(4)
+            .build());
 
         std::cout << "Server running on https://0.0.0.0:" << port << "\n";
         std::cout << "Test: curl -k https://localhost:" << port << "/\n";

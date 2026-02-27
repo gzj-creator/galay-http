@@ -43,14 +43,11 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
-    // 发送欢迎消息（循环等待直到完成）
-    while (true) {
-        auto send_result = co_await writer.sendText("Welcome to WebSocket Test Server!");
-        if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send welcome message: {}", send_result.error().message());
-            co_return;
-        }
-        if (send_result.value()) break;
+    // 发送欢迎消息
+    auto send_result = co_await writer.sendText("Welcome to WebSocket Test Server!");
+    if (!send_result) {
+        HTTP_LOG_ERROR("Failed to send welcome message: {}", send_result.error().message());
+        co_return;
     }
 
     // 消息循环
@@ -90,14 +87,11 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         // 处理不同类型的消息
         if (opcode == WsOpcode::Ping) {
             HTTP_LOG_INFO("Received Ping, sending Pong");
-            while (true) {
-                auto pong_result = co_await writer.sendPong(message);
-                if (!pong_result) {
-                    HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
-                    co_await ws_conn.close();
-                    co_return;
-                }
-                if (pong_result.value()) break;
+            auto pong_result = co_await writer.sendPong(message);
+            if (!pong_result) {
+                HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
+                co_await ws_conn.close();
+                co_return;
             }
         }
         else if (opcode == WsOpcode::Pong) {
@@ -105,9 +99,9 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
         }
         else if (opcode == WsOpcode::Close) {
             HTTP_LOG_INFO("Received Close frame");
-            while (true) {
-                auto close_result = co_await writer.sendClose();
-                if (!close_result || close_result.value()) break;
+            auto close_result = co_await writer.sendClose();
+            if (!close_result) {
+                HTTP_LOG_WARN("Failed to send Close frame: {}", close_result.error().message());
             }
             break;
         }
@@ -116,28 +110,22 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
 
             // Echo back
             std::string echo_msg = "Echo: " + message;
-            while (true) {
-                auto echo_result = co_await writer.sendText(echo_msg);
-                if (!echo_result) {
-                    HTTP_LOG_ERROR("Failed to send echo: {}", echo_result.error().message());
-                    co_await ws_conn.close();
-                    co_return;
-                }
-                if (echo_result.value()) break;
+            auto echo_result = co_await writer.sendText(echo_msg);
+            if (!echo_result) {
+                HTTP_LOG_ERROR("Failed to send echo: {}", echo_result.error().message());
+                co_await ws_conn.close();
+                co_return;
             }
         }
         else if (opcode == WsOpcode::Binary) {
             HTTP_LOG_INFO("Binary message #{}, size: {}", g_message_count.load(), message.size());
 
             // Echo back binary
-            while (true) {
-                auto echo_result = co_await writer.sendBinary(message);
-                if (!echo_result) {
-                    HTTP_LOG_ERROR("Failed to send binary echo: {}", echo_result.error().message());
-                    co_await ws_conn.close();
-                    co_return;
-                }
-                if (echo_result.value()) break;
+            auto echo_result = co_await writer.sendBinary(message);
+            if (!echo_result) {
+                HTTP_LOG_ERROR("Failed to send binary echo: {}", echo_result.error().message());
+                co_await ws_conn.close();
+                co_return;
             }
         }
     }
@@ -229,15 +217,14 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        HttpServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.io_scheduler_count = 4;
-        config.compute_scheduler_count = 0;
+        HttpServer server(HttpServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .ioSchedulerCount(4)
+            .computeSchedulerCount(0)
+            .build());
 
-        HttpServer server(config);
-
-        HTTP_LOG_INFO("WebSocket test server starting on {}:{}", config.host, config.port);
+        HTTP_LOG_INFO("WebSocket test server starting on {}:{}", "0.0.0.0", port);
 
         server.start(handleHttpRequest);
 

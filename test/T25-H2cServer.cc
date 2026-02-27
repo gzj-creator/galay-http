@@ -72,18 +72,17 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        H2cServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.io_scheduler_count = 4;
-        config.compute_scheduler_count = 0;
-        config.max_concurrent_streams = 100;
-        config.initial_window_size = 65535;
-        config.enable_push = false;
+        H2cServer server(H2cServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .ioSchedulerCount(4)
+            .computeSchedulerCount(0)
+            .maxConcurrentStreams(100)
+            .initialWindowSize(65535)
+            .enablePush(false)
+            .build());
 
-        H2cServer server(config);
-
-        HTTP_LOG_INFO("H2c test server starting on {}:{}", config.host, config.port);
+        HTTP_LOG_INFO("H2c test server starting on {}:{}", "0.0.0.0", port);
 
         server.start(handleStream);
 

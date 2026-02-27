@@ -59,13 +59,10 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
             .build();
 
         // 发送响应
-        while (true) {
-            auto send_result = co_await writer.sendResponse(response);
-            if (!send_result) {
-                co_await conn.close();
-                co_return;
-            }
-            if (send_result.value()) break;
+        auto send_result = co_await writer.sendResponse(response);
+        if (!send_result) {
+            co_await conn.close();
+            co_return;
         }
 
         // 如果不是 keep-alive，关闭连接
@@ -95,18 +92,17 @@ int main() {
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
-    HttpsServerConfig config;
-    config.host = "0.0.0.0";
-    config.port = 8443;
-    config.cert_path = "test.crt";
-    config.key_path = "test.key";
-    config.io_scheduler_count = 8;
-    config.compute_scheduler_count = 0;
-
     try {
-        HttpsServer server(config);
+        HttpsServer server(HttpsServerBuilder()
+            .host("0.0.0.0")
+            .port(8443)
+            .certPath("test.crt")
+            .keyPath("test.key")
+            .ioSchedulerCount(8)
+            .computeSchedulerCount(0)
+            .build());
 
-        std::cout << "Starting HTTPS server on port " << config.port << "..." << std::endl;
+        std::cout << "Starting HTTPS server on port 8443..." << std::endl;
         server.start(httpsHandler);
 
         std::cout << "HTTPS server started successfully!" << std::endl;

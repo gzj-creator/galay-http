@@ -27,10 +27,9 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         constexpr auto kOpTimeout = std::chrono::milliseconds(3000);
 
         // 1. 创建 WssClient
-        WssClientConfig config;
-        config.verify_peer = false;  // 跳过证书验证（用于自签名证书）
-
-        WssClient client(config);
+        WssClient client(WssClientBuilder()
+            .verifyPeer(false)  // 跳过证书验证（用于自签名证书）
+            .build());
 
         // 2. TCP 连接
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);

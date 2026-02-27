@@ -89,15 +89,14 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        H2cServerConfig config;
-        config.host = "0.0.0.0";
-        config.port = port;
-        config.io_scheduler_count = io_threads;
-        config.compute_scheduler_count = 0;
-        config.max_concurrent_streams = 1000;
-        config.initial_window_size = 65535;
-
-        H2cServer server(config);
+        H2cServer server(H2cServerBuilder()
+            .host("0.0.0.0")
+            .port(port)
+            .ioSchedulerCount(static_cast<size_t>(io_threads))
+            .computeSchedulerCount(0)
+            .maxConcurrentStreams(1000)
+            .initialWindowSize(65535)
+            .build());
 
         server.start(handleStream);
 
