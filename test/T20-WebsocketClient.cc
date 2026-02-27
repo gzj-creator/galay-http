@@ -54,7 +54,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     LogInfo("Connected to server");
 
     // 创建 HTTP 客户端
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
 
     // 构建 WebSocket 升级请求
     auto request = Http1_1RequestBuilder::get("/ws")

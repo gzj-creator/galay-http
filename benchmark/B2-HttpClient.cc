@@ -33,7 +33,7 @@ Coroutine continuousWorker(int worker_id, const std::string& host, int port, con
                            std::atomic<bool>& stop_flag) {
     (void)worker_id;
     g_active_connections++;
-    HttpClient client;
+    HttpClient client(HttpClientBuilder().build());
 
     std::string url = "http://" + host + ":" + std::to_string(port) + path;
 

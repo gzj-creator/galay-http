@@ -261,6 +261,16 @@ HttpResponse buildHtmlResponse(HttpStatusCode code, std::string body)
         return buildHtmlResponse(HttpStatusCode::Conflict_409, "<html><body><h1>409 Conflict</h1></body></html>");
     }
 
+    HttpResponse HttpUtils::defaultNotAcceptable()
+    {
+        return buildHtmlResponse(HttpStatusCode::NotAcceptable_406, "<html><body><h1>406 Not Acceptable</h1></body></html>");
+    }
+
+    HttpResponse HttpUtils::defaultProxyAuthenticationRequired()
+    {
+        return buildHtmlResponse(HttpStatusCode::ProxyAuthenticationRequired_407, "<html><body><h1>407 Proxy Authentication Required</h1></body></html>");
+    }
+
     HttpResponse HttpUtils::defaultGone()
     {
         return buildHtmlResponse(HttpStatusCode::Gone_410, "<html><body><h1>410 Gone</h1></body></html>");
@@ -468,9 +478,9 @@ HttpResponse buildHtmlResponse(HttpStatusCode code, std::string body)
             case HttpStatusCode::MethodNotAllowed_405:
                 return defaultMethodNotAllowed();
             case HttpStatusCode::NotAcceptable_406:
-                return defaultNotFound(); // Reuse NotFound for simplicity
+                return defaultNotAcceptable();
             case HttpStatusCode::ProxyAuthenticationRequired_407:
-                return defaultRequestTimeout(); // Reuse RequestTimeout for simplicity
+                return defaultProxyAuthenticationRequired();
             case HttpStatusCode::RequestTimeout_408:
                 return defaultRequestTimeout();
             case HttpStatusCode::Conflict_409:

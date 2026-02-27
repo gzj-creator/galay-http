@@ -2,8 +2,9 @@
 #include <cassert>
 #include <algorithm>
 #include <cctype>
+#include <string_view>
 
-namespace galay::http 
+namespace galay::http
 {
     namespace {
 
@@ -31,30 +32,79 @@ namespace galay::http
         return result;
     }
 
+    bool equalsIgnoreCaseAscii(std::string_view lhs, std::string_view rhs)
+    {
+        if (lhs.size() != rhs.size()) {
+            return false;
+        }
+
+        for (size_t i = 0; i < lhs.size(); ++i) {
+            unsigned char l = static_cast<unsigned char>(lhs[i]);
+            unsigned char r = static_cast<unsigned char>(rhs[i]);
+            if (std::tolower(l) != std::tolower(r)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    std::string normalizeKey(HeaderPair::NormalizeMode mode, const std::string& key)
+    {
+        switch (mode) {
+        case HeaderPair::NormalizeMode::Lowercase:  return toLowerAscii(key);
+        case HeaderPair::NormalizeMode::Canonical:   return toCanonicalHeaderKey(key);
+        case HeaderPair::NormalizeMode::Raw:         return key;
+        }
+        return key;
+    }
+
+    std::map<std::string, std::string>::iterator findHeaderPairIter(
+        HeaderPair::NormalizeMode mode,
+        std::map<std::string, std::string>& headers,
+        const std::string& key)
+    {
+        std::string normalized = normalizeKey(mode, key);
+        auto it = headers.find(normalized);
+        if (it != headers.end()) {
+            return it;
+        }
+
+        // Raw 模式：exact miss 则线性 case-insensitive 扫描
+        if (mode == HeaderPair::NormalizeMode::Raw) {
+            for (it = headers.begin(); it != headers.end(); ++it) {
+                if (equalsIgnoreCaseAscii(it->first, key)) {
+                    return it;
+                }
+            }
+        }
+        return headers.end();
+    }
+
+    std::map<std::string, std::string>::const_iterator findHeaderPairIter(
+        HeaderPair::NormalizeMode mode,
+        const std::map<std::string, std::string>& headers,
+        const std::string& key)
+    {
+        std::string normalized = normalizeKey(mode, key);
+        auto it = headers.find(normalized);
+        if (it != headers.end()) {
+            return it;
+        }
+
+        // Raw 模式：exact miss 则线性 case-insensitive 扫描
+        if (mode == HeaderPair::NormalizeMode::Raw) {
+            for (it = headers.begin(); it != headers.end(); ++it) {
+                if (equalsIgnoreCaseAscii(it->first, key)) {
+                    return it;
+                }
+            }
+        }
+        return headers.end();
+    }
+
     std::string getHeaderValueLoose(const HeaderPair& headers, const std::string& key)
     {
-        const std::string value = headers.getValue(key);
-        if (!value.empty()) {
-            return value;
-        }
-
-        const std::string canonical = toCanonicalHeaderKey(key);
-        if (canonical != key) {
-            const std::string value2 = headers.getValue(canonical);
-            if (!value2.empty()) {
-                return value2;
-            }
-        }
-
-        const std::string lower = toLowerAscii(key);
-        if (lower != key && lower != canonical) {
-            const std::string value3 = headers.getValue(lower);
-            if (!value3.empty()) {
-                return value3;
-            }
-        }
-
-        return "";
+        return headers.getValue(key);
     }
 
     bool headerValueContainsToken(const std::string& value, const std::string& token)
@@ -96,11 +146,13 @@ namespace galay::http
 
     } // namespace
 
-    HeaderPair::HeaderPair()
+    HeaderPair::HeaderPair(NormalizeMode mode)
+        : m_mode(mode)
     {
     }
 
     HeaderPair::HeaderPair(const HeaderPair &other)
+        : m_mode(other.m_mode)
     {
         if(this != &other)
         {
@@ -109,51 +161,57 @@ namespace galay::http
     }
 
     HeaderPair::HeaderPair(HeaderPair &&other)
+        : m_mode(other.m_mode)
     {
         if(this != &other)
         {
             std::swap(m_headerPairs, other.m_headerPairs);
         }
     }
+
     bool HeaderPair::hasKey(const std::string &key) const
     {
-        return m_headerPairs.contains(key);
+        return findHeaderPairIter(m_mode, m_headerPairs, key) != m_headerPairs.end();
     }
 
     std::string HeaderPair::getValue(const std::string& key) const
     {
-        auto it = m_headerPairs.find(key);
-        if (it != m_headerPairs.end())
+        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
+        if (it != m_headerPairs.end()) {
             return it->second;
+        }
         return "";
     }
 
     HttpErrorCode HeaderPair::removeHeaderPair(const std::string& key)
     {
-        if (m_headerPairs.contains(key))
-        {
-            m_headerPairs.erase(key);
-        }
-        else
-        {
+        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
+        if (it == m_headerPairs.end()) {
             return kHeaderPairNotExist;
         }
+        m_headerPairs.erase(it);
         return kNoError;
     }
 
     HttpErrorCode HeaderPair::addHeaderPairIfNotExist(const std::string& key, const std::string& value)
     {
-        if (m_headerPairs.contains(key))
-        {
+        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
+        if (it != m_headerPairs.end()) {
             return kHeaderPairExist;
         }
-        this->m_headerPairs.emplace(key, value);
+        this->m_headerPairs.emplace(normalizeKey(m_mode, key), value);
         return kNoError;
     }
 
     HttpErrorCode HeaderPair::addHeaderPair(const std::string& key, const std::string& value)
     {
-        this->m_headerPairs[key] = value;
+        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
+        if (it != m_headerPairs.end()) {
+            it->second = value;
+            return kNoError;
+        }
+
+        this->m_headerPairs[normalizeKey(m_mode, key)] = value;
         return kNoError;
     }
 
@@ -189,12 +247,14 @@ namespace galay::http
 
     HeaderPair &HeaderPair::operator=(const HeaderPair &other)
     {
+        m_mode = other.m_mode;
         m_headerPairs = other.m_headerPairs;
         return *this;
     }
 
     HeaderPair &HeaderPair::operator=(HeaderPair &&other)
     {
+        m_mode = other.m_mode;
         std::swap(m_headerPairs, other.m_headerPairs);
         return *this;
     }
@@ -327,7 +387,7 @@ namespace galay::http
             if (c == ' ') {
                 m_parseState = RequestParseState::HeaderSpace;
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = RequestParseState::HeaderCR;
@@ -341,7 +401,7 @@ namespace galay::http
             if (c == ' ') {
                 // skip extra spaces
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = RequestParseState::HeaderCR;
@@ -353,7 +413,7 @@ namespace galay::http
 
         case RequestParseState::HeaderValue:
             if (c == '\r') {
-                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = RequestParseState::HeaderCR;
@@ -482,8 +542,7 @@ namespace galay::http
 
     bool HttpRequestHeader::isKeepAlive() const
     {
-        // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
-        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        const std::string conn = m_headerPairs.getValue("Connection");
         if (conn.empty()) {
             return m_version == HttpVersion::HttpVersion_1_1;
         }
@@ -498,13 +557,13 @@ namespace galay::http
 
     bool HttpRequestHeader::isChunked() const
     {
-        const std::string te = getHeaderValueLoose(m_headerPairs, "Transfer-Encoding");
+        const std::string te = m_headerPairs.getValue("Transfer-Encoding");
         return headerValueContainsToken(te, "chunked");
     }
 
     bool HttpRequestHeader::isConnectionClose() const
     {
-        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        const std::string conn = m_headerPairs.getValue("Connection");
         return headerValueContainsToken(conn, "close");
     }
 
@@ -788,8 +847,7 @@ namespace galay::http
 
     bool HttpResponseHeader::isKeepAlive() const
     {
-        // HTTP/1.1 默认 keep-alive，HTTP/1.0 默认 close
-        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        const std::string conn = m_headerPairs.getValue("Connection");
         if (conn.empty()) {
             return m_version == HttpVersion::HttpVersion_1_1;
         }
@@ -804,13 +862,13 @@ namespace galay::http
 
     bool HttpResponseHeader::isChunked() const
     {
-        const std::string te = getHeaderValueLoose(m_headerPairs, "Transfer-Encoding");
+        const std::string te = m_headerPairs.getValue("Transfer-Encoding");
         return headerValueContainsToken(te, "chunked");
     }
 
     bool HttpResponseHeader::isConnectionClose() const
     {
-        const std::string conn = getHeaderValueLoose(m_headerPairs, "Connection");
+        const std::string conn = m_headerPairs.getValue("Connection");
         return headerValueContainsToken(conn, "close");
     }
 
@@ -948,7 +1006,7 @@ namespace galay::http
             if (c == ' ') {
                 m_parseState = ResponseParseState::HeaderSpace;
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = ResponseParseState::HeaderCR;
@@ -962,7 +1020,7 @@ namespace galay::http
             if (c == ' ') {
                 // skip extra spaces
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = ResponseParseState::HeaderCR;
@@ -974,7 +1032,7 @@ namespace galay::http
 
         case ResponseParseState::HeaderValue:
             if (c == '\r') {
-                m_headerPairs.addHeaderPair(toCanonicalHeaderKey(m_parseHeaderKey), m_parseHeaderValue);
+                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
                 m_parseHeaderKey.clear();
                 m_parseHeaderValue.clear();
                 m_parseState = ResponseParseState::HeaderCR;

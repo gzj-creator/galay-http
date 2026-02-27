@@ -9,6 +9,7 @@
 #include "galay-kernel/kernel/Coroutine.h"
 #include <string>
 #include <vector>
+#include <charconv>
 #include <memory>
 
 namespace galay::http2
@@ -390,7 +391,11 @@ public:
                 auto* hdrs = frame->asHeaders();
                 if (hdrs->isEndHeaders()) {
                     for (const auto& f : decodedHeaders()) {
-                        if (f.name == ":status") resp.status = std::stoi(f.value);
+                        if (f.name == ":status") {
+                            int status = 0;
+                            std::from_chars(f.value.data(), f.value.data() + f.value.size(), status);
+                            resp.status = status;
+                        }
                         else resp.headers.push_back({f.name, f.value});
                     }
                     clearDecodedHeaders();
@@ -403,7 +408,11 @@ public:
                 auto* cont = frame->asContinuation();
                 if (cont->isEndHeaders()) {
                     for (const auto& f : decodedHeaders()) {
-                        if (f.name == ":status") resp.status = std::stoi(f.value);
+                        if (f.name == ":status") {
+                            int status = 0;
+                            std::from_chars(f.value.data(), f.value.data() + f.value.size(), status);
+                            resp.status = status;
+                        }
                         else resp.headers.push_back({f.name, f.value});
                     }
                     clearDecodedHeaders();
@@ -505,6 +514,7 @@ private:
                           bool end_stream,
                           const Http2OutgoingFrame::WaiterPtr& waiter) {
         if (!m_send_channel) return;
+        if (m_send_window < static_cast<int32_t>(data.size())) return;
 
         auto frame = std::make_unique<Http2DataFrame>();
         frame->header().stream_id = m_stream_id;

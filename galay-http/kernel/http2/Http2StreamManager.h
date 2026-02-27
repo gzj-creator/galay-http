@@ -432,7 +432,11 @@ private:
                 if (settings->isAck()) {
                     HTTP_LOG_DEBUG("[stream-mgr] [settings] [ack]");
                 } else {
-                    m_conn.peerSettings().applySettings(*settings);
+                    auto err = m_conn.peerSettings().applySettings(*settings);
+                    if (err != Http2ErrorCode::NoError) {
+                        m_conn.sendGoaway(err);
+                        return;
+                    }
                     m_conn.encoder().setMaxTableSize(m_conn.peerSettings().header_table_size);
 
                     Http2SettingsFrame ack;

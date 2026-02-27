@@ -150,7 +150,7 @@ void runBenchmark(const std::string& host,
 
     // 启动所有客户端（负载均衡到不同的调度器）
     for (int i = 0; i < concurrent_clients; i++) {
-        auto client = std::make_shared<H2cClient>();
+        auto client = std::make_shared<H2cClient>(H2cClientBuilder().build());
         client_pool.push_back(client);
         auto* scheduler = runtime.getNextIOScheduler();
         scheduler->spawn(runClient(std::move(client), i, host, port, requests_per_client));

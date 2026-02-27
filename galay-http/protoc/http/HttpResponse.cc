@@ -55,28 +55,7 @@ std::string toCanonicalHeaderKey(std::string value)
 
 std::string getHeaderValueLoose(const galay::http::HeaderPair& headers, const std::string& key)
 {
-    const std::string value1 = headers.getValue(key);
-    if (!value1.empty()) {
-        return value1;
-    }
-
-    const std::string canonical = toCanonicalHeaderKey(key);
-    if (canonical != key) {
-        const std::string value2 = headers.getValue(canonical);
-        if (!value2.empty()) {
-            return value2;
-        }
-    }
-
-    const std::string lower = toLowerAscii(key);
-    if (lower != key && lower != canonical) {
-        const std::string value3 = headers.getValue(lower);
-        if (!value3.empty()) {
-            return value3;
-        }
-    }
-
-    return "";
+    return headers.getValue(key);
 }
 
 bool headerValueContainsToken(const std::string& value, const std::string& token)

@@ -32,12 +32,22 @@ namespace galay::http
         return &instance;
     }
 
+    void HttpLogger::enable()
+    {
+        console();
+    }
+
     void HttpLogger::console()
+    {
+        console("galay-http");
+    }
+
+    void HttpLogger::console(const std::string& logger_name)
     {
         auto instance = getInstance();
         auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 
-        instance->m_spdlogger = std::make_shared<spdlog::async_logger>("galay-http",
+        instance->m_spdlogger = std::make_shared<spdlog::async_logger>(logger_name,
             console_sink,
             instance->m_thread_pool);
 
@@ -50,12 +60,12 @@ namespace galay::http
 #endif
     }
 
-    void HttpLogger::file(const std::string& log_file_path)
+    void HttpLogger::file(const std::string& log_file_path, const std::string& logger_name)
     {
         auto instance = getInstance();
         auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(log_file_path, true);
 
-        instance->m_spdlogger = std::make_shared<spdlog::async_logger>("galay-http",
+        instance->m_spdlogger = std::make_shared<spdlog::async_logger>(logger_name,
             file_sink,
             instance->m_thread_pool);
 
@@ -68,10 +78,18 @@ namespace galay::http
 #endif
     }
 
+    void HttpLogger::setLogger(std::shared_ptr<spdlog::logger> logger)
+    {
+        auto instance = getInstance();
+        instance->m_spdlogger = std::move(logger);
+    }
+
     void HttpLogger::disable()
     {
         auto instance = getInstance();
-        instance->m_spdlogger->set_level(spdlog::level::off);
+        if (instance->m_spdlogger) {
+            instance->m_spdlogger->set_level(spdlog::level::off);
+        }
     }
 
 }

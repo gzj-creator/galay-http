@@ -23,12 +23,19 @@ namespace galay::http
             return m_spdlogger;
         }
 
+        static void enable();
+
         // 设置为控制台输出（彩色）
         static void console();
+        static void console(const std::string& logger_name);
 
         // 设置为文件输出
         // @param log_file_path 日志文件路径，默认为 "galay-http.log"
-        static void file(const std::string& log_file_path = "galay-http.log");
+        static void file(const std::string& log_file_path = "galay-http.log",
+                         const std::string& logger_name = "galay-http");
+
+        // 设置自定义 logger
+        static void setLogger(std::shared_ptr<spdlog::logger> logger);
 
         // 禁用日志输出（设置为 off 级别）
         static void disable();
@@ -113,6 +120,11 @@ namespace galay::http
 
 
 
+}
+
+namespace galay::http
+{
+    using HttpLog = HttpLogger;
 }
 
 #endif

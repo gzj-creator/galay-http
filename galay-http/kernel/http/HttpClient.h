@@ -4,6 +4,7 @@
 #include "HttpSession.h"
 #include "HttpLog.h"
 #include "galay-kernel/async/TcpSocket.h"
+#include "galay-http/protoc/http/HttpHeader.h"
 #include <string>
 #include <optional>
 #include <regex>
@@ -73,6 +74,15 @@ class HttpClientImpl;
  */
 struct HttpClientConfig
 {
+    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+};
+
+class HttpClientBuilder {
+public:
+    HttpClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    HttpClientConfig build() const                             { return m_config; }
+private:
+    HttpClientConfig m_config;
 };
 
 /**
@@ -175,6 +185,18 @@ struct HttpsClientConfig
     std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
     bool verify_peer = false;       // 是否验证服务器证书
     int verify_depth = 4;           // 证书链验证深度
+    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+};
+
+class HttpsClientBuilder {
+public:
+    HttpsClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
+    HttpsClientBuilder& verifyPeer(bool v)                 { m_config.verify_peer = v; return *this; }
+    HttpsClientBuilder& verifyDepth(int v)                 { m_config.verify_depth = v; return *this; }
+    HttpsClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    HttpsClientConfig build() const                        { return m_config; }
+private:
+    HttpsClientConfig m_config;
 };
 
 /**

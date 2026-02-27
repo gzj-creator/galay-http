@@ -82,33 +82,7 @@ void removeHeaderPairLoose(HeaderPair& headers, const std::string& key) {
 }
 
 std::string getHeaderValueLoose(const HeaderPair& headers, const std::string& key) {
-    const std::string value1 = headers.getValue(key);
-    if (!value1.empty()) {
-        return value1;
-    }
-
-    const std::string canonical = toCanonicalHeaderKey(key);
-    if (canonical != key) {
-        const std::string value2 = headers.getValue(canonical);
-        if (!value2.empty()) {
-            return value2;
-        }
-    }
-
-    const std::string lower = toLowerAscii(key);
-    if (lower != key && lower != canonical) {
-        const std::string value3 = headers.getValue(lower);
-        if (!value3.empty()) {
-            return value3;
-        }
-    }
-
-    const std::string upper = toUpperAscii(key);
-    if (upper != key && upper != canonical && upper != lower) {
-        return headers.getValue(upper);
-    }
-
-    return "";
+    return headers.getValue(key);
 }
 
 std::vector<std::string> splitConnectionTokens(const std::string& value) {

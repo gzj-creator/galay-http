@@ -36,7 +36,7 @@ Coroutine testGet(IOScheduler* scheduler)
     LogInfo("Connected to 127.0.0.1:8080");
 
     // 创建HttpClient
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
     auto session = client.getSession();
     // 使用 HttpClientAwaitable API
     // 现在可以在循环中调用 client.get()，每次都会创建新的 awaitable
@@ -99,7 +99,7 @@ Coroutine testPost(IOScheduler* scheduler)
     LogInfo("Connected to 127.0.0.1:8080");
 
     // 创建HttpClient
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
 
     // 使用 HttpClientAwaitable API 发送 POST 请求
     std::string body = R"({"name":"test","value":123})";
@@ -159,7 +159,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
     LogInfo("Connected to 127.0.0.1:8080");
 
     // 创建HttpClient
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
 
     // 发送多个请求
     std::vector<std::string> uris = {"/", "/hello", "/test"};

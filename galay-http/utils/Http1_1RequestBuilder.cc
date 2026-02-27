@@ -9,11 +9,11 @@
 namespace galay::http
 {
 
-Http1_1RequestBuilder::Http1_1RequestBuilder()
+Http1_1RequestBuilder::Http1_1RequestBuilder(HeaderPair::NormalizeMode mode)
 {
-    // 设置默认值
     m_request.header().version() = HttpVersion::HttpVersion_1_1;
     m_request.header().method() = HttpMethod::GET;
+    m_request.header().headerPairs() = HeaderPair(mode);
 }
 
 Http1_1RequestBuilder& Http1_1RequestBuilder::method(HttpMethod method)
@@ -121,51 +121,51 @@ HttpRequest Http1_1RequestBuilder::buildMove()
 
 // 静态工厂方法
 
-Http1_1RequestBuilder Http1_1RequestBuilder::get(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::get(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::GET).uri(uri);
     return builder;
 }
 
-Http1_1RequestBuilder Http1_1RequestBuilder::post(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::post(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::POST).uri(uri);
     return builder;
 }
 
-Http1_1RequestBuilder Http1_1RequestBuilder::put(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::put(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::PUT).uri(uri);
     return builder;
 }
 
-Http1_1RequestBuilder Http1_1RequestBuilder::del(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::del(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::DELETE).uri(uri);
     return builder;
 }
 
-Http1_1RequestBuilder Http1_1RequestBuilder::patch(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::patch(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::PATCH).uri(uri);
     return builder;
 }
 
-Http1_1RequestBuilder Http1_1RequestBuilder::head(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::head(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::HEAD).uri(uri);
     return builder;
 }
 
-Http1_1RequestBuilder Http1_1RequestBuilder::options(const std::string& uri)
+Http1_1RequestBuilder Http1_1RequestBuilder::options(const std::string& uri, HeaderPair::NormalizeMode mode)
 {
-    Http1_1RequestBuilder builder;
+    Http1_1RequestBuilder builder(mode);
     builder.method(HttpMethod::OPTIONS).uri(uri);
     return builder;
 }

@@ -47,6 +47,18 @@ struct HttpServerConfig
     size_t compute_scheduler_count = 0;
 };
 
+class HttpServerBuilder {
+public:
+    HttpServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
+    HttpServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; }
+    HttpServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
+    HttpServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
+    HttpServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
+    HttpServerConfig build() const                      { return m_config; }
+private:
+    HttpServerConfig m_config;
+};
+
 /**
  * @brief HTTP服务器模板类
  */
@@ -133,9 +145,9 @@ public:
                         .buildMove();
 
                     auto writer = conn.getWriter();
-                    while (true) {
-                        auto send_result = co_await writer.sendResponse(response);
-                        if (!send_result || send_result.value()) break;
+                    auto result = co_await writer.sendResponse(response);
+                    if (!result) {
+                        HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
                     }
 
                     if (!keep_alive) {
@@ -350,6 +362,23 @@ struct HttpsServerConfig
     std::string ca_path;            // CA 证书路径（可选）
     bool verify_peer = false;       // 是否验证客户端证书
     int verify_depth = 4;           // 证书链验证深度
+};
+
+class HttpsServerBuilder {
+public:
+    HttpsServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
+    HttpsServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; }
+    HttpsServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
+    HttpsServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
+    HttpsServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
+    HttpsServerBuilder& certPath(std::string v)          { m_config.cert_path = std::move(v); return *this; }
+    HttpsServerBuilder& keyPath(std::string v)           { m_config.key_path = std::move(v); return *this; }
+    HttpsServerBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
+    HttpsServerBuilder& verifyPeer(bool v)               { m_config.verify_peer = v; return *this; }
+    HttpsServerBuilder& verifyDepth(int v)               { m_config.verify_depth = v; return *this; }
+    HttpsServerConfig build() const                      { return m_config; }
+private:
+    HttpsServerConfig m_config;
 };
 
 using HttpsConnHandler = HttpConnHandlerImpl<galay::ssl::SslSocket>;

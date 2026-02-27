@@ -52,6 +52,8 @@ namespace galay::http
         static HttpResponse defaultPaymentRequired();
         static HttpResponse defaultForbidden();
         static HttpResponse defaultConflict();
+        static HttpResponse defaultNotAcceptable();
+        static HttpResponse defaultProxyAuthenticationRequired();
         static HttpResponse defaultGone();
         static HttpResponse defaultLengthRequired();
         static HttpResponse defaultPreconditionFailed();

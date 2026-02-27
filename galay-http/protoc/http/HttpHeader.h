@@ -53,7 +53,13 @@ namespace galay::http {
     class HeaderPair
     {
     public:
-        HeaderPair();
+        enum class NormalizeMode {
+            Lowercase,   // content-type (默认，Server 端用)
+            Canonical,   // Content-Type
+            Raw          // 保持原样
+        };
+
+        explicit HeaderPair(NormalizeMode mode = NormalizeMode::Lowercase);
         HeaderPair(const HeaderPair& other);
         HeaderPair(HeaderPair&& other);
         bool hasKey(const std::string& key) const;
@@ -63,9 +69,11 @@ namespace galay::http {
         HttpErrorCode addHeaderPair(const std::string& key, const std::string& value);
         std::string toString() const;
         void clear();
+        NormalizeMode mode() const { return m_mode; }
         HeaderPair& operator=(const HeaderPair& other);
         HeaderPair& operator=(HeaderPair&& other);
     private:
+        NormalizeMode m_mode;
         std::map<std::string, std::string> m_headerPairs;
     };
 

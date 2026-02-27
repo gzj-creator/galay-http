@@ -57,22 +57,25 @@ struct Http2Settings
     uint32_t max_frame_size = kDefaultMaxFrameSize;
     uint32_t max_header_list_size = kDefaultMaxHeaderListSize;
     
-    void applySettings(const Http2SettingsFrame& frame) {
+    Http2ErrorCode applySettings(const Http2SettingsFrame& frame) {
         for (const auto& setting : frame.settings()) {
             switch (setting.id) {
                 case Http2SettingsId::HeaderTableSize:
                     header_table_size = setting.value;
                     break;
                 case Http2SettingsId::EnablePush:
+                    if (setting.value > 1) return Http2ErrorCode::ProtocolError;
                     enable_push = setting.value;
                     break;
                 case Http2SettingsId::MaxConcurrentStreams:
                     max_concurrent_streams = setting.value;
                     break;
                 case Http2SettingsId::InitialWindowSize:
+                    if (setting.value > 2147483647u) return Http2ErrorCode::FlowControlError;
                     initial_window_size = setting.value;
                     break;
                 case Http2SettingsId::MaxFrameSize:
+                    if (setting.value < 16384 || setting.value > 16777215) return Http2ErrorCode::ProtocolError;
                     max_frame_size = setting.value;
                     break;
                 case Http2SettingsId::MaxHeaderListSize:
@@ -80,6 +83,7 @@ struct Http2Settings
                     break;
             }
         }
+        return Http2ErrorCode::NoError;
     }
     
     template<typename Config>
@@ -1108,11 +1112,19 @@ public:
             // 复制已有数据到新 buffer
             auto read_iovecs = m_ring_buffer.getReadIovecs();
             for (const auto& iov : read_iovecs) {
-                auto write_iovecs = new_buffer.getWriteIovecs();
-                if (!write_iovecs.empty()) {
-                    size_t to_copy = std::min(iov.iov_len, write_iovecs[0].iov_len);
-                    std::memcpy(write_iovecs[0].iov_base, iov.iov_base, to_copy);
-                    new_buffer.produce(to_copy);
+                size_t remaining = iov.iov_len;
+                const char* src = static_cast<const char*>(iov.iov_base);
+                while (remaining > 0) {
+                    auto write_iovecs = new_buffer.getWriteIovecs();
+                    if (write_iovecs.empty()) break;
+                    for (const auto& wv : write_iovecs) {
+                        if (remaining == 0) break;
+                        size_t to_copy = std::min(remaining, wv.iov_len);
+                        std::memcpy(wv.iov_base, src, to_copy);
+                        new_buffer.produce(to_copy);
+                        src += to_copy;
+                        remaining -= to_copy;
+                    }
                 }
             }
             m_ring_buffer = std::move(new_buffer);

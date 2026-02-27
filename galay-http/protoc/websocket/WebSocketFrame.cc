@@ -187,8 +187,8 @@ std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
     uint8_t masking_key[4] = {0, 0, 0, 0};
     if (use_mask) {
         // 生成随机掩码
-        std::random_device rd;
-        std::mt19937 gen(rd());
+        thread_local static std::random_device rd;
+        thread_local static std::mt19937 gen(rd());
         std::uniform_int_distribution<> dis(0, 255);
         for (int i = 0; i < 4; ++i) {
             masking_key[i] = dis(gen);
@@ -246,8 +246,8 @@ std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, ui
     // 掩码密钥
     if (use_mask) {
         // 生成随机掩码
-        std::random_device rd;
-        std::mt19937 gen(rd());
+        thread_local static std::random_device rd;
+        thread_local static std::mt19937 gen(rd());
         std::uniform_int_distribution<> dis(0, 255);
         for (int i = 0; i < 4; ++i) {
             masking_key[i] = dis(gen);

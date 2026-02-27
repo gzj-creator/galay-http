@@ -550,6 +550,17 @@ struct H2cClientConfig
     uint32_t max_header_list_size = 8192;
 };
 
+class H2cClientBuilder {
+public:
+    H2cClientBuilder& maxConcurrentStreams(uint32_t v)  { m_config.max_concurrent_streams = v; return *this; }
+    H2cClientBuilder& initialWindowSize(uint32_t v)    { m_config.initial_window_size = v; return *this; }
+    H2cClientBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
+    H2cClientBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
+    H2cClientConfig build() const                      { return m_config; }
+private:
+    H2cClientConfig m_config;
+};
+
 /**
  * @brief H2c 客户端 (HTTP/2 over cleartext)
  * @details 通过 HTTP/1.1 Upgrade 机制升级到 HTTP/2，基于 StreamManager 支持多路复用

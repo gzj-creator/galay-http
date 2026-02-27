@@ -8,6 +8,7 @@
 
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpBase.h"
+#include "galay-http/protoc/http/HttpHeader.h"
 #include <string>
 #include <map>
 
@@ -32,8 +33,9 @@ class Http1_1RequestBuilder
 public:
     /**
      * @brief 构造函数
+     * @param mode Header 归一化策略（默认 Canonical，适合 Client 端）
      */
-    Http1_1RequestBuilder();
+    explicit Http1_1RequestBuilder(HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
 
     /**
      * @brief 设置 HTTP 方法
@@ -133,55 +135,13 @@ public:
     HttpRequest buildMove();
 
     // 常用 HTTP 方法的快捷方法
-
-    /**
-     * @brief 创建 GET 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder get(const std::string& uri);
-
-    /**
-     * @brief 创建 POST 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder post(const std::string& uri);
-
-    /**
-     * @brief 创建 PUT 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder put(const std::string& uri);
-
-    /**
-     * @brief 创建 DELETE 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder del(const std::string& uri);
-
-    /**
-     * @brief 创建 PATCH 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder patch(const std::string& uri);
-
-    /**
-     * @brief 创建 HEAD 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder head(const std::string& uri);
-
-    /**
-     * @brief 创建 OPTIONS 请求
-     * @param uri 请求 URI
-     * @return Builder 对象
-     */
-    static Http1_1RequestBuilder options(const std::string& uri);
+    static Http1_1RequestBuilder get(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder post(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder put(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder del(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder patch(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder head(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder options(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
 
 private:
     HttpRequest m_request;

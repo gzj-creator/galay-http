@@ -1064,6 +1064,74 @@ void test_response_chunked_case_insensitive()
     TEST_PASS("Response chunked case-insensitive");
 }
 
+void test_header_case_config_switch()
+{
+    std::cout << "\n=== Test: Header NormalizeMode ===" << std::endl;
+
+    // Lowercase 模式：存 hOsT → 内部存为 host，查 host 能找到
+    {
+        HeaderPair headers(HeaderPair::NormalizeMode::Lowercase);
+        headers.addHeaderPair("hOsT", "example.com");
+
+        TEST_ASSERT(headers.getValue("host") == "example.com",
+                    "Lowercase mode: lookup by 'host' should succeed");
+        TEST_ASSERT(headers.getValue("HOST") == "example.com",
+                    "Lowercase mode: lookup by 'HOST' should succeed (normalized to lowercase)");
+
+        std::string str = headers.toString();
+        TEST_ASSERT(str.find("host: example.com\r\n") != std::string::npos,
+                    "Lowercase mode: stored key should be lowercase");
+    }
+
+    // Canonical 模式：存 hOsT → 内部存为 Host，查 Host 能找到
+    {
+        HeaderPair headers(HeaderPair::NormalizeMode::Canonical);
+        headers.addHeaderPair("hOsT", "example.com");
+
+        TEST_ASSERT(headers.getValue("Host") == "example.com",
+                    "Canonical mode: lookup by 'Host' should succeed");
+        TEST_ASSERT(headers.getValue("host") == "example.com",
+                    "Canonical mode: lookup by 'host' should succeed (normalized to canonical)");
+
+        std::string str = headers.toString();
+        TEST_ASSERT(str.find("Host: example.com\r\n") != std::string::npos,
+                    "Canonical mode: stored key should be canonical");
+    }
+
+    // Raw 模式：存 hOsT → 精确查 hOsT 能找到，Host 也能通过 case-insensitive fallback 找到
+    {
+        HeaderPair headers(HeaderPair::NormalizeMode::Raw);
+        headers.addHeaderPair("hOsT", "example.com");
+
+        TEST_ASSERT(headers.getValue("hOsT") == "example.com",
+                    "Raw mode: exact key lookup should succeed");
+        TEST_ASSERT(headers.getValue("Host") == "example.com",
+                    "Raw mode: case-insensitive fallback should succeed");
+
+        std::string str = headers.toString();
+        TEST_ASSERT(str.find("hOsT: example.com\r\n") != std::string::npos,
+                    "Raw mode: stored key should preserve original case");
+    }
+
+    // 解析测试：默认 Lowercase 模式下解析 HTTP 请求
+    {
+        HttpRequest request;
+        RingBuffer buffer(1024);
+        std::string raw = "GET /cfg HTTP/1.1\r\n"
+                          "hOsT: example.com\r\n"
+                          "\r\n";
+        buffer.write(raw);
+        auto [err, consumed] = request.fromIOVec(buffer.getReadIovecs());
+
+        TEST_ASSERT(err == kNoError, "Parse should succeed");
+        TEST_ASSERT(consumed == static_cast<ssize_t>(raw.size()), "Should consume full request");
+        TEST_ASSERT(request.header().headerPairs().getValue("host") == "example.com",
+                    "Default lowercase mode: lookup by 'host' should succeed");
+    }
+
+    TEST_PASS("Header NormalizeMode");
+}
+
 // ============ 主函数 ============
 
 int main()
@@ -1111,6 +1179,7 @@ int main()
     test_body_split_multiple_times();
     test_request_lowercase_content_length();
     test_response_chunked_case_insensitive();
+    test_header_case_config_switch();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "Test Results: " << g_passed << " passed, " << g_failed << " failed" << std::endl;

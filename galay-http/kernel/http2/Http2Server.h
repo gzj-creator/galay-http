@@ -8,6 +8,8 @@
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/protoc/http/HttpHeader.h"
 #include "galay-http/kernel/http/HttpLog.h"
+#include "galay-http/kernel/http/HttpConn.h"
+#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-kernel/kernel/Coroutine.h"
@@ -16,6 +18,9 @@
 #include <functional>
 #include <algorithm>
 #include <cctype>
+#include <cstring>
+#include <expected>
+#include <string>
 
 namespace galay::http2
 {
@@ -60,9 +65,60 @@ private:
 };
 
 /**
+ * @brief 协议检测结果
+ */
+enum class DetectedProtocol {
+    Unknown,            // 检测失败
+    H2cPriorKnowledge,  // 直接 h2c
+    H2cUpgrade,         // HTTP/1.1 Upgrade: h2c
+    Http1,              // 普通 HTTP/1.1（降级）
+};
+
+/**
+ * @brief 判断首字节是否像 HTTP method（大写 ASCII 字母）
+ */
+inline bool looksLikeHttpMethod(const char* buf) {
+    return buf[0] >= 'A' && buf[0] <= 'Z';
+}
+
+/**
+ * @brief 从 RingBuffer 的 iovec 拷贝 n 字节到 buf（不 consume）
+ */
+inline void peekRingBuffer(RingBuffer& rb, char* buf, size_t n) {
+    auto iovecs = rb.getReadIovecs();
+    size_t copied = 0;
+    for (const auto& iov : iovecs) {
+        size_t to_copy = std::min(iov.iov_len, n - copied);
+        std::memcpy(buf + copied, iov.iov_base, to_copy);
+        copied += to_copy;
+        if (copied >= n) break;
+    }
+}
+
+/**
+ * @brief 把 RingBuffer 全部数据取出到 string 并 consume
+ */
+inline std::string drainRingBuffer(RingBuffer& rb) {
+    std::string data;
+    data.reserve(rb.readable());
+    auto iovecs = rb.getReadIovecs();
+    for (const auto& iov : iovecs) {
+        data.append(static_cast<const char*>(iov.iov_base), iov.iov_len);
+    }
+    rb.consume(rb.readable());
+    return data;
+}
+
+/**
  * @brief HTTP/2 流处理器类型（每个新流创建后 spawn handler(stream)）
  */
 using Http2ConnectionHandler = Http2StreamHandler;
+
+/**
+ * @brief HTTP/1.1 降级处理器类型
+ */
+using Http1FallbackHandler = std::function<Coroutine(
+    galay::http::HttpConnImpl<TcpSocket>, galay::http::HttpRequestHeader)>;
 
 /**
  * @brief h2c 服务器 (HTTP/2 over cleartext)
@@ -88,6 +144,10 @@ public:
     void start(Http2ConnectionHandler handler) {
         m_handler = std::move(handler);
         startInternal();
+    }
+
+    void setHttp1Fallback(Http1FallbackHandler handler) {
+        m_http1_fallback = std::move(handler);
     }
     
     void stop() {
@@ -210,57 +270,65 @@ private:
         // 配置本地设置
         conn.localSettings().from(m_config);
 
-        // 检测协议（Prior Knowledge 或 HTTP/1.1 升级）
-        bool detect_success = false;
-        co_await detectProtocol(conn, detect_success).wait();
-        if (!detect_success) {
+        DetectedProtocol protocol = DetectedProtocol::Unknown;
+        galay::http::HttpRequestHeader upgrade_request;
+        co_await detectProtocol(conn, protocol, upgrade_request).wait();
+
+        switch (protocol) {
+        case DetectedProtocol::H2cPriorKnowledge:
+        case DetectedProtocol::H2cUpgrade: {
+            // 初始化 StreamManager 并启动帧分发循环
+            conn.initStreamManager();
+            auto* mgr = conn.streamManager();
+            HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
+            co_await mgr->start(m_handler).wait();
+            HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
+            co_await conn.close();
+            break;
+        }
+        case DetectedProtocol::Http1:
+            co_await handleHttp1Fallback(std::move(conn), std::move(upgrade_request)).wait();
+            break;
+        default:
             HTTP_LOG_ERROR("[protocol] [detect-fail]");
             co_await conn.close();
-            co_return;
+            break;
         }
 
-        // 初始化 StreamManager 并启动帧分发循环
-        conn.initStreamManager();
-        auto* mgr = conn.streamManager();
-        HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
-        co_await mgr->start(m_handler).wait();
-        HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
-        co_await conn.close();
         co_return;
     }
-    
+
+    Coroutine readAtLeast(Http2ConnImpl<TcpSocket>& conn, size_t n) {
+        auto& rb = conn.ringBuffer();
+        while (rb.readable() < n) {
+            auto result = co_await conn.socket().readv(rb.getWriteIovecs());
+            if (!result || result.value() == 0) {
+                co_return;
+            }
+            rb.produce(result.value());
+        }
+        co_return;
+    }
+
     /**
      * @brief 检测协议类型并完成初始握手
      * @param conn HTTP/2 连接
-     * @param success 输出参数，表示是否成功
-     *
-     * 数据直接读入 conn 的 RingBuffer，避免 recv → 临时 buffer → feedData 的多余拷贝。
-     * Prior Knowledge 路径：readv → RingBuffer → peek 验证 → consume preface，后续帧留在 buffer。
-     * Upgrade 路径：HTTP/1.1 头取出解析后，Connection Preface 同样走 RingBuffer。
+     * @param protocol 输出协议类型
+     * @param upgrade_request 输出首个 HTTP/1.1 请求头（Upgrade/Http1 路径）
      */
-    Coroutine detectProtocol(Http2ConnImpl<TcpSocket>& conn, bool& success) {
-        success = false;
+    Coroutine detectProtocol(Http2ConnImpl<TcpSocket>& conn,
+                            DetectedProtocol& protocol,
+                            galay::http::HttpRequestHeader& upgrade_request) {
+        protocol = DetectedProtocol::Unknown;
         auto& rb = conn.ringBuffer();
 
-        // 直接 readv 到 RingBuffer，凑够 Connection Preface 长度
-        while (rb.readable() < kHttp2ConnectionPrefaceLength) {
-            auto result = co_await conn.socket().readv(rb.getWriteIovecs());
-            if (!result || result.value() == 0) co_return;
-            rb.produce(result.value());
+        co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength).wait();
+        if (rb.readable() < kHttp2ConnectionPrefaceLength) {
+            co_return;
         }
 
-        // 从 RingBuffer peek 出数据判断协议
         char peek_buf[kHttp2ConnectionPrefaceLength];
-        {
-            auto iovecs = rb.getReadIovecs();
-            size_t copied = 0;
-            for (const auto& iov : iovecs) {
-                size_t n = std::min(iov.iov_len, kHttp2ConnectionPrefaceLength - copied);
-                std::memcpy(peek_buf + copied, iov.iov_base, n);
-                copied += n;
-                if (copied >= kHttp2ConnectionPrefaceLength) break;
-            }
-        }
+        peekRingBuffer(rb, peek_buf, kHttp2ConnectionPrefaceLength);
 
         // ===== Prior Knowledge =====
         if (std::memcmp(peek_buf, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) == 0) {
@@ -268,38 +336,26 @@ private:
             rb.consume(kHttp2ConnectionPrefaceLength);
 
             auto settings_result = co_await conn.sendSettings();
-            if (!settings_result) co_return;
-            success = true;
+            if (!settings_result) {
+                co_return;
+            }
+
+            protocol = DetectedProtocol::H2cPriorKnowledge;
             co_return;
         }
 
-        // ===== HTTP/1.1 Upgrade =====
-        if (std::memcmp(peek_buf, "GET ", 4) == 0 ||
-            std::memcmp(peek_buf, "POST", 4) == 0 ||
-            std::memcmp(peek_buf, "PUT ", 4) == 0 ||
-            std::memcmp(peek_buf, "HEAD", 4) == 0) {
-            HTTP_LOG_DEBUG("[h1] [upgrade] [detect]");
+        // ===== HTTP/1.1 (Upgrade or fallback) =====
+        if (looksLikeHttpMethod(peek_buf)) {
+            HTTP_LOG_DEBUG("[h1] [detect]");
 
-            // HTTP/1.1 头不是 HTTP/2 帧，取出到 string 解析
-            std::string header_data;
-            header_data.reserve(4096);
-            {
-                auto iovecs = rb.getReadIovecs();
-                for (const auto& iov : iovecs) {
-                    header_data.append(static_cast<const char*>(iov.iov_base), iov.iov_len);
-                }
-                rb.consume(rb.readable());
-            }
-
+            std::string header_data = drainRingBuffer(rb);
             while (header_data.find("\r\n\r\n") == std::string::npos && header_data.size() < 8192) {
                 auto result = co_await conn.socket().readv(rb.getWriteIovecs());
-                if (!result || result.value() == 0) co_return;
-                rb.produce(result.value());
-                auto iovecs = rb.getReadIovecs();
-                for (const auto& iov : iovecs) {
-                    header_data.append(static_cast<const char*>(iov.iov_base), iov.iov_len);
+                if (!result || result.value() == 0) {
+                    co_return;
                 }
-                rb.consume(rb.readable());
+                rb.produce(result.value());
+                header_data.append(drainRingBuffer(rb));
             }
 
             size_t header_end = header_data.find("\r\n\r\n");
@@ -308,11 +364,10 @@ private:
                 co_return;
             }
 
-            galay::http::HttpRequestHeader upgrade_request;
             auto parse_result = upgrade_request.fromString(
                 std::string_view(header_data.data(), header_end + 4));
             if (parse_result.first != galay::http::kNoError || parse_result.second <= 0) {
-                HTTP_LOG_ERROR("[upgrade] [parse-fail]");
+                HTTP_LOG_ERROR("[header] [parse-fail]");
                 co_return;
             }
 
@@ -353,51 +408,67 @@ private:
                              header_data.size() - header_end - 4);
                 }
 
-                // readv 直接读入 RingBuffer，凑够 Connection Preface
-                while (rb.readable() < kHttp2ConnectionPrefaceLength) {
-                    auto result = co_await conn.socket().readv(rb.getWriteIovecs());
-                    if (!result || result.value() == 0) {
-                        HTTP_LOG_ERROR("[preface] [recv-fail]");
-                        co_return;
-                    }
-                    rb.produce(result.value());
+                co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength).wait();
+                if (rb.readable() < kHttp2ConnectionPrefaceLength) {
+                    HTTP_LOG_ERROR("[preface] [recv-fail]");
+                    co_return;
                 }
 
-                // 从 RingBuffer 原地验证 Connection Preface
-                {
-                    auto iovecs = rb.getReadIovecs();
-                    size_t copied = 0;
-                    for (const auto& iov : iovecs) {
-                        size_t n = std::min(iov.iov_len, kHttp2ConnectionPrefaceLength - copied);
-                        std::memcpy(peek_buf + copied, iov.iov_base, n);
-                        copied += n;
-                        if (copied >= kHttp2ConnectionPrefaceLength) break;
-                    }
-                }
+                peekRingBuffer(rb, peek_buf, kHttp2ConnectionPrefaceLength);
                 if (std::memcmp(peek_buf, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
                     HTTP_LOG_ERROR("[preface] [invalid] [after-upgrade]");
                     co_return;
                 }
                 HTTP_LOG_DEBUG("[preface] [ok]");
 
-                // 消费 preface，后续数据（客户端 SETTINGS 等）留在 RingBuffer
                 rb.consume(kHttp2ConnectionPrefaceLength);
 
                 auto settings_result = co_await conn.sendSettings();
-                if (!settings_result) co_return;
-                success = true;
+                if (!settings_result) {
+                    co_return;
+                }
+
+                protocol = DetectedProtocol::H2cUpgrade;
                 co_return;
             }
+
+            protocol = DetectedProtocol::Http1;
+            co_return;
         }
 
         HTTP_LOG_WARN("[protocol] [unknown] [h2c]");
         co_return;
     }
 
+    Coroutine handleHttp1Fallback(Http2ConnImpl<TcpSocket>&& h2_conn,
+                                  galay::http::HttpRequestHeader first_request_header) {
+        galay::http::HttpConnImpl<TcpSocket> conn(
+            std::move(h2_conn.socket()), std::move(h2_conn.ringBuffer()));
+
+        if (m_http1_fallback) {
+            co_await m_http1_fallback(std::move(conn), std::move(first_request_header)).wait();
+            co_return;
+        }
+
+        auto writer = conn.getWriter();
+        auto response = galay::http::Http1_1ResponseBuilder()
+            .status(galay::http::HttpStatusCode::HttpVersionNotSupported_505)
+            .body("505 HTTP Version Not Supported - Use h2c")
+            .buildMove();
+        auto result = co_await writer.sendResponse(response);
+        if (!result) {
+            HTTP_LOG_ERROR("[h1-fallback] [send-fail] [{}]", result.error().message());
+        }
+        co_await conn.close();
+        co_return;
+    }
+
+
 private:
     Runtime m_runtime;
     H2cServerConfig m_config;
     Http2ConnectionHandler m_handler;
+    Http1FallbackHandler m_http1_fallback;
     std::atomic<bool> m_running;
 };
 

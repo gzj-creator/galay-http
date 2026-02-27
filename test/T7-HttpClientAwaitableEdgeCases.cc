@@ -53,7 +53,7 @@ Coroutine testServerCloseConnection(IOScheduler* scheduler)
         co_return;
     }
 
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
     auto session = client.getSession();
     // 发送请求后立即关闭连接
     int loop_count = 0;
@@ -99,7 +99,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
         co_return;
     }
 
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
     auto session = client.getSession();
     // 发送3个连续请求
     for (int i = 0; i < 3; i++) {
@@ -153,7 +153,7 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
         co_return;
     }
 
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
     auto session = client.getSession();
 
     // 创建一个大的请求体 (10KB)
@@ -204,7 +204,7 @@ Coroutine test404NotFound(IOScheduler* scheduler)
         co_return;
     }
 
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {
@@ -255,7 +255,7 @@ Coroutine testEmptyResponse(IOScheduler* scheduler)
         co_return;
     }
 
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {

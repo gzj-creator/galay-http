@@ -37,7 +37,7 @@ Coroutine testHttpClientAwaitableTimeout(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket));
+    HttpClient client(std::move(socket), HttpClientBuilder().build());
 
     auto session = client.getSession();
 

@@ -33,6 +33,19 @@ struct H2ClientConfig
     std::string ca_path;                // CA 证书路径（可选）
 };
 
+class H2ClientBuilder {
+public:
+    H2ClientBuilder& maxConcurrentStreams(uint32_t v)  { m_config.max_concurrent_streams = v; return *this; }
+    H2ClientBuilder& initialWindowSize(uint32_t v)    { m_config.initial_window_size = v; return *this; }
+    H2ClientBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
+    H2ClientBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
+    H2ClientBuilder& verifyPeer(bool v)               { m_config.verify_peer = v; return *this; }
+    H2ClientBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
+    H2ClientConfig build() const                      { return m_config; }
+private:
+    H2ClientConfig m_config;
+};
+
 /**
  * @brief H2 客户端 (HTTP/2 over TLS)
  * @details 通过 TLS ALPN 协商使用 HTTP/2
@@ -186,7 +199,12 @@ public:
                     continue;
                 }
 
-                client.m_conn->peerSettings().applySettings(*settings);
+                auto err = client.m_conn->peerSettings().applySettings(*settings);
+                if (err != Http2ErrorCode::NoError) {
+                    self->m_error = err;
+                    self->m_done = true;
+                    co_return;
+                }
                 client.m_conn->encoder().setMaxTableSize(client.m_conn->peerSettings().header_table_size);
                 break;
             }
@@ -315,7 +333,11 @@ public:
                     case Http2FrameType::Settings: {
                         auto* settings = static_cast<Http2SettingsFrame*>(frame.get());
                         if (!settings->isAck()) {
-                            client.m_conn->peerSettings().applySettings(*settings);
+                            auto err = client.m_conn->peerSettings().applySettings(*settings);
+                            if (err != Http2ErrorCode::NoError) {
+                                co_await client.m_conn->sendGoaway(err);
+                                co_return;
+                            }
                         }
                         continue;
                     }

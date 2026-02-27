@@ -41,6 +41,12 @@ public:
     {
     }
 
+    HttpConnImpl(SocketType&& socket, RingBuffer&& ring_buffer)
+        : m_socket(std::move(socket))
+        , m_ring_buffer(std::move(ring_buffer))
+    {
+    }
+
     ~HttpConnImpl() = default;
 
     // 禁用拷贝

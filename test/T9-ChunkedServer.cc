@@ -173,16 +173,11 @@ Coroutine handleClient(TcpSocket client, Host clientHost) {
             .body("Non-chunked request received\n")
             .buildMove();
 
-        while (true) {
-            auto sendResult = co_await writer.sendResponse(response);
-            if (!sendResult) {
-                LogError("Failed to send response: {}", sendResult.error().message());
-                break;
-            }
-            if (sendResult.value()) {
-                LogInfo("Response sent: complete");
-                break;
-            }
+        auto sendResult = co_await writer.sendResponse(response);
+        if (!sendResult) {
+            LogError("Failed to send response: {}", sendResult.error().message());
+        } else {
+            LogInfo("Response sent: complete");
         }
     }
 
@@ -379,16 +374,11 @@ Coroutine chunkedTestServer() {
                 .body("Non-chunked request received\n")
                 .buildMove();
 
-            while (true) {
-                auto sendResult = co_await writer.sendResponse(response);
-                if (!sendResult) {
-                    LogError("Failed to send response: {}", sendResult.error().message());
-                    break;
-                }
-                if (sendResult.value()) {
-                    LogInfo("Response sent: complete");
-                    break;
-                }
+            auto sendResult = co_await writer.sendResponse(response);
+            if (!sendResult) {
+                LogError("Failed to send response: {}", sendResult.error().message());
+            } else {
+                LogInfo("Response sent: complete");
             }
         }
 

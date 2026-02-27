@@ -11,6 +11,7 @@
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include <galay-utils/algorithm/Base64.hpp>
+#include "galay-http/protoc/http/HttpHeader.h"
 #include <string>
 #include <optional>
 #include <expected>
@@ -88,6 +89,22 @@ inline std::string generateWebSocketKey() {
 
     return galay::utils::Base64Util::Base64Encode(random_bytes, 16);
 }
+
+/**
+ * @brief WebSocket 客户端配置
+ */
+struct WsClientConfig
+{
+    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+};
+
+class WsClientBuilder {
+public:
+    WsClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    WsClientConfig build() const                             { return m_config; }
+private:
+    WsClientConfig m_config;
+};
 
 // 前向声明
 template<typename SocketType>
@@ -509,8 +526,9 @@ template<typename SocketType>
 class WsClientImpl
 {
 public:
-    WsClientImpl()
+    explicit WsClientImpl(const WsClientConfig& config = WsClientConfig())
         : m_socket(nullptr)
+        , m_config(config)
     {
     }
 
@@ -610,6 +628,7 @@ public:
 
 protected:
     std::unique_ptr<SocketType> m_socket;
+    WsClientConfig m_config;
     WsUrl m_url;
 };
 
@@ -1011,6 +1030,18 @@ struct WssClientConfig
     std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
     bool verify_peer = false;       // 是否验证服务器证书
     int verify_depth = 4;           // 证书链验证深度
+    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+};
+
+class WssClientBuilder {
+public:
+    WssClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
+    WssClientBuilder& verifyPeer(bool v)                 { m_config.verify_peer = v; return *this; }
+    WssClientBuilder& verifyDepth(int v)                 { m_config.verify_depth = v; return *this; }
+    WssClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    WssClientConfig build() const                        { return m_config; }
+private:
+    WssClientConfig m_config;
 };
 
 /**

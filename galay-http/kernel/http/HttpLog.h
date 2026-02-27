@@ -16,28 +16,28 @@
 #ifdef ENABLE_DEBUG
     // Debug 模式：启用所有日志
     #define HTTP_LOG_DEBUG(...) \
-        SPDLOG_LOGGER_DEBUG(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_DEBUG(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
     #define HTTP_LOG_INFO(...) \
-        SPDLOG_LOGGER_INFO(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
     #define HTTP_LOG_WARN(...) \
-        SPDLOG_LOGGER_WARN(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
     #define HTTP_LOG_ERROR(...) \
-        SPDLOG_LOGGER_ERROR(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 #else
     // Release 模式：移除 debug 日志，保留 info 及以上级别
     #define HTTP_LOG_DEBUG(...) ((void)0)  // 编译时完全移除
 
     #define HTTP_LOG_INFO(...) \
-        SPDLOG_LOGGER_INFO(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
     #define HTTP_LOG_WARN(...) \
-        SPDLOG_LOGGER_WARN(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
     #define HTTP_LOG_ERROR(...) \
-        SPDLOG_LOGGER_ERROR(galay::http::HttpLogger::getInstance()->getSpdlogger(), __VA_ARGS__)
+        SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 #endif
 
 // 格式化输出宏 - 使用 HTTP_LOG_INFO 以显示源代码位置
@@ -61,4 +61,3 @@
 #define CLIENT_RESPONSE_LOG(STATUS)  SERVER_RESPONSE_LOG(STATUS)
 
 #endif // GALAY_HTTP_LOG_H
-

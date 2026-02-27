@@ -21,7 +21,7 @@ Coroutine sendEchoRequest(const std::string& url, const std::string& message) {
     std::cout << "Connecting to " << url << "...\n";
 
     // 创建 HttpClient 并连接
-    HttpClient client;
+    HttpClient client(HttpClientBuilder().build());
     auto connect_result = co_await client.connect(url);
     if (!connect_result) {
         std::cerr << "Failed to connect to server: " << connect_result.error().message() << "\n";
