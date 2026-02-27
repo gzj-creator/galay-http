@@ -80,7 +80,8 @@ struct HttpClientConfig
 class HttpClientBuilder {
 public:
     HttpClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
-    HttpClientConfig build() const                             { return m_config; }
+    HttpClientImpl<TcpSocket> build() const;
+    HttpClientConfig buildConfig() const                       { return m_config; }
 private:
     HttpClientConfig m_config;
 };
@@ -166,6 +167,7 @@ protected:
 
 // 类型别名 - HTTP (TcpSocket)
 using HttpClient = HttpClientImpl<TcpSocket>;
+inline HttpClient HttpClientBuilder::build() const { return HttpClient(m_config); }
 
 } // namespace galay::http
 
@@ -188,13 +190,16 @@ struct HttpsClientConfig
     HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
 };
 
+class HttpsClient;
+
 class HttpsClientBuilder {
 public:
     HttpsClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
     HttpsClientBuilder& verifyPeer(bool v)                 { m_config.verify_peer = v; return *this; }
     HttpsClientBuilder& verifyDepth(int v)                 { m_config.verify_depth = v; return *this; }
     HttpsClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
-    HttpsClientConfig build() const                        { return m_config; }
+    HttpsClient build() const;
+    HttpsClientConfig buildConfig() const                  { return m_config; }
 private:
     HttpsClientConfig m_config;
 };
@@ -300,6 +305,8 @@ private:
     HttpsClientConfig m_https_config;
     galay::ssl::SslContext m_ssl_ctx;
 };
+
+inline HttpsClient HttpsClientBuilder::build() const { return HttpsClient(m_config); }
 
 } // namespace galay::http
 #endif

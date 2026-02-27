@@ -185,7 +185,7 @@ int main(int argc, char* argv[]) {
     client_pool.reserve(connections);
 
     for (int i = 0; i < connections; i++) {
-        auto client = std::make_shared<H2cClient>(H2cClientBuilder().build());
+        auto client = std::make_shared<H2cClient>(H2cClientBuilder().buildConfig());
         client_pool.push_back(client);
         auto* sched = rt.getNextIOScheduler();
         sched->spawn(runConnection(std::move(client), i, host, port, streams, rounds));

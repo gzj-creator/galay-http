@@ -38,7 +38,7 @@ Coroutine testGetMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {
@@ -89,7 +89,7 @@ Coroutine testPostMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
     std::string body = R"({"name": "test", "value": 123})";
     auto session = client.getSession();
@@ -141,7 +141,7 @@ Coroutine testPutMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
     std::string body = R"({"name": "updated", "value": 456})";
     auto session = client.getSession();
@@ -193,7 +193,7 @@ Coroutine testDeleteMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {
@@ -243,7 +243,7 @@ Coroutine testHeadMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {
@@ -294,7 +294,7 @@ Coroutine testOptionsMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {
@@ -351,7 +351,7 @@ Coroutine testPatchMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
     std::string body = R"({"value": 789})";
     auto session = client.getSession();
@@ -403,7 +403,7 @@ Coroutine testTraceMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {
@@ -453,7 +453,7 @@ Coroutine testConnectMethod(IOScheduler* scheduler)
 
     std::cout << "✓ Connected to server" << std::endl;
 
-    HttpClient client(std::move(socket), HttpClientBuilder().build());
+    HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
     auto session = client.getSession();
     int loop_count = 0;
     while (true) {

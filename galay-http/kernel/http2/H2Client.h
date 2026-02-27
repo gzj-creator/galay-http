@@ -36,6 +36,8 @@ struct H2ClientConfig
     std::string ca_path;                // CA 证书路径（可选）
 };
 
+class H2Client;
+
 class H2ClientBuilder {
 public:
     H2ClientBuilder& maxConcurrentStreams(uint32_t v)  { m_config.max_concurrent_streams = v; return *this; }
@@ -44,7 +46,8 @@ public:
     H2ClientBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
     H2ClientBuilder& verifyPeer(bool v)               { m_config.verify_peer = v; return *this; }
     H2ClientBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
-    H2ClientConfig build() const                      { return m_config; }
+    H2Client build() const;
+    H2ClientConfig buildConfig() const                { return m_config; }
 private:
     H2ClientConfig m_config;
 };
@@ -537,6 +540,8 @@ private:
     std::unique_ptr<SslSocket> m_socket;
     std::unique_ptr<Http2ConnImpl<SslSocket>> m_conn;
 };
+
+inline H2Client H2ClientBuilder::build() const { return H2Client(m_config); }
 
 #endif // GALAY_HTTP_SSL_ENABLED
 

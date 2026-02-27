@@ -46,7 +46,7 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
         LogInfo("✓ Connected to server");
 
         // 创建 HttpClient
-        HttpClient client(std::move(socket), HttpClientBuilder().build());
+        HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         // 获取Session
         auto session = client.getSession();
@@ -151,7 +151,7 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
         LogInfo("✓ Connected to server");
 
         // 创建 HttpClient
-        HttpClient client(std::move(socket), HttpClientBuilder().build());
+        HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         // 获取Session
         auto session = client.getSession();
@@ -220,7 +220,7 @@ Coroutine testReceiveTimeout(IOScheduler* scheduler)
         LogInfo("✓ Connected to server");
 
         // 创建 HttpClient
-        HttpClient client(std::move(socket), HttpClientBuilder().build());
+        HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         // 请求一个会发送部分数据然后停止的端点
         LogInfo("Sending GET request to /partial endpoint with 2s timeout...");
@@ -283,7 +283,7 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
         LogInfo("✓ Connected to server");
 
         // 创建 HttpClient
-        HttpClient client(std::move(socket), HttpClientBuilder().build());
+        HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         auto session = client.getSession();
 
@@ -364,7 +364,7 @@ Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
         LogInfo("✓ Connected to server");
 
         // 创建 HttpClient
-        HttpClient client(std::move(socket), HttpClientBuilder().build());
+        HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         // 发送正常请求，设置足够长的超时
         LogInfo("Sending GET request with 5s timeout...");

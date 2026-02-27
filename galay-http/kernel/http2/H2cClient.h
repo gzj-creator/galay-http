@@ -550,13 +550,16 @@ struct H2cClientConfig
     uint32_t max_header_list_size = 8192;
 };
 
+class H2cClient;
+
 class H2cClientBuilder {
 public:
     H2cClientBuilder& maxConcurrentStreams(uint32_t v)  { m_config.max_concurrent_streams = v; return *this; }
     H2cClientBuilder& initialWindowSize(uint32_t v)    { m_config.initial_window_size = v; return *this; }
     H2cClientBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
     H2cClientBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
-    H2cClientConfig build() const                      { return m_config; }
+    H2cClient build() const;
+    H2cClientConfig buildConfig() const               { return m_config; }
 private:
     H2cClientConfig m_config;
 };
@@ -665,6 +668,8 @@ private:
     std::unique_ptr<Http2ConnImpl<TcpSocket>> m_conn;
     bool m_upgraded;
 };
+
+inline H2cClient H2cClientBuilder::build() const { return H2cClient(m_config); }
 
 // ============== upgrade() 实现 ==============
 

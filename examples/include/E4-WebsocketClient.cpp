@@ -21,7 +21,7 @@ Coroutine runWebSocketClient(const std::string& url) {
     LogInfo("Connecting to {}", url);
 
     // 1. 创建 WsClient
-    WsClient client(WsClientBuilder().build());
+    auto client = WsClientBuilder().build();
 
     // 2. 连接到服务器
     auto connect_result = co_await client.connect(url);

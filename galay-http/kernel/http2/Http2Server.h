@@ -28,6 +28,12 @@
 #include <expected>
 #include <string>
 #include <array>
+#include <optional>
+
+#if defined(__linux__)
+#include <pthread.h>
+#include <sched.h>
+#endif
 
 namespace galay::http2
 {
@@ -45,6 +51,8 @@ struct H2cServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
+    std::optional<uint32_t> io_affinity_cpu;
+    std::optional<uint32_t> compute_affinity_cpu;
 
     // HTTP/2 设置
     uint32_t max_concurrent_streams = 100;
@@ -53,6 +61,8 @@ struct H2cServerConfig
     uint32_t max_header_list_size = 8192;
     bool enable_push = false;  // 默认禁用 Server Push（curl 不支持）
 };
+
+class H2cServer;
 
 class H2cServerBuilder {
 public:
@@ -66,7 +76,10 @@ public:
     H2cServerBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
     H2cServerBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
     H2cServerBuilder& enablePush(bool v)               { m_config.enable_push = v; return *this; }
-    H2cServerConfig build() const                      { return m_config; }
+    H2cServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
+    H2cServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    H2cServer build() const;
+    H2cServerConfig buildConfig() const                { return m_config; }
 private:
     H2cServerConfig m_config;
 };
@@ -190,6 +203,7 @@ private:
         }
 
         m_runtime.start();
+        applyRuntimeAffinity();
 
         m_running.store(true);
         HTTP_LOG_INFO("[server] [listen] [h2c] [{}:{}]", m_config.host, m_config.port);
@@ -470,6 +484,40 @@ private:
         co_return;
     }
 
+    void applyRuntimeAffinity() {
+        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
+            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu, "io", i);
+        }
+        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
+            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu, "compute", i);
+        }
+    }
+
+    template<typename SchedulerType>
+    void applySchedulerAffinity(SchedulerType* scheduler,
+                                const std::optional<uint32_t>& cpu_id,
+                                const char* scheduler_kind,
+                                size_t index) {
+        if (scheduler == nullptr || !cpu_id.has_value()) {
+            return;
+        }
+
+        if (!scheduler->setAffinity(cpu_id)) {
+            HTTP_LOG_WARN("[affinity] [invalid] [{}:{}] [cpu={}]", scheduler_kind, index, *cpu_id);
+            return;
+        }
+
+#if defined(__linux__)
+        scheduler->spawn([cpu_id]() -> Coroutine {
+            cpu_set_t cpu_set;
+            CPU_ZERO(&cpu_set);
+            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
+            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
+            co_return;
+        }());
+#endif
+    }
+
 
 private:
     Runtime m_runtime;
@@ -478,6 +526,8 @@ private:
     Http1FallbackHandler m_http1_fallback;
     std::atomic<bool> m_running;
 };
+
+inline H2cServer H2cServerBuilder::build() const { return H2cServer(m_config); }
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 /**
@@ -490,6 +540,8 @@ struct H2ServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
+    std::optional<uint32_t> io_affinity_cpu;
+    std::optional<uint32_t> compute_affinity_cpu;
 
     // SSL 配置
     std::string cert_path;
@@ -506,6 +558,8 @@ struct H2ServerConfig
     bool enable_push = false;
 };
 
+class H2Server;
+
 class H2ServerBuilder {
 public:
     H2ServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
@@ -513,6 +567,8 @@ public:
     H2ServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
     H2ServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
     H2ServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
+    H2ServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
+    H2ServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
     H2ServerBuilder& certPath(std::string v)          { m_config.cert_path = std::move(v); return *this; }
     H2ServerBuilder& keyPath(std::string v)           { m_config.key_path = std::move(v); return *this; }
     H2ServerBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
@@ -523,7 +579,8 @@ public:
     H2ServerBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
     H2ServerBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
     H2ServerBuilder& enablePush(bool v)               { m_config.enable_push = v; return *this; }
-    H2ServerConfig build() const                      { return m_config; }
+    H2Server build() const;
+    H2ServerConfig buildConfig() const                { return m_config; }
 private:
     H2ServerConfig m_config;
 };
@@ -613,6 +670,7 @@ private:
         }
 
         m_runtime.start();
+        applyRuntimeAffinity();
         m_running.store(true);
         HTTP_LOG_INFO("[server] [listen] [h2] [{}:{}]", m_config.host, m_config.port);
 
@@ -796,6 +854,40 @@ private:
         co_return;
     }
 
+    void applyRuntimeAffinity() {
+        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
+            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu, "io", i);
+        }
+        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
+            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu, "compute", i);
+        }
+    }
+
+    template<typename SchedulerType>
+    void applySchedulerAffinity(SchedulerType* scheduler,
+                                const std::optional<uint32_t>& cpu_id,
+                                const char* scheduler_kind,
+                                size_t index) {
+        if (scheduler == nullptr || !cpu_id.has_value()) {
+            return;
+        }
+
+        if (!scheduler->setAffinity(cpu_id)) {
+            HTTP_LOG_WARN("[affinity] [invalid] [{}:{}] [cpu={}]", scheduler_kind, index, *cpu_id);
+            return;
+        }
+
+#if defined(__linux__)
+        scheduler->spawn([cpu_id]() -> Coroutine {
+            cpu_set_t cpu_set;
+            CPU_ZERO(&cpu_set);
+            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
+            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
+            co_return;
+        }());
+#endif
+    }
+
 private:
     Runtime m_runtime;
     H2ServerConfig m_config;
@@ -803,6 +895,8 @@ private:
     std::atomic<bool> m_running;
     galay::ssl::SslContext m_ssl_ctx;
 };
+
+inline H2Server H2ServerBuilder::build() const { return H2Server(m_config); }
 #endif
 
 } // namespace galay::http2

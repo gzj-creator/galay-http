@@ -19,7 +19,7 @@ using namespace galay::http2;
 using namespace galay::kernel;
 
 Coroutine runClient(const std::string& host, uint16_t port) {
-    H2cClient client(H2cClientBuilder().build());
+    auto client = H2cClientBuilder().build();
 
     std::cout << "Connecting to " << host << ":" << port << "...\n";
 

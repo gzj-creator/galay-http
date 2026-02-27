@@ -25,7 +25,7 @@ std::atomic<int> fail_count{0};
  * @brief 客户端测试协程
  */
 Coroutine testClient(const std::string& host, uint16_t port, int num_messages) {
-    WsClient client(WsClientBuilder().build());
+    auto client = WsClientBuilder().build();
 
     // 构建 WebSocket URL
     std::string url = "ws://" + host + ":" + std::to_string(port) + "/ws";

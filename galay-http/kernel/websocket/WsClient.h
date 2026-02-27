@@ -93,6 +93,12 @@ inline std::string generateWebSocketKey() {
 /**
  * @brief WebSocket 客户端配置
  */
+template<typename SocketType>
+class WsClientImpl;
+
+template<typename SocketType>
+class WsUpgraderImpl;
+
 struct WsClientConfig
 {
     HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
@@ -101,17 +107,11 @@ struct WsClientConfig
 class WsClientBuilder {
 public:
     WsClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
-    WsClientConfig build() const                             { return m_config; }
+    WsClientImpl<TcpSocket> build() const;
+    WsClientConfig buildConfig() const                       { return m_config; }
 private:
     WsClientConfig m_config;
 };
-
-// 前向声明
-template<typename SocketType>
-class WsClientImpl;
-
-template<typename SocketType>
-class WsUpgraderImpl;
 
 /**
  * @brief WebSocket 升级等待体
@@ -635,6 +635,7 @@ protected:
 // 类型别名 - WebSocket over TCP
 using WsUpgrader = WsUpgraderImpl<TcpSocket>;
 using WsClient = WsClientImpl<TcpSocket>;
+inline WsClient WsClientBuilder::build() const { return WsClient(m_config); }
 
 } // namespace galay::websocket
 
@@ -1033,13 +1034,16 @@ struct WssClientConfig
     HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
 };
 
+class WssClient;
+
 class WssClientBuilder {
 public:
     WssClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
     WssClientBuilder& verifyPeer(bool v)                 { m_config.verify_peer = v; return *this; }
     WssClientBuilder& verifyDepth(int v)                 { m_config.verify_depth = v; return *this; }
     WssClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
-    WssClientConfig build() const                        { return m_config; }
+    WssClient build() const;
+    WssClientConfig buildConfig() const                  { return m_config; }
 private:
     WssClientConfig m_config;
 };
@@ -1145,6 +1149,7 @@ private:
 
 // 类型别名 - WebSocket over SSL
 using WssUpgrader = WsUpgraderImpl<galay::ssl::SslSocket>;
+inline WssClient WssClientBuilder::build() const { return WssClient(m_config); }
 
 } // namespace galay::websocket
 #endif

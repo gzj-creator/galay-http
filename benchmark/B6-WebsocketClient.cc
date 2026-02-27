@@ -89,7 +89,7 @@ Coroutine benchmarkWebSocketClient(
     ClientGuard guard(g_active_clients);
     g_total_connections.fetch_add(1);
 
-    WsClient client(WsClientBuilder().build());
+    auto client = WsClientBuilder().build();
 
     auto connect_result = co_await client.connect("ws://127.0.0.1:8080/ws");
     if (!connect_result) {
