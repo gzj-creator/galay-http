@@ -101,7 +101,7 @@ int main(int argc, char* argv[]) {
     std::cout << "HTTPS Client Example\n";
     std::cout << "========================================\n";
 
-    Runtime rt(1, 0);
+    Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
 
     auto* scheduler = rt.getNextIOScheduler();

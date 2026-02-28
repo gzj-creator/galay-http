@@ -265,7 +265,7 @@ int main(int argc, char* argv[]) {
     signal(SIGTERM, signalHandler);
 
     try {
-        Runtime runtime(4, 0);
+        Runtime runtime = RuntimeBuilder().ioSchedulerCount(4).computeSchedulerCount(0).build();
         runtime.start();
 
         // 生成测试消息

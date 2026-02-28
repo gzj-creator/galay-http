@@ -154,7 +154,7 @@ int main() {
     std::cout << "==========================================" << std::endl;
     std::cout << "请确保 T21-HttpsServer 已在 8443 端口运行!" << std::endl;
 
-    Runtime rt(4, 0);
+    Runtime rt = RuntimeBuilder().ioSchedulerCount(4).computeSchedulerCount(0).build();
     rt.start();
 
     // 测试1: 单连接 100 请求
