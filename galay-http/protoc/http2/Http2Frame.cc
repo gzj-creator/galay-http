@@ -654,4 +654,16 @@ std::expected<Http2Frame::uptr, Http2ErrorCode> Http2FrameParser::parseFrame(con
     return frame;
 }
 
+std::string Http2FrameCodec::encode(const Http2Frame& frame)
+{
+    return frame.serialize();
+}
+
+std::expected<Http2Frame::uptr, Http2ErrorCode> Http2FrameCodec::decode(std::string_view bytes)
+{
+    return Http2FrameParser::parseFrame(
+        reinterpret_cast<const uint8_t*>(bytes.data()),
+        bytes.size());
+}
+
 } // namespace galay::http2

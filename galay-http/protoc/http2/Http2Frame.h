@@ -497,6 +497,17 @@ public:
     static Http2Frame::uptr createFrame(Http2FrameType type);
 };
 
+/**
+ * @brief 帧编解码统一入口
+ * @details 对上层暴露稳定接口，内部复用 Http2FrameParser 与各帧 serialize。
+ */
+class Http2FrameCodec
+{
+public:
+    static std::string encode(const Http2Frame& frame);
+    static std::expected<Http2Frame::uptr, Http2ErrorCode> decode(std::string_view bytes);
+};
+
 } // namespace galay::http2
 
 #endif // GALAY_HTTP2_FRAME_H
