@@ -396,7 +396,7 @@ int main() {
     LogInfo("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
-    Runtime rt(1, 0);
+    Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
     LogInfo("Scheduler started");
 
