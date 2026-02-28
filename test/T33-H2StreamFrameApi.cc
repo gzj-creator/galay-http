@@ -1,0 +1,44 @@
+/**
+ * @file T33-H2StreamFrameApi.cc
+ * @brief Stream frame-first API contract
+ */
+
+#include "galay-http/kernel/http2/Http2Stream.h"
+#include <type_traits>
+#include <iostream>
+
+using namespace galay::http2;
+
+template<typename T>
+concept HasReadRequest = requires(T* s) {
+    s->readRequest();
+};
+
+template<typename T>
+concept HasReadResponse = requires(T* s) {
+    s->readResponse();
+};
+
+int main() {
+    static_assert(requires(Http2Stream* s, const std::vector<Http2HeaderField>& h) {
+        s->replyHeader(h, false);
+    }, "Http2Stream must expose replyHeader(headers, end_stream)");
+
+    static_assert(requires(Http2Stream* s) {
+        s->replyData(std::string("body"), true);
+    }, "Http2Stream must expose replyData(data, end_stream)");
+
+    static_assert(requires(Http2Stream* s) {
+        s->replyRst(Http2ErrorCode::Cancel);
+    }, "Http2Stream must expose replyRst(error)");
+
+    static_assert(requires(Http2Stream* s) {
+        s->getFrame();
+    }, "Http2Stream must expose getFrame()");
+
+    static_assert(!HasReadRequest<Http2Stream>, "Http2Stream must not expose readRequest()");
+    static_assert(!HasReadResponse<Http2Stream>, "Http2Stream must not expose readResponse()");
+
+    std::cout << "T33-H2StreamFrameApi PASS\n";
+    return 0;
+}

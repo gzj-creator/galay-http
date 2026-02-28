@@ -4,13 +4,14 @@
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/protoc/http2/Http2Hpack.h"
+#include "galay-http/protoc/http2/Http2Error.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/concurrency/UnsafeChannel.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include <string>
 #include <vector>
 #include <charconv>
 #include <memory>
+#include <optional>
 
 namespace galay::http2
 {
@@ -87,6 +88,105 @@ class Http2Stream
 {
 public:
     using ptr = std::shared_ptr<Http2Stream>;
+
+    class ReadRequestAwaitable
+        : public galay::kernel::TimeoutSupport<ReadRequestAwaitable>
+    {
+    public:
+        explicit ReadRequestAwaitable(Http2Stream* stream)
+            : m_stream(stream)
+            , m_wait_awaitable(&stream->m_request_waiter)
+        {
+        }
+
+        bool await_ready() const noexcept {
+            return m_stream->isRequestCompleted() || m_stream->isFrameQueueClosed();
+        }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (await_ready()) {
+                return false;
+            }
+            return m_wait_awaitable.await_suspend(handle);
+        }
+
+        ReadRequestAwaitable& wait() & { return *this; }
+        ReadRequestAwaitable&& wait() && { return std::move(*this); }
+
+        void await_resume() noexcept {
+            (void)m_wait_awaitable.await_resume();
+        }
+
+    private:
+        Http2Stream* m_stream;
+        galay::kernel::AsyncWaiterAwaitable<void> m_wait_awaitable;
+    };
+
+    class ReadResponseAwaitable
+        : public galay::kernel::TimeoutSupport<ReadResponseAwaitable>
+    {
+    public:
+        explicit ReadResponseAwaitable(Http2Stream* stream)
+            : m_stream(stream)
+            , m_wait_awaitable(&stream->m_response_waiter)
+        {
+        }
+
+        bool await_ready() const noexcept {
+            return m_stream->isResponseCompleted() || m_stream->isFrameQueueClosed();
+        }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (await_ready()) {
+                return false;
+            }
+            return m_wait_awaitable.await_suspend(handle);
+        }
+
+        ReadResponseAwaitable& wait() & { return *this; }
+        ReadResponseAwaitable&& wait() && { return std::move(*this); }
+
+        void await_resume() noexcept {
+            (void)m_wait_awaitable.await_resume();
+        }
+
+    private:
+        Http2Stream* m_stream;
+        galay::kernel::AsyncWaiterAwaitable<void> m_wait_awaitable;
+    };
+
+    class ReplyAndWaitAwaitable
+        : public galay::kernel::TimeoutSupport<ReplyAndWaitAwaitable>
+    {
+    public:
+        explicit ReplyAndWaitAwaitable(Http2OutgoingFrame::WaiterPtr waiter)
+            : m_waiter(std::move(waiter))
+            , m_wait_awaitable(m_waiter.get())
+        {
+        }
+
+        bool await_ready() const noexcept {
+            return m_wait_awaitable.await_ready();
+        }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            return m_wait_awaitable.await_suspend(handle);
+        }
+
+        ReplyAndWaitAwaitable& wait() & { return *this; }
+        ReplyAndWaitAwaitable&& wait() && { return std::move(*this); }
+
+        std::expected<void, galay::kernel::IOError> await_resume() {
+            return m_wait_awaitable.await_resume();
+        }
+
+    private:
+        Http2OutgoingFrame::WaiterPtr m_waiter;
+        galay::kernel::AsyncWaiterAwaitable<void> m_wait_awaitable;
+    };
     
     // 流 ID
     uint32_t streamId() const { return m_stream_id; }
@@ -235,18 +335,24 @@ public:
     void closeFrameQueue() {
         if (m_frame_queue_closed) return;
         m_frame_queue_closed = true;
+        markRequestCompleted();
+        markResponseCompleted();
         m_frame_channel.send(Http2Frame::uptr{});
     }
 
     bool isFrameQueueClosed() const { return m_frame_queue_closed; }
 
+    void setGoAwayError(Http2GoAwayError error) { m_goaway_error = std::move(error); }
+    bool hasGoAwayError() const { return m_goaway_error.has_value(); }
+    const std::optional<Http2GoAwayError>& goAwayError() const { return m_goaway_error; }
+
     /**
      * @brief 获取下一帧的 Awaitable
      * @return co_await 后得到 expected<uptr, IOError>，空指针表示流已关闭
      */
-    auto getFrame() { return m_frame_channel.recv(); }
-
-    // ==================== 发送接口 ====================
+    auto getFrame() {
+        return m_frame_channel.recv();
+    }
 
     /**
      * @brief 解码头部块
@@ -257,6 +363,64 @@ public:
         if (!result) return {};
         return std::move(result.value());
     }
+
+    void consumeDecodedHeadersAsRequest() {
+        for (const auto& f : decodedHeaders()) {
+            if (f.name == ":method") m_request.method = f.value;
+            else if (f.name == ":scheme") m_request.scheme = f.value;
+            else if (f.name == ":authority") m_request.authority = f.value;
+            else if (f.name == ":path") m_request.path = f.value;
+            else m_request.headers.push_back({f.name, f.value});
+        }
+        clearDecodedHeaders();
+    }
+
+    void consumeDecodedHeadersAsResponse() {
+        for (const auto& f : decodedHeaders()) {
+            if (f.name == ":status") {
+                int status = 0;
+                std::from_chars(f.value.data(), f.value.data() + f.value.size(), status);
+                m_response.status = status;
+            } else {
+                m_response.headers.push_back({f.name, f.value});
+            }
+        }
+        clearDecodedHeaders();
+    }
+
+    void appendRequestData(const std::string& data) {
+        m_request.body.append(data);
+    }
+
+    void appendResponseData(const std::string& data) {
+        m_response.body.append(data);
+    }
+
+    void markRequestCompleted() {
+        if (m_request_completed) {
+            return;
+        }
+        m_request_completed = true;
+        m_request_waiter.notify();
+    }
+
+    void markResponseCompleted() {
+        if (m_response_completed) {
+            return;
+        }
+        m_response_completed = true;
+        m_response_waiter.notify();
+    }
+
+    bool isRequestCompleted() const {
+        return m_request_completed;
+    }
+
+    bool isResponseCompleted() const {
+        return m_response_completed;
+    }
+
+    // ==================== 发送接口 ====================
 
     /**
      * @brief 发送 HEADERS 帧
@@ -277,27 +441,49 @@ public:
      * @brief 发送 RST_STREAM 帧
      */
     void sendRstStream(Http2ErrorCode error) {
-        if (!m_send_channel) return;
+        sendRstStreamInternal(error, nullptr);
+    }
 
-        auto frame = std::make_unique<Http2RstStreamFrame>();
-        frame->header().stream_id = m_stream_id;
-        frame->setErrorCode(error);
+    /**
+     * @brief 帧优先 API：发送 HEADERS 并等待入队完成
+     */
+    ReplyAndWaitAwaitable replyHeader(const std::vector<Http2HeaderField>& headers,
+                                      bool end_stream = false,
+                                      bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendHeadersInternal(headers, end_stream, end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
 
-        onRstStreamSent();
-        m_send_channel->send(Http2OutgoingFrame{std::move(frame)});
+    /**
+     * @brief 帧优先 API：发送 DATA 并等待入队完成
+     */
+    ReplyAndWaitAwaitable replyData(const std::string& data, bool end_stream = false) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendDataInternal(data, end_stream, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    /**
+     * @brief 帧优先 API：发送 RST_STREAM 并等待入队完成
+     */
+    ReplyAndWaitAwaitable replyRst(Http2ErrorCode error) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendRstStreamInternal(error, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
     /**
      * @brief 发送 WINDOW_UPDATE 帧
      */
     void sendWindowUpdate(uint32_t increment) {
-        if (!m_send_channel) return;
+        if (!m_send_queue) return;
 
         auto frame = std::make_unique<Http2WindowUpdateFrame>();
         frame->header().stream_id = m_stream_id;
         frame->setWindowSizeIncrement(increment);
 
-        m_send_channel->send(Http2OutgoingFrame{std::move(frame)});
+        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame)});
     }
 
     /**
@@ -320,109 +506,14 @@ public:
     /**
      * @brief 发送响应并等待发送完成
      */
-    galay::kernel::Coroutine replyAndWait(const std::vector<Http2HeaderField>& headers,
-                                          const std::string& body,
-                                          bool end_headers = true) {
+    ReplyAndWaitAwaitable replyAndWait(const std::vector<Http2HeaderField>& headers,
+                                       const std::string& body,
+                                       bool end_headers = true) {
         auto waiter = reply(headers, body, end_headers);
-        co_await waiter->wait();
-        co_return;
+        return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
-    /**
-     * @brief 读取完整请求（HEADERS + DATA），填充 stream->request()
-     * @return 协程完成时请求数据已填充到 request() 中
-     */
-    galay::kernel::Coroutine readRequest() {
-        auto& req = m_request;
-        while (true) {
-            auto frame_result = co_await getFrame();
-            if (!frame_result) co_return;
-            auto frame = std::move(frame_result.value());
-            if (!frame) co_return;
-
-            if (frame->isHeaders()) {
-                auto* hdrs = frame->asHeaders();
-                if (hdrs->isEndHeaders()) {
-                    // 使用 StreamManager 在 readerLoop 中已解码的字段
-                    for (const auto& f : decodedHeaders()) {
-                        if (f.name == ":method") req.method = f.value;
-                        else if (f.name == ":scheme") req.scheme = f.value;
-                        else if (f.name == ":authority") req.authority = f.value;
-                        else if (f.name == ":path") req.path = f.value;
-                        else req.headers.push_back({f.name, f.value});
-                    }
-                    clearDecodedHeaders();
-                    if (hdrs->isEndStream()) co_return;
-                }
-            } else if (frame->isData()) {
-                req.body.append(frame->asData()->data());
-                if (frame->isEndStream()) co_return;
-            } else if (frame->isContinuation()) {
-                auto* cont = frame->asContinuation();
-                if (cont->isEndHeaders()) {
-                    for (const auto& f : decodedHeaders()) {
-                        if (f.name == ":method") req.method = f.value;
-                        else if (f.name == ":scheme") req.scheme = f.value;
-                        else if (f.name == ":authority") req.authority = f.value;
-                        else if (f.name == ":path") req.path = f.value;
-                        else req.headers.push_back({f.name, f.value});
-                    }
-                    clearDecodedHeaders();
-                }
-            } else if (frame->isRstStream()) {
-                co_return;
-            }
-        }
-    }
-
-    /**
-     * @brief 读取完整响应（HEADERS + DATA），填充 stream->response()
-     * @return 协程完成时响应数据已填充到 response() 中
-     */
-    galay::kernel::Coroutine readResponse() {
-        auto& resp = m_response;
-        while (true) {
-            auto frame_result = co_await getFrame();
-            if (!frame_result) co_return;
-            auto frame = std::move(frame_result.value());
-            if (!frame) co_return;
-
-            if (frame->isHeaders()) {
-                auto* hdrs = frame->asHeaders();
-                if (hdrs->isEndHeaders()) {
-                    for (const auto& f : decodedHeaders()) {
-                        if (f.name == ":status") {
-                            int status = 0;
-                            std::from_chars(f.value.data(), f.value.data() + f.value.size(), status);
-                            resp.status = status;
-                        }
-                        else resp.headers.push_back({f.name, f.value});
-                    }
-                    clearDecodedHeaders();
-                    if (hdrs->isEndStream()) co_return;
-                }
-            } else if (frame->isData()) {
-                resp.body.append(frame->asData()->data());
-                if (frame->isEndStream()) co_return;
-            } else if (frame->isContinuation()) {
-                auto* cont = frame->asContinuation();
-                if (cont->isEndHeaders()) {
-                    for (const auto& f : decodedHeaders()) {
-                        if (f.name == ":status") {
-                            int status = 0;
-                            std::from_chars(f.value.data(), f.value.data() + f.value.size(), status);
-                            resp.status = status;
-                        }
-                        else resp.headers.push_back({f.name, f.value});
-                    }
-                    clearDecodedHeaders();
-                }
-            } else if (frame->isRstStream()) {
-                co_return;
-            }
-        }
-    }
-
+public:
     // ==================== 优先级 ====================
 
     uint8_t weight() const { return m_weight; }
@@ -451,10 +542,10 @@ private:
         return ptr(new Http2Stream(stream_id));
     }
 
-    void attachIO(galay::kernel::UnsafeChannel<Http2OutgoingFrame>* send_channel,
+    void attachIO(std::vector<Http2OutgoingFrame>* send_queue,
                   HpackEncoder* encoder,
                   HpackDecoder* decoder) {
-        m_send_channel = send_channel;
+        m_send_queue = send_queue;
         m_encoder = encoder;
         m_decoder = decoder;
         m_io_attached = true;
@@ -475,14 +566,19 @@ private:
     // 帧通道
     galay::kernel::UnsafeChannel<Http2Frame::uptr> m_frame_channel;
     bool m_frame_queue_closed = false;
+    std::optional<Http2GoAwayError> m_goaway_error;
+    galay::kernel::AsyncWaiter<void> m_request_waiter;
+    galay::kernel::AsyncWaiter<void> m_response_waiter;
+    bool m_request_completed = false;
+    bool m_response_completed = false;
 
     // 优先级
     uint8_t m_weight = 16;
     uint32_t m_stream_dependency = 0;
     bool m_exclusive = false;
 
-    // 发送通道和编解码器（由 StreamManager 绑定）
-    galay::kernel::UnsafeChannel<Http2OutgoingFrame>* m_send_channel = nullptr;
+    // 发送队列和编解码器（由 StreamManager 绑定）
+    std::vector<Http2OutgoingFrame>* m_send_queue = nullptr;
     HpackEncoder* m_encoder = nullptr;
     HpackDecoder* m_decoder = nullptr;
     bool m_io_attached = false;
@@ -496,7 +592,7 @@ private:
                              bool end_stream,
                              bool end_headers,
                              const Http2OutgoingFrame::WaiterPtr& waiter) {
-        if (!m_send_channel || !m_encoder) return;
+        if (!m_send_queue || !m_encoder) return;
 
         std::string header_block = m_encoder->encode(headers);
 
@@ -507,13 +603,13 @@ private:
         frame->setEndHeaders(end_headers);
 
         onHeadersSent(end_stream);
-        m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
     }
 
     void sendDataInternal(const std::string& data,
                           bool end_stream,
                           const Http2OutgoingFrame::WaiterPtr& waiter) {
-        if (!m_send_channel) return;
+        if (!m_send_queue) return;
         if (m_send_window < static_cast<int32_t>(data.size())) return;
 
         auto frame = std::make_unique<Http2DataFrame>();
@@ -525,7 +621,19 @@ private:
         if (end_stream) {
             onDataSent(true);
         }
-        m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+    }
+
+    void sendRstStreamInternal(Http2ErrorCode error,
+                               const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue) return;
+
+        auto frame = std::make_unique<Http2RstStreamFrame>();
+        frame->header().stream_id = m_stream_id;
+        frame->setErrorCode(error);
+
+        onRstStreamSent();
+        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
     }
 };
 
