@@ -89,7 +89,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Requests: " << requests << "\n";
     std::cout << "========================================\n\n";
 
-    Runtime runtime(1, 0);
+    Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     runtime.start();
 
     auto* scheduler = runtime.getNextIOScheduler();

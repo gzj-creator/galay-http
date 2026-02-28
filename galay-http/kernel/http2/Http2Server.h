@@ -51,8 +51,7 @@ struct H2cServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
-    std::optional<uint32_t> io_affinity_cpu;
-    std::optional<uint32_t> compute_affinity_cpu;
+    RuntimeAffinityConfig affinity;
 
     // HTTP/2 设置
     uint32_t max_concurrent_streams = 100;
@@ -76,8 +75,22 @@ public:
     H2cServerBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
     H2cServerBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
     H2cServerBuilder& enablePush(bool v)               { m_config.enable_push = v; return *this; }
-    H2cServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
-    H2cServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    H2cServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
+        m_config.affinity.seq_io_count = io_count;
+        m_config.affinity.seq_compute_count = compute_count;
+        return *this;
+    }
+    bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
+        if (io_cpus.size() != m_config.io_scheduler_count ||
+            compute_cpus.size() != m_config.compute_scheduler_count) {
+            return false;
+        }
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Custom;
+        m_config.affinity.custom_io_cpus = std::move(io_cpus);
+        m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
+        return true;
+    }
     H2cServer build() const;
     H2cServerConfig buildConfig() const                { return m_config; }
 private:
@@ -147,7 +160,10 @@ class H2cServer
 {
 public:
     explicit H2cServer(const H2cServerConfig& config = H2cServerConfig())
-        : m_runtime(config.io_scheduler_count, config.compute_scheduler_count)
+        : m_runtime(RuntimeBuilder().ioSchedulerCount(config.io_scheduler_count)
+                                   .computeSchedulerCount(config.compute_scheduler_count)
+                                   .applyAffinity(config.affinity)
+                                   .build())
         , m_config(config)
         , m_handler(nullptr)
         , m_running(false)
@@ -203,7 +219,6 @@ private:
         }
 
         m_runtime.start();
-        applyRuntimeAffinity();
 
         m_running.store(true);
         HTTP_LOG_INFO("[server] [listen] [h2c] [{}:{}]", m_config.host, m_config.port);
@@ -484,40 +499,6 @@ private:
         co_return;
     }
 
-    void applyRuntimeAffinity() {
-        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu, "io", i);
-        }
-        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu, "compute", i);
-        }
-    }
-
-    template<typename SchedulerType>
-    void applySchedulerAffinity(SchedulerType* scheduler,
-                                const std::optional<uint32_t>& cpu_id,
-                                const char* scheduler_kind,
-                                size_t index) {
-        if (scheduler == nullptr || !cpu_id.has_value()) {
-            return;
-        }
-
-        if (!scheduler->setAffinity(cpu_id)) {
-            HTTP_LOG_WARN("[affinity] [invalid] [{}:{}] [cpu={}]", scheduler_kind, index, *cpu_id);
-            return;
-        }
-
-#if defined(__linux__)
-        scheduler->spawn([cpu_id]() -> Coroutine {
-            cpu_set_t cpu_set;
-            CPU_ZERO(&cpu_set);
-            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
-            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
-            co_return;
-        }());
-#endif
-    }
-
 
 private:
     Runtime m_runtime;
@@ -540,8 +521,7 @@ struct H2ServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
-    std::optional<uint32_t> io_affinity_cpu;
-    std::optional<uint32_t> compute_affinity_cpu;
+    RuntimeAffinityConfig affinity;
 
     // SSL 配置
     std::string cert_path;
@@ -567,8 +547,22 @@ public:
     H2ServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
     H2ServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
     H2ServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
-    H2ServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
-    H2ServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    H2ServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
+        m_config.affinity.seq_io_count = io_count;
+        m_config.affinity.seq_compute_count = compute_count;
+        return *this;
+    }
+    bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
+        if (io_cpus.size() != m_config.io_scheduler_count ||
+            compute_cpus.size() != m_config.compute_scheduler_count) {
+            return false;
+        }
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Custom;
+        m_config.affinity.custom_io_cpus = std::move(io_cpus);
+        m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
+        return true;
+    }
     H2ServerBuilder& certPath(std::string v)          { m_config.cert_path = std::move(v); return *this; }
     H2ServerBuilder& keyPath(std::string v)           { m_config.key_path = std::move(v); return *this; }
     H2ServerBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
@@ -592,7 +586,10 @@ class H2Server
 {
 public:
     explicit H2Server(const H2ServerConfig& config = H2ServerConfig())
-        : m_runtime(config.io_scheduler_count, config.compute_scheduler_count)
+        : m_runtime(RuntimeBuilder().ioSchedulerCount(config.io_scheduler_count)
+                                   .computeSchedulerCount(config.compute_scheduler_count)
+                                   .applyAffinity(config.affinity)
+                                   .build())
         , m_config(config)
         , m_handler(nullptr)
         , m_running(false)
@@ -670,7 +667,6 @@ private:
         }
 
         m_runtime.start();
-        applyRuntimeAffinity();
         m_running.store(true);
         HTTP_LOG_INFO("[server] [listen] [h2] [{}:{}]", m_config.host, m_config.port);
 
@@ -852,40 +848,6 @@ private:
         HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
         co_await conn.close();
         co_return;
-    }
-
-    void applyRuntimeAffinity() {
-        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu, "io", i);
-        }
-        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu, "compute", i);
-        }
-    }
-
-    template<typename SchedulerType>
-    void applySchedulerAffinity(SchedulerType* scheduler,
-                                const std::optional<uint32_t>& cpu_id,
-                                const char* scheduler_kind,
-                                size_t index) {
-        if (scheduler == nullptr || !cpu_id.has_value()) {
-            return;
-        }
-
-        if (!scheduler->setAffinity(cpu_id)) {
-            HTTP_LOG_WARN("[affinity] [invalid] [{}:{}] [cpu={}]", scheduler_kind, index, *cpu_id);
-            return;
-        }
-
-#if defined(__linux__)
-        scheduler->spawn([cpu_id]() -> Coroutine {
-            cpu_set_t cpu_set;
-            CPU_ZERO(&cpu_set);
-            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
-            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
-            co_return;
-        }());
-#endif
     }
 
 private:

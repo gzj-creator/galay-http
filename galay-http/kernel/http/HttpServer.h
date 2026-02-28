@@ -51,8 +51,7 @@ struct HttpServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
-    std::optional<uint32_t> io_affinity_cpu;
-    std::optional<uint32_t> compute_affinity_cpu;
+    RuntimeAffinityConfig affinity;
 };
 
 class HttpServerBuilder {
@@ -62,8 +61,22 @@ public:
     HttpServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
     HttpServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
     HttpServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
-    HttpServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
-    HttpServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    HttpServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
+        m_config.affinity.seq_io_count = io_count;
+        m_config.affinity.seq_compute_count = compute_count;
+        return *this;
+    }
+    bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
+        if (io_cpus.size() != m_config.io_scheduler_count ||
+            compute_cpus.size() != m_config.compute_scheduler_count) {
+            return false;
+        }
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Custom;
+        m_config.affinity.custom_io_cpus = std::move(io_cpus);
+        m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
+        return true;
+    }
     HttpServerImpl<TcpSocket> build() const;
     HttpServerConfig buildConfig() const                { return m_config; }
 private:
@@ -80,7 +93,10 @@ public:
     using ConnHandler = HttpConnHandlerImpl<SocketType>;
 
     explicit HttpServerImpl(const HttpServerConfig& config = HttpServerConfig())
-        : m_runtime(config.io_scheduler_count, config.compute_scheduler_count)
+        : m_runtime(RuntimeBuilder().ioSchedulerCount(config.io_scheduler_count)
+                                   .computeSchedulerCount(config.compute_scheduler_count)
+                                   .applyAffinity(config.affinity)
+                                   .build())
         , m_config(config)
         , m_handler(nullptr)
         , m_listener(nullptr)
@@ -230,7 +246,6 @@ protected:
                       m_config.compute_scheduler_count == 0 ? "auto" : std::to_string(m_config.compute_scheduler_count));
 
         m_runtime.start();
-        applyRuntimeAffinity();
 
         HTTP_LOG_INFO("[runtime] [started] [io={}] [compute={}]",
                       m_runtime.getIOSchedulerCount(),
@@ -341,40 +356,6 @@ protected:
         }
     }
 
-    void applyRuntimeAffinity() {
-        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getIOScheduler(i), m_config.io_affinity_cpu, "io", i);
-        }
-        for (size_t i = 0; i < m_runtime.getComputeSchedulerCount(); ++i) {
-            applySchedulerAffinity(m_runtime.getComputeScheduler(i), m_config.compute_affinity_cpu, "compute", i);
-        }
-    }
-
-    template<typename SchedulerType>
-    void applySchedulerAffinity(SchedulerType* scheduler,
-                                const std::optional<uint32_t>& cpu_id,
-                                const char* scheduler_kind,
-                                size_t index) {
-        if (scheduler == nullptr || !cpu_id.has_value()) {
-            return;
-        }
-
-        if (!scheduler->setAffinity(cpu_id)) {
-            HTTP_LOG_WARN("[affinity] [invalid] [{}:{}] [cpu={}]", scheduler_kind, index, *cpu_id);
-            return;
-        }
-
-#if defined(__linux__)
-        scheduler->spawn([cpu_id]() -> Coroutine {
-            cpu_set_t cpu_set;
-            CPU_ZERO(&cpu_set);
-            CPU_SET(static_cast<size_t>(*cpu_id), &cpu_set);
-            (void)pthread_setaffinity_np(pthread_self(), sizeof(cpu_set), &cpu_set);
-            co_return;
-        }());
-#endif
-    }
-
 protected:
     Runtime m_runtime;
     HttpServerConfig m_config;
@@ -400,17 +381,14 @@ struct HttpsServerConfig
     int backlog = 128;
     size_t io_scheduler_count = 0;
     size_t compute_scheduler_count = 0;
-    std::optional<uint32_t> io_affinity_cpu;
-    std::optional<uint32_t> compute_affinity_cpu;
+    RuntimeAffinityConfig affinity;
     HttpReaderSetting reader_setting;
     HttpWriterSetting writer_setting;
-
-    // SSL 配置
-    std::string cert_path;          // 证书文件路径 (PEM 格式)
-    std::string key_path;           // 私钥文件路径 (PEM 格式)
-    std::string ca_path;            // CA 证书路径（可选）
-    bool verify_peer = false;       // 是否验证客户端证书
-    int verify_depth = 4;           // 证书链验证深度
+    std::string cert_path;
+    std::string key_path;
+    std::string ca_path;
+    bool verify_peer = false;
+    int verify_depth = 4;
 };
 
 class HttpsServer;
@@ -422,8 +400,22 @@ public:
     HttpsServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
     HttpsServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
     HttpsServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
-    HttpsServerBuilder& ioAffinity(std::optional<uint32_t> cpu_id)      { m_config.io_affinity_cpu = cpu_id; return *this; }
-    HttpsServerBuilder& computeAffinity(std::optional<uint32_t> cpu_id) { m_config.compute_affinity_cpu = cpu_id; return *this; }
+    HttpsServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
+        m_config.affinity.seq_io_count = io_count;
+        m_config.affinity.seq_compute_count = compute_count;
+        return *this;
+    }
+    bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
+        if (io_cpus.size() != m_config.io_scheduler_count ||
+            compute_cpus.size() != m_config.compute_scheduler_count) {
+            return false;
+        }
+        m_config.affinity.mode = RuntimeAffinityConfig::Mode::Custom;
+        m_config.affinity.custom_io_cpus = std::move(io_cpus);
+        m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
+        return true;
+    }
     HttpsServerBuilder& certPath(std::string v)          { m_config.cert_path = std::move(v); return *this; }
     HttpsServerBuilder& keyPath(std::string v)           { m_config.key_path = std::move(v); return *this; }
     HttpsServerBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
@@ -564,8 +556,7 @@ private:
         base_config.backlog = config.backlog;
         base_config.io_scheduler_count = config.io_scheduler_count;
         base_config.compute_scheduler_count = config.compute_scheduler_count;
-        base_config.io_affinity_cpu = config.io_affinity_cpu;
-        base_config.compute_affinity_cpu = config.compute_affinity_cpu;
+        base_config.affinity = config.affinity;
         return base_config;
     }
 

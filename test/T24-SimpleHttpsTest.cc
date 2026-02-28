@@ -109,7 +109,7 @@ int main() {
     std::cout << "==========================================" << std::endl;
 
     // 创建运行时
-    Runtime rt(2, 0);
+    Runtime rt = RuntimeBuilder().ioSchedulerCount(2).computeSchedulerCount(0).build();
     rt.start();
 
     // 发送 20 个顺序请求

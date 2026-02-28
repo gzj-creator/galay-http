@@ -218,7 +218,7 @@ int main(int argc, char* argv[]) {
 
     try {
         // 创建 Runtime
-        Runtime runtime(1, 0);
+        Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
         runtime.start();
 
         LogInfo("Runtime started");
