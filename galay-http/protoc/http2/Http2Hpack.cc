@@ -5288,11 +5288,17 @@ void HpackDecoder::setMaxTableSize(size_t size)
     m_dynamic_table.setMaxSize(size);
 }
 
+void HpackDecoder::setMaxHeaderListSize(size_t size)
+{
+    m_max_header_list_size = size;
+}
+
 
 std::expected<std::vector<Http2HeaderField>, Http2ErrorCode> HpackDecoder::decode(const uint8_t* data, size_t length)
 {
     std::vector<Http2HeaderField> headers;
     const uint8_t* end = data + length;
+    size_t header_list_size = 0;
     
     while (data < end) {
         uint8_t byte = *data;
@@ -5306,6 +5312,10 @@ std::expected<std::vector<Http2HeaderField>, Http2ErrorCode> HpackDecoder::decod
             
             const Http2HeaderField* field = getField(*index_result);
             if (!field) {
+                return std::unexpected(Http2ErrorCode::CompressionError);
+            }
+            header_list_size += field->size();
+            if (header_list_size > m_max_header_list_size) {
                 return std::unexpected(Http2ErrorCode::CompressionError);
             }
             
@@ -5339,6 +5349,10 @@ std::expected<std::vector<Http2HeaderField>, Http2ErrorCode> HpackDecoder::decod
             }
             
             Http2HeaderField field{std::move(name), std::move(*value_result)};
+            header_list_size += field.size();
+            if (header_list_size > m_max_header_list_size) {
+                return std::unexpected(Http2ErrorCode::CompressionError);
+            }
             m_dynamic_table.add(field);
             headers.push_back(std::move(field));
         }
@@ -5384,8 +5398,13 @@ std::expected<std::vector<Http2HeaderField>, Http2ErrorCode> HpackDecoder::decod
             if (!value_result) {
                 return std::unexpected(value_result.error());
             }
-            
-            headers.push_back({std::move(name), std::move(*value_result)});
+
+            Http2HeaderField field{std::move(name), std::move(*value_result)};
+            header_list_size += field.size();
+            if (header_list_size > m_max_header_list_size) {
+                return std::unexpected(Http2ErrorCode::CompressionError);
+            }
+            headers.push_back(std::move(field));
             // 不添加到动态表
         }
     }

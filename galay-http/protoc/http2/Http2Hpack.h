@@ -207,6 +207,9 @@ public:
 
     // 设置动态表最大大小
     void setMaxTableSize(size_t size);
+    // 设置头部列表最大大小（RFC 7541 字段大小累计）
+    void setMaxHeaderListSize(size_t size);
+    size_t maxHeaderListSize() const { return m_max_header_list_size; }
 
     // 获取动态表
     HpackDynamicTable& dynamicTable() { return m_dynamic_table; }
@@ -223,6 +226,7 @@ private:
 
     HpackDynamicTable m_dynamic_table;
     size_t m_max_table_size;
+    size_t m_max_header_list_size = static_cast<size_t>(-1);
 };
 
 /**
