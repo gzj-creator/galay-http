@@ -27,28 +27,32 @@ void signalHandler(int) {
 Coroutine handleStream(Http2Stream::ptr stream) {
     g_request_count++;
 
-    co_await stream->readRequest().wait();
-    auto& req = stream->request();
-    if (req.method.empty()) {
-        co_return;
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
     }
 
-    HTTP_LOG_INFO("[h2] [req] [#{}] [{}] [{}] [stream={}]",
-                  g_request_count.load(), req.method, req.path, stream->streamId());
+    HTTP_LOG_INFO("[h2] [req] [#{}] [stream={}]",
+                  g_request_count.load(), stream->streamId());
 
     std::string body = "Hello from H2 Test Server!\n";
     body += "Request #" + std::to_string(g_request_count.load()) + "\n";
-    body += "Method: " + req.method + "\n";
-    body += "Path: " + req.path + "\n";
     body += "Stream ID: " + std::to_string(stream->streamId()) + "\n";
 
-    co_await stream->replyAndWait(
+    co_await stream->replyHeader(
         Http2Headers()
             .status(200)
             .contentType("text/plain")
             .server("Galay-H2-Test/1.0")
             .contentLength(body.size()),
-        body).wait();
+        false);
+    co_await stream->replyData(body, true);
 
     co_return;
 }

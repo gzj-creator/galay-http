@@ -30,25 +30,30 @@ void signalHandler(int) {
 Coroutine handleStream(Http2Stream::ptr stream) {
     g_request_count++;
 
-    // 读取完整请求
-    co_await stream->readRequest().wait();
-    auto& req = stream->request();
+    // New contract: frame-first request consumption.
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
 
-    if (req.method.empty()) co_return;
-
-    HTTP_LOG_INFO("Request #{}: {} {} (stream {})",
-                  g_request_count.load(), req.method, req.path, stream->streamId());
+    HTTP_LOG_INFO("Request #{} on stream {}",
+                  g_request_count.load(), stream->streamId());
 
     // 构造响应
     std::string resp_body = "Hello from H2c Test Server!\n";
     resp_body += "Request #" + std::to_string(g_request_count.load()) + "\n";
-    resp_body += "Method: " + req.method + "\n";
-    resp_body += "Path: " + req.path + "\n";
     resp_body += "Stream ID: " + std::to_string(stream->streamId()) + "\n";
 
-    co_await stream->replyAndWait(
+    co_await stream->replyHeader(
         Http2Headers().status(200).contentType("text/plain").server("Galay-H2c-Test/1.0"),
-        resp_body).wait();
+        false);
+    co_await stream->replyData(resp_body, true);
 
     HTTP_LOG_INFO("Response sent for stream {}", stream->streamId());
     co_return;

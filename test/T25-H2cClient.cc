@@ -36,9 +36,9 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
 
     // Upgrade to HTTP/2
     std::cout << "Upgrading to HTTP/2..." << std::endl;
-    co_await client.upgrade("/").wait();
-    if (!client.isUpgraded()) {
-        std::cerr << "Upgrade failed" << std::endl;
+    auto upgrade_result = co_await client.upgrade("/");
+    if (!upgrade_result) {
+        std::cerr << "Upgrade failed: " << upgrade_result.error().toString() << std::endl;
         fail_count++;
         co_return;
     }
@@ -50,19 +50,29 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
         std::cout << "Starting request " << (i + 1) << "..." << std::endl;
 
         auto stream = client.get("/");
-        co_await stream->readResponse().wait();
-        auto& response = stream->response();
-
-        std::cout << "Request " << (i + 1) << " completed: status=" << response.status
-                  << ", body_size=" << response.body.size() << " bytes" << std::endl;
-        success_count++;
+        bool finished = false;
+        while (!finished) {
+            auto frame_result = co_await stream->getFrame();
+            if (!frame_result || !frame_result.value()) {
+                fail_count++;
+                break;
+            }
+            auto frame = std::move(frame_result.value());
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+            }
+        }
+        if (finished) {
+            std::cout << "Request " << (i + 1) << " completed with frame stream." << std::endl;
+            success_count++;
+        }
 
         std::cout << "Request " << (i + 1) << " finished, continuing to next..." << std::endl;
     }
 
     // Close connection
     std::cout << "Closing connection..." << std::endl;
-    co_await client.shutdown().wait();
+    co_await client.shutdown();
     std::cout << "Connection closed." << std::endl;
 
     co_return;

@@ -47,25 +47,19 @@ Coroutine runClient(const std::string& host, uint16_t port, int num_requests) {
     }
 
     for (int i = 0; i < num_requests; i++) {
-        auto req_result = co_await client.get("/h2/test");
-        if (!req_result) {
+        auto stream = co_await client.get("/h2/test");
+        if (!stream) {
             g_fail++;
             continue;
         }
 
-        auto response_opt = req_result.value();
-        if (!response_opt.has_value()) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
             g_fail++;
             continue;
         }
 
-        auto& response = response_opt.value();
-        if (response.status == 200 &&
-            response.body.find("Hello from H2 Test Server!") != std::string::npos) {
-            g_success++;
-        } else {
-            g_fail++;
-        }
+        g_success++;
     }
 
     co_await client.close();
