@@ -2,6 +2,7 @@
 #define GALAY_HTTP2_CONN_H
 
 #include "Http2Stream.h"
+#include "Http2ConnectionCore.h"
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/protoc/http2/Http2Hpack.h"
@@ -18,6 +19,7 @@
 #include <expected>
 #include <functional>
 #include <cstring>
+#include <chrono>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
@@ -115,6 +117,58 @@ struct Http2Settings
         frame.addSetting(Http2SettingsId::MaxFrameSize, max_frame_size);
         frame.addSetting(Http2SettingsId::MaxHeaderListSize, max_header_list_size);
         return frame;
+    }
+};
+
+struct Http2FlowControlUpdate
+{
+    uint32_t conn_increment = 0;
+    uint32_t stream_increment = 0;
+};
+
+using Http2FlowControlStrategy = std::function<Http2FlowControlUpdate(
+    int32_t conn_recv_window,
+    int32_t stream_recv_window,
+    uint32_t target_window,
+    size_t data_size)>;
+
+struct Http2RuntimeConfig
+{
+    bool ping_enabled = true;
+    std::chrono::milliseconds ping_interval{30000};
+    std::chrono::milliseconds ping_timeout{10000};
+    std::chrono::milliseconds settings_ack_timeout{10000};
+    std::chrono::milliseconds graceful_shutdown_rtt{100};
+    std::chrono::milliseconds graceful_shutdown_timeout{5000};
+    uint32_t flow_control_target_window = kDefaultInitialWindowSize;
+    Http2FlowControlStrategy flow_control_strategy;
+
+    template<typename Config>
+    void from(const Config& config) {
+        if constexpr (requires { config.ping_enabled; }) {
+            ping_enabled = config.ping_enabled;
+        }
+        if constexpr (requires { config.ping_interval; }) {
+            ping_interval = config.ping_interval;
+        }
+        if constexpr (requires { config.ping_timeout; }) {
+            ping_timeout = config.ping_timeout;
+        }
+        if constexpr (requires { config.settings_ack_timeout; }) {
+            settings_ack_timeout = config.settings_ack_timeout;
+        }
+        if constexpr (requires { config.graceful_shutdown_rtt; }) {
+            graceful_shutdown_rtt = config.graceful_shutdown_rtt;
+        }
+        if constexpr (requires { config.graceful_shutdown_timeout; }) {
+            graceful_shutdown_timeout = config.graceful_shutdown_timeout;
+        }
+        if constexpr (requires { config.flow_control_target_window; }) {
+            flow_control_target_window = config.flow_control_target_window;
+        }
+        if constexpr (requires { config.flow_control_strategy; }) {
+            flow_control_strategy = config.flow_control_strategy;
+        }
     }
 };
 
@@ -1167,6 +1221,8 @@ public:
     // 获取本地/对端设置
     Http2Settings& localSettings() { return m_local_settings; }
     Http2Settings& peerSettings() { return m_peer_settings; }
+    Http2RuntimeConfig& runtimeConfig() { return m_runtime_config; }
+    const Http2RuntimeConfig& runtimeConfig() const { return m_runtime_config; }
     
     // HPACK 编解码器
     HpackEncoder& encoder() { return m_encoder; }
@@ -1213,6 +1269,29 @@ public:
     int32_t connRecvWindow() const { return m_conn_recv_window; }
     void adjustConnSendWindow(int32_t delta) { m_conn_send_window += delta; }
     void adjustConnRecvWindow(int32_t delta) { m_conn_recv_window += delta; }
+    Http2FlowControlUpdate evaluateRecvWindowUpdate(int32_t stream_recv_window, size_t data_size) const {
+        uint32_t target = m_runtime_config.flow_control_target_window == 0
+            ? m_local_settings.initial_window_size
+            : m_runtime_config.flow_control_target_window;
+        if (target == 0) {
+            target = kDefaultInitialWindowSize;
+        }
+
+        if (m_runtime_config.flow_control_strategy) {
+            return m_runtime_config.flow_control_strategy(
+                m_conn_recv_window, stream_recv_window, target, data_size);
+        }
+
+        Http2FlowControlUpdate update;
+        const int32_t low_watermark = static_cast<int32_t>(target / 2);
+        if (m_conn_recv_window < low_watermark) {
+            update.conn_increment = static_cast<uint32_t>(target - m_conn_recv_window);
+        }
+        if (stream_recv_window < low_watermark) {
+            update.stream_increment = static_cast<uint32_t>(target - stream_recv_window);
+        }
+        return update;
+    }
     
     // 客户端/服务端模式
     bool isClient() const { return m_is_client; }
@@ -1223,6 +1302,37 @@ public:
     bool isGoawayReceived() const { return m_goaway_received; }
     void setGoawaySent() { m_goaway_sent = true; }
     void setGoawayReceived() { m_goaway_received = true; }
+    void markGoawayReceived(uint32_t last_stream_id,
+                            Http2ErrorCode error_code,
+                            std::string debug = "") {
+        m_goaway_received = true;
+        m_draining = true;
+        m_goaway_last_stream_id = last_stream_id;
+        m_goaway_error_code = error_code;
+        m_goaway_debug_data = std::move(debug);
+    }
+    void markGoawaySent(uint32_t last_stream_id,
+                        Http2ErrorCode error_code,
+                        std::string debug = "") {
+        m_goaway_sent = true;
+        m_draining = true;
+        m_goaway_last_stream_id = last_stream_id;
+        m_goaway_error_code = error_code;
+        m_goaway_debug_data = std::move(debug);
+    }
+    bool isDraining() const { return m_draining; }
+    void setDraining(bool draining) { m_draining = draining; }
+    uint32_t goawayLastStreamId() const { return m_goaway_last_stream_id; }
+    Http2ErrorCode goawayErrorCode() const { return m_goaway_error_code; }
+    const std::string& goawayDebugData() const { return m_goaway_debug_data; }
+
+    void markSettingsSent() {
+        m_settings_ack_pending = true;
+        m_settings_sent_at = std::chrono::steady_clock::now();
+    }
+    void markSettingsAckReceived() { m_settings_ack_pending = false; }
+    bool isSettingsAckPending() const { return m_settings_ack_pending; }
+    std::chrono::steady_clock::time_point settingsSentAt() const { return m_settings_sent_at; }
 
     bool isPeerClosed() const { return m_peer_closed; }
     bool isClosing() const { return m_closing; }
@@ -1263,6 +1373,14 @@ public:
         if (!m_stream_manager) {
             m_stream_manager = std::make_unique<Http2StreamManagerImpl<SocketType>>(*this);
         }
+    }
+
+    Http2ConnectionCore* connectionCore() { return m_connection_core.get(); }
+    Http2ConnectionCore& ensureConnectionCore() {
+        if (!m_connection_core) {
+            m_connection_core = std::make_unique<Http2ConnectionCore>();
+        }
+        return *m_connection_core;
     }
 
     /**
@@ -1318,6 +1436,7 @@ public:
      */
     Http2WriteFrameAwaitableImpl<SocketType> sendSettings() {
         auto frame = m_local_settings.toFrame();
+        markSettingsSent();
         return writeFrame(frame);
     }
     
@@ -1343,12 +1462,15 @@ public:
     /**
      * @brief 发送 GOAWAY
      */
-    Http2WriteFrameAwaitableImpl<SocketType> sendGoaway(Http2ErrorCode error, const std::string& debug = "") {
+    Http2WriteFrameAwaitableImpl<SocketType> sendGoaway(Http2ErrorCode error,
+                                                        const std::string& debug = "",
+                                                        std::optional<uint32_t> last_stream_id = std::nullopt) {
         Http2GoAwayFrame frame;
-        frame.setLastStreamId(m_last_peer_stream_id);
+        uint32_t last = last_stream_id.value_or(m_last_peer_stream_id);
+        frame.setLastStreamId(last);
         frame.setErrorCode(error);
         frame.setDebugData(debug);
-        m_goaway_sent = true;
+        markGoawaySent(last, error, debug);
         return writeFrame(frame);
     }
     
@@ -1492,6 +1614,7 @@ private:
     // 连接设置
     Http2Settings m_local_settings;
     Http2Settings m_peer_settings;
+    Http2RuntimeConfig m_runtime_config;
     
     // 流管理
     std::unordered_map<uint32_t, Http2Stream::ptr> m_streams;
@@ -1509,6 +1632,12 @@ private:
     // 连接状态
     bool m_goaway_sent;
     bool m_goaway_received;
+    bool m_draining = false;
+    uint32_t m_goaway_last_stream_id = 0;
+    Http2ErrorCode m_goaway_error_code = Http2ErrorCode::NoError;
+    std::string m_goaway_debug_data;
+    bool m_settings_ack_pending = false;
+    std::chrono::steady_clock::time_point m_settings_sent_at{};
     bool m_is_client;
     bool m_peer_closed;
     bool m_closing;
@@ -1520,6 +1649,7 @@ private:
 
     // StreamManager
     std::unique_ptr<Http2StreamManagerImpl<SocketType>> m_stream_manager;
+    std::unique_ptr<Http2ConnectionCore> m_connection_core;
 };
 
 // 类型别名
