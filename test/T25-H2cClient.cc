@@ -12,24 +12,27 @@
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
 #include <atomic>
+#include <cstdlib>
 
 using namespace galay::http2;
 using namespace galay::kernel;
 
 std::atomic<int> success_count{0};
 std::atomic<int> fail_count{0};
+std::atomic<bool> g_done{false};
 
 /**
  * @brief 客户端测试协程
  */
 Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
-    auto client = H2cClientBuilder().build();
+    H2cClient client(H2cClientBuilder().build());
 
     std::cout << "Connecting to " << host << ":" << port << "..." << std::endl;
     auto connect_result = co_await client.connect(host, port);
     if (!connect_result) {
         std::cerr << "Connect failed: " << connect_result.error().message() << std::endl;
         fail_count++;
+        g_done = true;
         co_return;
     }
     std::cout << "Connected!" << std::endl;
@@ -40,6 +43,7 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
     if (!upgrade_result) {
         std::cerr << "Upgrade failed: " << upgrade_result.error().toString() << std::endl;
         fail_count++;
+        g_done = true;
         co_return;
     }
     std::cout << "Upgrade successful!" << std::endl;
@@ -50,6 +54,10 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
         std::cout << "Starting request " << (i + 1) << "..." << std::endl;
 
         auto stream = client.get("/");
+        if (!stream) {
+            fail_count++;
+            continue;
+        }
         bool finished = false;
         while (!finished) {
             auto frame_result = co_await stream->getFrame();
@@ -71,10 +79,9 @@ Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
     }
 
     // Close connection
-    std::cout << "Closing connection..." << std::endl;
     co_await client.shutdown();
-    std::cout << "Connection closed." << std::endl;
 
+    g_done = true;
     co_return;
 }
 
@@ -101,10 +108,10 @@ int main(int argc, char* argv[]) {
         auto* scheduler = runtime.getNextIOScheduler();
         scheduler->spawn(testClient(host, port, num_requests));
 
-        // Wait for completion (max 30 seconds)
+        // Wait for coroutine completion (max 30 seconds)
         for (int i = 0; i < 300; i++) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            if (success_count.load() + fail_count.load() >= num_requests) {
+            if (g_done.load()) {
                 break;
             }
         }
@@ -119,6 +126,10 @@ int main(int argc, char* argv[]) {
         std::cout << "Total: " << (success_count + fail_count) << "/" << num_requests << "\n";
         std::cout << "========================================\n";
 
+        if (!g_done.load()) {
+            std::cerr << "Client coroutine timeout.\n";
+            return 1;
+        }
         return (fail_count > 0) ? 1 : 0;
 
     } catch (const std::exception& e) {

@@ -387,8 +387,8 @@ public:
     // 连接服务器
     auto connect(const std::string& host, uint16_t port);
 
-    // 升级到 HTTP/2（返回 Coroutine，需要 .wait()）
-    Coroutine upgrade(const std::string& path = "/");
+    // 升级到 HTTP/2（返回 Awaitable）
+    auto upgrade(const std::string& path = "/");
 
     // 发送 GET 请求，返回 Stream
     Http2Stream::ptr get(const std::string& path);
@@ -398,8 +398,8 @@ public:
                          const std::string& body,
                          const std::string& content_type = "application/x-www-form-urlencoded");
 
-    // 优雅关闭连接
-    Coroutine shutdown();
+    // 优雅关闭连接（返回 Awaitable）
+    auto shutdown();
 
     bool isUpgraded() const;
 };
@@ -407,10 +407,14 @@ public:
 // 使用示例：
 // H2cClient client;
 // co_await client.connect("127.0.0.1", 9080);
-// co_await client.upgrade("/").wait();
+// co_await client.upgrade("/");
 //
 // auto stream = client.get("/api/data");
-// co_await stream->readResponse().wait();
+// while (true) {
+//     auto frame = co_await stream->getFrame();
+//     if (!frame || !frame.value()) break;
+//     if (frame.value()->isEndStream()) break;
+// }
 // auto& resp = stream->response();
 ```
 
@@ -421,27 +425,11 @@ HTTP/2 流：
 ```cpp
 class Http2Stream {
 public:
-    uint32_t getId() const;
-
-    // 发送头部
-    auto sendHeaders(const std::vector<Http2Header>& headers, bool end_stream = false)
-        -> Awaitable<std::expected<bool, Http2Error>>;
-
-    // 发送数据
-    auto sendData(std::span<const uint8_t> data, bool end_stream = false)
-        -> Awaitable<std::expected<bool, Http2Error>>;
-
-    // 接收头部
-    auto recvHeaders(std::vector<Http2Header>& headers)
-        -> Awaitable<std::expected<bool, Http2Error>>;
-
-    // 接收数据
-    auto recvData(std::string& data)
-        -> Awaitable<std::expected<bool, Http2Error>>;
-
-    // 重置流
-    auto reset(uint32_t error_code = 0)
-        -> Awaitable<std::expected<bool, Http2Error>>;
+    uint32_t streamId() const;
+    auto getFrame();
+    auto replyHeader(const std::vector<Http2HeaderField>& headers, bool end_stream = false);
+    auto replyData(const std::string& data, bool end_stream = false);
+    auto replyRst(Http2ErrorCode error);
 };
 ```
 

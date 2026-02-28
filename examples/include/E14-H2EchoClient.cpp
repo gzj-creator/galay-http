@@ -38,21 +38,32 @@ Coroutine runClient(const std::string& host, uint16_t port) {
     }
 
     std::string body = "Hello from H2EchoClient!";
-    auto post_result = co_await client.post("/echo", body, "text/plain");
-    if (!post_result) {
-        std::cerr << "Request failed: " << static_cast<int>(post_result.error()) << "\n";
+    auto stream = client.post("/echo", body, "text/plain");
+    if (!stream) {
+        std::cerr << "Request failed: stream create error\n";
         co_await client.close();
         co_return;
     }
 
-    auto response_opt = post_result.value();
-    if (!response_opt.has_value()) {
+    bool finished = false;
+    while (!finished) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            break;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            finished = true;
+        }
+    }
+
+    if (!finished) {
         std::cerr << "No response\n";
         co_await client.close();
         co_return;
     }
 
-    auto& response = response_opt.value();
+    auto& response = stream->response();
     std::cout << "Status: " << response.status << "\n";
     std::cout << "Body: " << response.body << "\n";
 

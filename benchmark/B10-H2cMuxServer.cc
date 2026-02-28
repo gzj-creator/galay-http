@@ -41,9 +41,12 @@ Coroutine handleStream(Http2Stream::ptr stream) {
         if (frame->isEndStream()) break;
     }
 
-    co_await stream->replyAndWait(
+    co_await stream->replyHeader(
         Http2Headers().status(200).contentType("text/plain").contentLength(body.size()),
-        body).wait();
+        body.empty());
+    if (!body.empty()) {
+        co_await stream->replyData(body, true);
+    }
 
     co_return;
 }

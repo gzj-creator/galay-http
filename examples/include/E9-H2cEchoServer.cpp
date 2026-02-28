@@ -30,17 +30,29 @@ void signalHandler(int) {
 Coroutine handleStream(Http2Stream::ptr stream) {
     g_requests++;
 
-    // 读取完整请求
-    co_await stream->readRequest().wait();
+    // 读取完整请求（帧驱动）
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
     auto& req = stream->request();
 
     HTTP_LOG_INFO("[h2c] [req] [{}] [{}] [stream={}]", req.method, req.path, stream->streamId());
 
     // 构建响应（echo body）
-    co_await stream->replyAndWait(
+    co_await stream->replyHeader(
         Http2Headers().status(200).contentType("text/plain")
             .server("Galay-H2c-Echo/1.0").contentLength(req.body.size()),
-        req.body).wait();
+        req.body.empty());
+    if (!req.body.empty()) {
+        co_await stream->replyData(req.body, true);
+    }
 
     co_return;
 }

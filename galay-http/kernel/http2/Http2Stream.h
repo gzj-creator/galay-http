@@ -89,74 +89,6 @@ class Http2Stream
 public:
     using ptr = std::shared_ptr<Http2Stream>;
 
-    class ReadRequestAwaitable
-        : public galay::kernel::TimeoutSupport<ReadRequestAwaitable>
-    {
-    public:
-        explicit ReadRequestAwaitable(Http2Stream* stream)
-            : m_stream(stream)
-            , m_wait_awaitable(&stream->m_request_waiter)
-        {
-        }
-
-        bool await_ready() const noexcept {
-            return m_stream->isRequestCompleted() || m_stream->isFrameQueueClosed();
-        }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (await_ready()) {
-                return false;
-            }
-            return m_wait_awaitable.await_suspend(handle);
-        }
-
-        ReadRequestAwaitable& wait() & { return *this; }
-        ReadRequestAwaitable&& wait() && { return std::move(*this); }
-
-        void await_resume() noexcept {
-            (void)m_wait_awaitable.await_resume();
-        }
-
-    private:
-        Http2Stream* m_stream;
-        galay::kernel::AsyncWaiterAwaitable<void> m_wait_awaitable;
-    };
-
-    class ReadResponseAwaitable
-        : public galay::kernel::TimeoutSupport<ReadResponseAwaitable>
-    {
-    public:
-        explicit ReadResponseAwaitable(Http2Stream* stream)
-            : m_stream(stream)
-            , m_wait_awaitable(&stream->m_response_waiter)
-        {
-        }
-
-        bool await_ready() const noexcept {
-            return m_stream->isResponseCompleted() || m_stream->isFrameQueueClosed();
-        }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (await_ready()) {
-                return false;
-            }
-            return m_wait_awaitable.await_suspend(handle);
-        }
-
-        ReadResponseAwaitable& wait() & { return *this; }
-        ReadResponseAwaitable&& wait() && { return std::move(*this); }
-
-        void await_resume() noexcept {
-            (void)m_wait_awaitable.await_resume();
-        }
-
-    private:
-        Http2Stream* m_stream;
-        galay::kernel::AsyncWaiterAwaitable<void> m_wait_awaitable;
-    };
-
     class ReplyAndWaitAwaitable
         : public galay::kernel::TimeoutSupport<ReplyAndWaitAwaitable>
     {
@@ -477,40 +409,17 @@ public:
      * @brief 发送 WINDOW_UPDATE 帧
      */
     void sendWindowUpdate(uint32_t increment) {
-        if (!m_send_queue) return;
+        if (!m_send_queue && !m_send_channel) return;
 
         auto frame = std::make_unique<Http2WindowUpdateFrame>();
         frame->header().stream_id = m_stream_id;
         frame->setWindowSizeIncrement(increment);
 
-        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame)});
-    }
-
-    /**
-     * @brief 发送完整响应（HEADERS + DATA），默认结束流
-     * @return 返回可等待对象，用于确认最后一帧写入完成
-     */
-    [[nodiscard]]
-    Http2OutgoingFrame::WaiterPtr reply(const std::vector<Http2HeaderField>& headers,
-                                        const std::string& body,
-                                        bool end_headers = true) {
-        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
-        bool has_body = !body.empty();
-        sendHeadersInternal(headers, !has_body, end_headers, has_body ? nullptr : waiter);
-        if (has_body) {
-            sendDataInternal(body, true, waiter);
+        if (m_send_channel) {
+            m_send_channel->send(Http2OutgoingFrame{std::move(frame)});
+        } else {
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame)});
         }
-        return waiter;
-    }
-
-    /**
-     * @brief 发送响应并等待发送完成
-     */
-    ReplyAndWaitAwaitable replyAndWait(const std::vector<Http2HeaderField>& headers,
-                                       const std::string& body,
-                                       bool end_headers = true) {
-        auto waiter = reply(headers, body, end_headers);
-        return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
 public:
@@ -546,6 +455,17 @@ private:
                   HpackEncoder* encoder,
                   HpackDecoder* decoder) {
         m_send_queue = send_queue;
+        m_send_channel = nullptr;
+        m_encoder = encoder;
+        m_decoder = decoder;
+        m_io_attached = true;
+    }
+
+    void attachIO(galay::kernel::UnsafeChannel<Http2OutgoingFrame>* send_channel,
+                  HpackEncoder* encoder,
+                  HpackDecoder* decoder) {
+        m_send_channel = send_channel;
+        m_send_queue = nullptr;
         m_encoder = encoder;
         m_decoder = decoder;
         m_io_attached = true;
@@ -578,6 +498,7 @@ private:
     bool m_exclusive = false;
 
     // 发送队列和编解码器（由 StreamManager 绑定）
+    galay::kernel::UnsafeChannel<Http2OutgoingFrame>* m_send_channel = nullptr;
     std::vector<Http2OutgoingFrame>* m_send_queue = nullptr;
     HpackEncoder* m_encoder = nullptr;
     HpackDecoder* m_decoder = nullptr;
@@ -592,7 +513,7 @@ private:
                              bool end_stream,
                              bool end_headers,
                              const Http2OutgoingFrame::WaiterPtr& waiter) {
-        if (!m_send_queue || !m_encoder) return;
+        if ((!m_send_queue && !m_send_channel) || !m_encoder) return;
 
         std::string header_block = m_encoder->encode(headers);
 
@@ -603,13 +524,17 @@ private:
         frame->setEndHeaders(end_headers);
 
         onHeadersSent(end_stream);
-        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+        if (m_send_channel) {
+            m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+        } else {
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+        }
     }
 
     void sendDataInternal(const std::string& data,
                           bool end_stream,
                           const Http2OutgoingFrame::WaiterPtr& waiter) {
-        if (!m_send_queue) return;
+        if (!m_send_queue && !m_send_channel) return;
         if (m_send_window < static_cast<int32_t>(data.size())) return;
 
         auto frame = std::make_unique<Http2DataFrame>();
@@ -621,19 +546,27 @@ private:
         if (end_stream) {
             onDataSent(true);
         }
-        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+        if (m_send_channel) {
+            m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+        } else {
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+        }
     }
 
     void sendRstStreamInternal(Http2ErrorCode error,
                                const Http2OutgoingFrame::WaiterPtr& waiter) {
-        if (!m_send_queue) return;
+        if (!m_send_queue && !m_send_channel) return;
 
         auto frame = std::make_unique<Http2RstStreamFrame>();
         frame->header().stream_id = m_stream_id;
         frame->setErrorCode(error);
 
         onRstStreamSent();
-        m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+        if (m_send_channel) {
+            m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+        } else {
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+        }
     }
 };
 

@@ -6,15 +6,16 @@
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/kernel/http/HttpLog.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-http/kernel/SslRecvCompatAwaitable.h"
+#include "galay-kernel/kernel/Awaitable.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-http/kernel/http/SslHandshakeAwaitable.h"
 #include "galay-ssl/async/SslSocket.h"
 #include "galay-ssl/ssl/SslContext.h"
 #endif
 #include <memory>
 #include <optional>
+#include <cstring>
 
 namespace galay::http2
 {
@@ -54,367 +55,1140 @@ private:
 
 /**
  * @brief H2 客户端 (HTTP/2 over TLS)
- * @details 通过 TLS ALPN 协商使用 HTTP/2
- *
- * 使用方式:
- * @code
- * H2Client client;
- *
- * // 连接并完成 TLS 握手 + HTTP/2 协商
- * while (true) {
- *     auto result = co_await client.connect("example.com", 443);
- *     if (!result) { // error }
- *     if (result.value()) break;  // 连接成功
- * }
- *
- * // 发送请求
- * while (true) {
- *     auto result = co_await client.get("/api");
- *     if (!result) { // error }
- *     if (result.value()) {
- *         auto& response = *result.value();
- *         // 处理响应
- *         break;
- *     }
- * }
- *
- * co_await client.close();
- * @endcode
  */
 class H2Client
 {
 public:
-    /**
-     * @brief H2 连接等待体
-     */
-    class ConnectAwaitable : public TimeoutSupport<ConnectAwaitable>
+    class ConnectAwaitable
+        : public CustomAwaitable
+        , public TimeoutSupport<ConnectAwaitable>
     {
     public:
+        using SocketType = galay::ssl::SslSocket;
+        using SendAwaitableType = decltype(std::declval<SocketType>().send(
+            std::declval<const char*>(), std::declval<size_t>()));
+        using RecvAwaitableType = galay::http::SslRecvCompatAwaitable;
+
+        class HandshakeCtx : public IOContextBase
+        {
+        public:
+            explicit HandshakeCtx(ConnectAwaitable* owner)
+                : m_owner(owner)
+            {
+            }
+
+            IOEventType type() const override {
+                if (!m_handshake.has_value()) {
+                    return IOEventType::INVALID;
+                }
+                auto* task = const_cast<galay::ssl::SslHandshakeAwaitable&>(*m_handshake).front();
+                if (!task) {
+                    return IOEventType::INVALID;
+                }
+                return m_handshake->resolveTaskEventType(*task);
+            }
+
+#ifdef USE_IOURING
+            bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+                if (m_owner->m_error.has_value()) {
+                    return true;
+                }
+
+                if (!m_owner->m_connect_ctx.m_result.has_value()) {
+                    m_owner->setConnectError(m_owner->m_connect_ctx.m_result.error());
+                    return true;
+                }
+
+                if (!m_handshake.has_value()) {
+                    m_handshake.emplace(m_owner->m_client.m_socket->controller(),
+                                        m_owner->m_client.m_socket->engine());
+                }
+
+                bool consumed_cqe = false;
+                while (auto* task = m_handshake->front()) {
+                    bool done = false;
+                    if (!consumed_cqe) {
+                        done = task->context->handleComplete(cqe, handle);
+                        consumed_cqe = true;
+                    } else {
+                        done = task->context->handleComplete(nullptr, handle);
+                    }
+                    if (!done) {
+                        return false;
+                    }
+                    m_handshake->popFront();
+                }
+
+                if (!m_handshake->m_resultSet) {
+                    return false;
+                }
+
+                if (!m_handshake->m_result.has_value()) {
+                    HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]",
+                                   m_handshake->m_result.error().message());
+                    m_owner->m_error = Http2ErrorCode::ConnectError;
+                    return true;
+                }
+
+                return m_owner->onHandshakeCompleted();
+            }
+#else
+            bool handleComplete(GHandle handle) override {
+                if (m_owner->m_error.has_value()) {
+                    return true;
+                }
+
+                if (!m_owner->m_connect_ctx.m_result.has_value()) {
+                    m_owner->setConnectError(m_owner->m_connect_ctx.m_result.error());
+                    return true;
+                }
+
+                if (!m_handshake.has_value()) {
+                    m_handshake.emplace(m_owner->m_client.m_socket->controller(),
+                                        m_owner->m_client.m_socket->engine());
+                }
+
+                while (auto* task = m_handshake->front()) {
+                    const bool done = task->context->handleComplete(handle);
+                    if (!done) {
+                        return false;
+                    }
+                    m_handshake->popFront();
+                }
+
+                if (!m_handshake->m_resultSet) {
+                    return false;
+                }
+
+                if (!m_handshake->m_result.has_value()) {
+                    HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]",
+                                   m_handshake->m_result.error().message());
+                    m_owner->m_error = Http2ErrorCode::ConnectError;
+                    return true;
+                }
+
+                return m_owner->onHandshakeCompleted();
+            }
+#endif
+
+        private:
+            ConnectAwaitable* m_owner;
+            std::optional<galay::ssl::SslHandshakeAwaitable> m_handshake;
+        };
+
+        class ProtocolSendAwaitable : public SendAwaitableType
+        {
+        public:
+            ProtocolSendAwaitable(ConnectAwaitable* owner,
+                                  const std::string* payload,
+                                  bool finish_connect)
+                : SendAwaitableType(owner->m_client.m_socket->send(
+                    payload == nullptr ? nullptr : payload->data(),
+                    payload == nullptr ? 0 : payload->size()))
+                , m_owner(owner)
+                , m_payload(payload)
+                , m_finish_connect(finish_connect)
+            {
+                initializeSendState();
+            }
+
+#ifdef USE_IOURING
+            bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+                if (m_owner->m_error.has_value()) {
+                    return true;
+                }
+                if (m_completed) {
+                    if (m_finish_connect) {
+                        return m_owner->finishConnect();
+                    }
+                    return true;
+                }
+                if (cqe == nullptr) {
+                    return false;
+                }
+
+                this->m_sslResultSet = false;
+                const bool done = SendAwaitableType::handleComplete(cqe, handle);
+                if (!done) {
+                    return false;
+                }
+
+                auto send_result = std::move(this->m_sslResult);
+                this->m_sslResultSet = false;
+                if (!send_result.has_value()) {
+                    m_owner->setSslSendError(send_result.error());
+                    return true;
+                }
+
+                const size_t sent = send_result.value();
+                if (sent == 0) {
+                    return false;
+                }
+
+                m_offset += sent;
+                if (m_offset >= m_payload->size()) {
+                    m_completed = true;
+                    if (m_finish_connect) {
+                        return m_owner->finishConnect();
+                    }
+                    return true;
+                }
+
+                this->m_plainBuffer = m_payload->data() + m_offset;
+                this->m_plainLength = m_payload->size() - m_offset;
+                return false;
+            }
+#else
+            bool handleComplete(GHandle handle) override {
+                while (true) {
+                    if (m_owner->m_error.has_value()) {
+                        return true;
+                    }
+                    if (m_completed) {
+                        if (m_finish_connect) {
+                            return m_owner->finishConnect();
+                        }
+                        return true;
+                    }
+
+                    this->m_sslResultSet = false;
+                    const bool done = SendAwaitableType::handleComplete(handle);
+                    if (!done) {
+                        return false;
+                    }
+
+                    auto send_result = std::move(this->m_sslResult);
+                    this->m_sslResultSet = false;
+                    if (!send_result.has_value()) {
+                        m_owner->setSslSendError(send_result.error());
+                        return true;
+                    }
+
+                    const size_t sent = send_result.value();
+                    if (sent == 0) {
+                        return false;
+                    }
+
+                    m_offset += sent;
+                    if (m_offset >= m_payload->size()) {
+                        m_completed = true;
+                        if (m_finish_connect) {
+                            return m_owner->finishConnect();
+                        }
+                        return true;
+                    }
+
+                    this->m_plainBuffer = m_payload->data() + m_offset;
+                    this->m_plainLength = m_payload->size() - m_offset;
+                }
+            }
+#endif
+
+        private:
+            void initializeSendState() {
+                m_offset = 0;
+                m_completed = m_payload == nullptr || m_payload->empty();
+                this->m_plainBuffer = m_completed ? nullptr : m_payload->data();
+                this->m_plainLength = m_completed ? 0 : m_payload->size();
+                this->m_plainOffset = 0;
+                this->m_cipherLength = 0;
+                this->m_sslResultSet = false;
+                this->m_buffer = nullptr;
+                this->m_length = 0;
+                if (m_completed) {
+                    this->m_sslResult = size_t{0};
+                    this->m_sslResultSet = true;
+                    return;
+                }
+                this->fillNextSendChunk();
+            }
+
+            ConnectAwaitable* m_owner;
+            const std::string* m_payload;
+            bool m_finish_connect;
+            size_t m_offset = 0;
+            bool m_completed = false;
+        };
+
+        class ProtocolRecvAwaitable : public RecvAwaitableType
+        {
+        public:
+            explicit ProtocolRecvAwaitable(ConnectAwaitable* owner)
+                : RecvAwaitableType(owner->m_client.m_socket->recv(
+                    owner->m_dummy_recv_buffer, sizeof(owner->m_dummy_recv_buffer)))
+                , m_owner(owner)
+            {
+            }
+
+#ifdef USE_IOURING
+            bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+                if (m_owner->m_error.has_value()) {
+                    return true;
+                }
+
+                if (m_owner->consumeSettingsFrames()) {
+                    return true;
+                }
+
+                if (!prepareRecvWindow()) {
+                    m_owner->m_error = Http2ErrorCode::InternalError;
+                    return true;
+                }
+
+                if (cqe == nullptr) {
+                    return false;
+                }
+
+                this->m_sslResultSet = false;
+                const bool done = RecvAwaitableType::handleComplete(cqe, handle);
+                if (!done) {
+                    return false;
+                }
+
+                auto recv_result = std::move(this->m_sslResult);
+                this->m_sslResultSet = false;
+                if (!recv_result.has_value()) {
+                    m_owner->setSslRecvError(recv_result.error());
+                    return true;
+                }
+
+                const size_t bytes_read = recv_result.value().size();
+                if (bytes_read == 0) {
+                    m_owner->m_error = Http2ErrorCode::ConnectError;
+                    return true;
+                }
+
+                m_owner->m_ring_buffer.produce(bytes_read);
+                return m_owner->consumeSettingsFrames();
+            }
+#else
+            bool handleComplete(GHandle handle) override {
+                while (true) {
+                    if (m_owner->m_error.has_value()) {
+                        return true;
+                    }
+
+                    if (m_owner->consumeSettingsFrames()) {
+                        return true;
+                    }
+
+                    if (!prepareRecvWindow()) {
+                        m_owner->m_error = Http2ErrorCode::InternalError;
+                        return true;
+                    }
+
+                    this->m_sslResultSet = false;
+                    const bool done = RecvAwaitableType::handleComplete(handle);
+                    if (!done) {
+                        return false;
+                    }
+
+                    auto recv_result = std::move(this->m_sslResult);
+                    this->m_sslResultSet = false;
+                    if (!recv_result.has_value()) {
+                        m_owner->setSslRecvError(recv_result.error());
+                        return true;
+                    }
+
+                    const size_t bytes_read = recv_result.value().size();
+                    if (bytes_read == 0) {
+                        m_owner->m_error = Http2ErrorCode::ConnectError;
+                        return true;
+                    }
+
+                    m_owner->m_ring_buffer.produce(bytes_read);
+                }
+            }
+#endif
+
+        private:
+            bool prepareRecvWindow() {
+                auto write_iovecs = m_owner->m_ring_buffer.getWriteIovecs();
+                if (write_iovecs.empty()) {
+                    return false;
+                }
+                this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
+                this->m_plainLength = write_iovecs[0].iov_len;
+                return this->m_plainLength > 0;
+            }
+
+            ConnectAwaitable* m_owner;
+        };
+
         ConnectAwaitable(H2Client& client, const std::string& host, uint16_t port)
-            : m_client(client)
+            : CustomAwaitable(client.m_socket
+                              ? client.m_socket->controller()
+                              : client.m_dummy_socket.controller())
+            , m_client(client)
             , m_host(host)
             , m_port(port)
+            , m_connect_ctx(Host(IPType::IPV4, host, port))
+            , m_handshake_ctx(this)
+            , m_preface_send(this, &m_preface_settings_buffer, false)
+            , m_settings_recv(this)
+            , m_ack_send(this, &m_ack_buffer, true)
+            , m_result(true)
         {
+            m_local_settings.max_concurrent_streams = m_client.m_config.max_concurrent_streams;
+            m_local_settings.initial_window_size = m_client.m_config.initial_window_size;
+            m_local_settings.max_frame_size = m_client.m_config.max_frame_size;
+            m_local_settings.max_header_list_size = m_client.m_config.max_header_list_size;
+            m_local_settings.enable_push = 0;
+
+            if (!m_client.m_socket) {
+                m_error = Http2ErrorCode::ConnectError;
+                m_done = true;
+                return;
+            }
+
+            addTask(IOEventType::CONNECT, &m_connect_ctx);
+            addTask(IOEventType::CUSTOM, &m_handshake_ctx);
+            addTask(IOEventType::SEND, &m_preface_send);
+            addTask(IOEventType::RECV, &m_settings_recv);
+            addTask(IOEventType::SEND, &m_ack_send);
         }
 
-        bool await_ready() const noexcept { return false; }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (!m_started) {
-                m_started = true;
-                m_flow = runFlow(this);
-            }
-            return m_flow.wait().await_suspend(handle);
+        bool await_ready() const noexcept { return m_done; }
+        bool await_suspend(std::coroutine_handle<PromiseType> handle) {
+            m_scheduler = handle.promise().getCoroutine().belongScheduler();
+            return CustomAwaitable::await_suspend(handle);
         }
 
         std::expected<std::optional<bool>, Http2ErrorCode> await_resume() {
-            if (m_result.has_value() && !m_result->has_value()) {
-                m_error = Http2ErrorCode::InternalError;
+            if (m_done && m_error.has_value()) {
+                return std::unexpected(*m_error);
             }
+
+            onCompleted();
+
+            if (!m_result.has_value()) {
+                return std::unexpected(Http2ErrorCode::ConnectError);
+            }
+
             if (m_error.has_value()) {
                 return std::unexpected(*m_error);
             }
+
             if (!m_done) {
                 return std::nullopt;
             }
+
+            if (m_client.m_socket) {
+                m_client.m_socket.reset();
+            }
+
             return true;
         }
 
-        bool isInvalid() const { return !m_started || m_done || m_error.has_value(); }
+        bool isInvalid() const { return m_done || m_error.has_value(); }
 
     private:
-        static Coroutine runFlow(ConnectAwaitable* self) {
-            auto& client = self->m_client;
-            client.m_host = self->m_host;
-            client.m_port = self->m_port;
-            client.m_connected = false;
-            client.m_conn.reset();
+        friend class HandshakeCtx;
+        friend class ProtocolSendAwaitable;
+        friend class ProtocolRecvAwaitable;
 
-            client.m_socket = std::make_unique<SslSocket>(&client.m_ssl_ctx);
-            client.m_socket->option().handleNonBlock();
-            client.m_socket->setHostname(self->m_host);
+        void setConnectError(const IOError& io_error) {
+            HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", io_error.message());
+            m_error = Http2ErrorCode::ConnectError;
+        }
 
-            Host target(IPType::IPV4, self->m_host, self->m_port);
-            auto connect_result = co_await client.m_socket->connect(target);
-            if (!connect_result) {
-                HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", connect_result.error().message());
-                self->m_error = Http2ErrorCode::ConnectError;
-                self->m_done = true;
-                co_return;
-            }
+        void setSslSendError(const galay::ssl::SslError& error) {
+            HTTP_LOG_ERROR("[h2] [send-fail] [{}]", error.message());
+            m_error = Http2ErrorCode::InternalError;
+        }
 
-            auto handshake_result = co_await galay::http::handshakeCompletely(*client.m_socket);
-            if (!handshake_result) {
-                HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
-                self->m_error = Http2ErrorCode::InternalError;
-                self->m_done = true;
-                co_return;
-            }
+        void setSslRecvError(const galay::ssl::SslError& error) {
+            HTTP_LOG_ERROR("[h2] [recv-fail] [{}]", error.message());
+            m_error = Http2ErrorCode::ConnectError;
+        }
 
-            std::string alpn = client.m_socket->getALPNProtocol();
-            client.m_alpn_protocol = alpn;
+        bool onHandshakeCompleted() {
+            std::string alpn = m_client.m_socket->getALPNProtocol();
+            m_client.m_alpn_protocol = alpn;
             if (alpn != "h2") {
                 HTTP_LOG_ERROR("[h2] [alpn-fail] [got={}] [expect=h2]", alpn);
-                self->m_error = Http2ErrorCode::ConnectError;
-                self->m_done = true;
-                co_return;
+                m_error = Http2ErrorCode::ConnectError;
+                return true;
             }
+
             HTTP_LOG_DEBUG("[h2] [handshake-ok] [alpn={}]", alpn);
 
-            client.m_conn = std::make_unique<Http2ConnImpl<SslSocket>>(
-                std::move(*client.m_socket)
-            );
-            client.m_socket.reset();
-
-            client.m_conn->localSettings().max_concurrent_streams = client.m_config.max_concurrent_streams;
-            client.m_conn->localSettings().initial_window_size = client.m_config.initial_window_size;
-            client.m_conn->localSettings().max_frame_size = client.m_config.max_frame_size;
-            client.m_conn->localSettings().enable_push = 0;
-
             std::string preface(kHttp2ConnectionPreface.begin(), kHttp2ConnectionPreface.end());
-            auto preface_result = co_await client.m_conn->writeRaw(std::move(preface));
-            if (!preface_result) {
-                self->m_error = Http2ErrorCode::InternalError;
-                self->m_done = true;
-                co_return;
+            Http2SettingsFrame settings = m_local_settings.toFrame();
+            settings.header().stream_id = 0;
+            m_preface_settings_buffer = std::move(preface);
+            m_preface_settings_buffer.append(settings.serialize());
+            m_settings_sent = true;
+
+            Http2SettingsFrame ack;
+            ack.setAck(true);
+            ack.header().stream_id = 0;
+            m_ack_buffer = ack.serialize();
+
+            m_preface_send = ProtocolSendAwaitable(this, &m_preface_settings_buffer, false);
+            m_ack_send = ProtocolSendAwaitable(this, &m_ack_buffer, true);
+            return true;
+        }
+
+        bool finishConnect() {
+            if (m_error.has_value()) {
+                return true;
             }
 
-            auto settings_result = co_await client.m_conn->sendSettings();
-            if (!settings_result) {
-                self->m_error = Http2ErrorCode::InternalError;
-                self->m_done = true;
-                co_return;
+            m_client.m_host = m_host;
+            m_client.m_port = m_port;
+            m_client.m_conn = std::make_unique<Http2ConnImpl<SslSocket>>(
+                std::move(*m_client.m_socket), std::move(m_ring_buffer));
+
+            m_client.m_conn->setIsClient(true);
+            m_client.m_conn->localSettings() = m_local_settings;
+            m_client.m_conn->peerSettings() = m_peer_settings;
+            m_client.m_conn->encoder().setMaxTableSize(m_peer_settings.header_table_size);
+            m_client.m_conn->initStreamManager();
+
+            if (!m_scheduler) {
+                m_error = Http2ErrorCode::InternalError;
+                return true;
+            }
+            m_client.m_conn->streamManager()->startWithScheduler(
+                m_scheduler,
+                [](Http2Stream::ptr) -> Coroutine { co_return; });
+
+            if (m_settings_sent) {
+                m_client.m_conn->markSettingsSent();
+            }
+            if (m_settings_ack_received) {
+                m_client.m_conn->markSettingsAckReceived();
+            }
+
+            m_client.m_connected = true;
+            HTTP_LOG_INFO("[connect] [h2] [{}:{}]", m_client.m_host, m_client.m_port);
+            m_done = true;
+            return true;
+        }
+
+        bool parseNextFrame(Http2Frame::uptr& frame) {
+            auto read_iovecs = m_ring_buffer.getReadIovecs();
+            if (read_iovecs.empty()) {
+                return false;
+            }
+
+            size_t available = 0;
+            for (const auto& iov : read_iovecs) {
+                available += iov.iov_len;
+            }
+
+            if (available < kHttp2FrameHeaderLength) {
+                return false;
+            }
+
+            uint8_t header_buf[kHttp2FrameHeaderLength];
+            size_t copied = 0;
+            for (const auto& iov : read_iovecs) {
+                const size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
+                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= kHttp2FrameHeaderLength) {
+                    break;
+                }
+            }
+
+            Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
+            if (header.length > m_peer_settings.max_frame_size) {
+                m_error = Http2ErrorCode::FrameSizeError;
+                return false;
+            }
+
+            const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(header.length);
+            if (available < frame_size) {
+                return false;
+            }
+
+            std::vector<uint8_t> frame_buf(frame_size);
+            copied = 0;
+            for (const auto& iov : read_iovecs) {
+                const size_t to_copy = std::min(iov.iov_len, frame_size - copied);
+                std::memcpy(frame_buf.data() + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= frame_size) {
+                    break;
+                }
+            }
+
+            auto frame_result = Http2FrameParser::parseFrame(frame_buf.data(), frame_size);
+            m_ring_buffer.consume(frame_size);
+            if (!frame_result.has_value()) {
+                m_error = Http2ErrorCode::ProtocolError;
+                return false;
+            }
+
+            frame = std::move(frame_result.value());
+            return true;
+        }
+
+        bool consumeSettingsFrames() {
+            if (m_error.has_value()) {
+                return true;
             }
 
             while (true) {
-                auto frame_result = co_await client.m_conn->readFrame();
-                if (!frame_result) {
-                    if (frame_result.error() == Http2ErrorCode::NoError) {
-                        continue;
-                    }
-                    self->m_error = frame_result.error();
-                    self->m_done = true;
-                    co_return;
+                Http2Frame::uptr frame;
+                if (!parseNextFrame(frame)) {
+                    return m_error.has_value();
                 }
 
-                auto& frame = *frame_result;
+                if (!frame) {
+                    continue;
+                }
+
                 if (frame->type() != Http2FrameType::Settings) {
                     continue;
                 }
 
                 auto* settings = static_cast<Http2SettingsFrame*>(frame.get());
                 if (settings->isAck()) {
+                    m_settings_ack_received = true;
                     continue;
                 }
 
-                auto err = client.m_conn->peerSettings().applySettings(*settings);
+                auto err = m_peer_settings.applySettings(*settings);
                 if (err != Http2ErrorCode::NoError) {
-                    self->m_error = err;
-                    self->m_done = true;
-                    co_return;
+                    m_error = err;
+                    return true;
                 }
-                client.m_conn->encoder().setMaxTableSize(client.m_conn->peerSettings().header_table_size);
-                break;
-            }
 
-            auto ack_result = co_await client.m_conn->sendSettingsAck();
-            if (!ack_result) {
-                self->m_error = Http2ErrorCode::InternalError;
-                self->m_done = true;
-                co_return;
+                return true;
             }
-
-            client.m_connected = true;
-            HTTP_LOG_INFO("[connect] [h2] [{}:{}]", client.m_host, client.m_port);
-            self->m_done = true;
-            co_return;
         }
 
         H2Client& m_client;
         std::string m_host;
         uint16_t m_port;
-        bool m_started = false;
-        bool m_done = false;
+        ConnectIOContext m_connect_ctx;
+        HandshakeCtx m_handshake_ctx;
+        std::string m_preface_settings_buffer;
+        std::string m_ack_buffer;
+        ProtocolSendAwaitable m_preface_send;
+        ProtocolRecvAwaitable m_settings_recv;
+        ProtocolSendAwaitable m_ack_send;
+        RingBuffer m_ring_buffer{65536};
+        Http2Settings m_local_settings;
+        Http2Settings m_peer_settings;
+        bool m_settings_sent = false;
+        bool m_settings_ack_received = false;
         std::optional<Http2ErrorCode> m_error;
-        Coroutine m_flow;
+        bool m_done = false;
+        char m_dummy_recv_buffer[1]{0};
+        Scheduler* m_scheduler = nullptr;
 
     public:
-        std::optional<std::expected<void, IOError>> m_result;
+        std::expected<bool, IOError> m_result;
     };
 
-    /**
-     * @brief H2 请求等待体
-     */
-    class RequestAwaitable : public TimeoutSupport<RequestAwaitable>
+    class RequestAwaitable
+        : public CustomAwaitable
+        , public TimeoutSupport<RequestAwaitable>
     {
     public:
-        RequestAwaitable(H2Client& client, Http2Request&& request)
-            : m_client(client)
-            , m_request(std::move(request))
+        using SocketType = galay::ssl::SslSocket;
+        using SendAwaitableType = decltype(std::declval<SocketType>().send(
+            std::declval<const char*>(), std::declval<size_t>()));
+        using RecvAwaitableType = galay::http::SslRecvCompatAwaitable;
+
+        class ProtocolSendAwaitable : public SendAwaitableType
         {
-        }
-
-        bool await_ready() const noexcept { return false; }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (!m_started) {
-                m_started = true;
-                m_flow = runFlow(this);
-            }
-            return m_flow.wait().await_suspend(handle);
-        }
-
-        std::expected<std::optional<Http2Response>, Http2ErrorCode> await_resume() {
-            if (m_result.has_value() && !m_result->has_value()) {
-                return std::unexpected(Http2ErrorCode::InternalError);
-            }
-            if (m_error.has_value()) {
-                return std::unexpected(*m_error);
-            }
-            if (!m_done) {
-                return std::nullopt;
-            }
-            if (!m_response.has_value()) {
-                return std::nullopt;
-            }
-            return std::move(*m_response);
-        }
-
-        bool isInvalid() const { return !m_started || m_done || m_error.has_value(); }
-
-    private:
-        static Coroutine runFlow(RequestAwaitable* self) {
-            auto& client = self->m_client;
-            if (!client.m_connected || !client.m_conn) {
-                self->m_error = Http2ErrorCode::ConnectError;
-                self->m_done = true;
-                co_return;
+        public:
+            explicit ProtocolSendAwaitable(RequestAwaitable* owner)
+                : SendAwaitableType(owner->m_client.m_conn->socket().send(
+                    owner->m_send_buffer.data(), owner->m_send_buffer.size()))
+                , m_owner(owner)
+            {
+                initializeSendState();
             }
 
-            self->m_stream_id = client.m_next_stream_id;
-            client.m_next_stream_id += 2;
-            client.m_conn->createStream(self->m_stream_id);
+#ifdef USE_IOURING
+            bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+                if (m_owner->m_error.has_value() || m_owner->m_done) {
+                    return true;
+                }
+                if (m_completed) {
+                    return true;
+                }
+                if (cqe == nullptr) {
+                    return false;
+                }
+
+                this->m_sslResultSet = false;
+                const bool done = SendAwaitableType::handleComplete(cqe, handle);
+                if (!done) {
+                    return false;
+                }
+
+                auto send_result = std::move(this->m_sslResult);
+                this->m_sslResultSet = false;
+                if (!send_result.has_value()) {
+                    m_owner->setSslSendError(send_result.error());
+                    return true;
+                }
+
+                const size_t sent = send_result.value();
+                if (sent == 0) {
+                    return false;
+                }
+
+                m_offset += sent;
+                if (m_offset >= m_owner->m_send_buffer.size()) {
+                    m_completed = true;
+                    return true;
+                }
+
+                this->m_plainBuffer = m_owner->m_send_buffer.data() + m_offset;
+                this->m_plainLength = m_owner->m_send_buffer.size() - m_offset;
+                return false;
+            }
+#else
+            bool handleComplete(GHandle handle) override {
+                while (true) {
+                    if (m_owner->m_error.has_value() || m_owner->m_done) {
+                        return true;
+                    }
+                    if (m_completed) {
+                        return true;
+                    }
+
+                    this->m_sslResultSet = false;
+                    const bool done = SendAwaitableType::handleComplete(handle);
+                    if (!done) {
+                        return false;
+                    }
+
+                    auto send_result = std::move(this->m_sslResult);
+                    this->m_sslResultSet = false;
+                    if (!send_result.has_value()) {
+                        m_owner->setSslSendError(send_result.error());
+                        return true;
+                    }
+
+                    const size_t sent = send_result.value();
+                    if (sent == 0) {
+                        return false;
+                    }
+
+                    m_offset += sent;
+                    if (m_offset >= m_owner->m_send_buffer.size()) {
+                        m_completed = true;
+                        return true;
+                    }
+
+                    this->m_plainBuffer = m_owner->m_send_buffer.data() + m_offset;
+                    this->m_plainLength = m_owner->m_send_buffer.size() - m_offset;
+                }
+            }
+#endif
+
+        private:
+            void initializeSendState() {
+                m_offset = 0;
+                m_completed = m_owner->m_send_buffer.empty();
+                this->m_plainBuffer = m_completed ? nullptr : m_owner->m_send_buffer.data();
+                this->m_plainLength = m_completed ? 0 : m_owner->m_send_buffer.size();
+                this->m_plainOffset = 0;
+                this->m_cipherLength = 0;
+                this->m_sslResultSet = false;
+                this->m_buffer = nullptr;
+                this->m_length = 0;
+                if (m_completed) {
+                    this->m_sslResult = size_t{0};
+                    this->m_sslResultSet = true;
+                    return;
+                }
+                this->fillNextSendChunk();
+            }
+
+            RequestAwaitable* m_owner;
+            size_t m_offset = 0;
+            bool m_completed = false;
+        };
+
+        class ProtocolRecvAwaitable : public RecvAwaitableType
+        {
+        public:
+            explicit ProtocolRecvAwaitable(RequestAwaitable* owner)
+                : RecvAwaitableType(owner->m_client.m_conn->socket().recv(
+                    owner->m_dummy_recv_buffer, sizeof(owner->m_dummy_recv_buffer)))
+                , m_owner(owner)
+            {
+            }
+
+#ifdef USE_IOURING
+            bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
+                if (m_owner->m_error.has_value() || m_owner->m_done) {
+                    return true;
+                }
+
+                if (m_owner->consumeResponseFrames()) {
+                    return true;
+                }
+
+                if (!prepareRecvWindow()) {
+                    m_owner->m_error = Http2ErrorCode::InternalError;
+                    return true;
+                }
+
+                if (cqe == nullptr) {
+                    return false;
+                }
+
+                this->m_sslResultSet = false;
+                const bool done = RecvAwaitableType::handleComplete(cqe, handle);
+                if (!done) {
+                    return false;
+                }
+
+                auto recv_result = std::move(this->m_sslResult);
+                this->m_sslResultSet = false;
+                if (!recv_result.has_value()) {
+                    m_owner->setSslRecvError(recv_result.error());
+                    return true;
+                }
+
+                const size_t bytes_read = recv_result.value().size();
+                if (bytes_read == 0) {
+                    m_owner->m_error = Http2ErrorCode::ConnectError;
+                    return true;
+                }
+
+                m_owner->m_client.m_conn->ringBuffer().produce(bytes_read);
+                return m_owner->consumeResponseFrames();
+            }
+#else
+            bool handleComplete(GHandle handle) override {
+                while (true) {
+                    if (m_owner->m_error.has_value() || m_owner->m_done) {
+                        return true;
+                    }
+
+                    if (m_owner->consumeResponseFrames()) {
+                        return true;
+                    }
+
+                    if (!prepareRecvWindow()) {
+                        m_owner->m_error = Http2ErrorCode::InternalError;
+                        return true;
+                    }
+
+                    this->m_sslResultSet = false;
+                    const bool done = RecvAwaitableType::handleComplete(handle);
+                    if (!done) {
+                        return false;
+                    }
+
+                    auto recv_result = std::move(this->m_sslResult);
+                    this->m_sslResultSet = false;
+                    if (!recv_result.has_value()) {
+                        m_owner->setSslRecvError(recv_result.error());
+                        return true;
+                    }
+
+                    const size_t bytes_read = recv_result.value().size();
+                    if (bytes_read == 0) {
+                        m_owner->m_error = Http2ErrorCode::ConnectError;
+                        return true;
+                    }
+
+                    m_owner->m_client.m_conn->ringBuffer().produce(bytes_read);
+                }
+            }
+#endif
+
+        private:
+            bool prepareRecvWindow() {
+                auto write_iovecs = m_owner->m_client.m_conn->ringBuffer().getWriteIovecs();
+                if (write_iovecs.empty()) {
+                    return false;
+                }
+                this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
+                this->m_plainLength = write_iovecs[0].iov_len;
+                return this->m_plainLength > 0;
+            }
+
+            RequestAwaitable* m_owner;
+        };
+
+        RequestAwaitable(H2Client& client, Http2Request&& request)
+            : CustomAwaitable(client.m_conn
+                              ? client.m_conn->socket().controller()
+                              : client.m_dummy_socket.controller())
+            , m_client(client)
+            , m_request(std::move(request))
+            , m_send_awaitable(this)
+            , m_recv_awaitable(this)
+            , m_result(true)
+        {
+            if (!m_client.m_connected || !m_client.m_conn) {
+                m_error = Http2ErrorCode::ConnectError;
+                m_done = true;
+                return;
+            }
+
+            if (m_client.m_conn->isDraining() || m_client.m_conn->isGoawayReceived()) {
+                m_error = Http2ErrorCode::RefusedStream;
+                m_done = true;
+                return;
+            }
+
+            m_stream_id = m_client.m_next_stream_id;
+            m_client.m_next_stream_id += 2;
+            m_client.m_conn->createStream(m_stream_id);
 
             std::vector<Http2HeaderField> headers;
-            headers.push_back({":method", self->m_request.method});
-            headers.push_back({":scheme", self->m_request.scheme});
-            headers.push_back({":authority", self->m_request.authority});
-            headers.push_back({":path", self->m_request.path.empty() ? "/" : self->m_request.path});
-            for (const auto& h : self->m_request.headers) {
+            headers.push_back({":method", m_request.method});
+            headers.push_back({":scheme", m_request.scheme});
+            headers.push_back({":authority", m_request.authority});
+            headers.push_back({":path", m_request.path.empty() ? "/" : m_request.path});
+            for (const auto& h : m_request.headers) {
                 headers.push_back(h);
             }
 
-            bool end_stream = self->m_request.body.empty();
-            auto send_headers_result = co_await client.m_conn->sendHeaders(self->m_stream_id, headers, end_stream, true);
-            if (!send_headers_result) {
-                self->m_error = Http2ErrorCode::InternalError;
-                self->m_done = true;
-                co_return;
+            Http2HeadersFrame headers_frame;
+            headers_frame.header().stream_id = m_stream_id;
+            headers_frame.setHeaderBlock(m_client.m_conn->encoder().encode(headers));
+            headers_frame.setEndHeaders(true);
+            headers_frame.setEndStream(m_request.body.empty());
+            m_send_buffer = headers_frame.serialize();
+
+            if (!m_request.body.empty()) {
+                Http2DataFrame data_frame;
+                data_frame.header().stream_id = m_stream_id;
+                data_frame.setData(m_request.body);
+                data_frame.setEndStream(true);
+                m_send_buffer.append(data_frame.serialize());
             }
 
-            if (!self->m_request.body.empty()) {
-                auto send_data_result = co_await client.m_conn->sendDataFrame(self->m_stream_id, self->m_request.body, true);
-                if (!send_data_result) {
-                    self->m_error = Http2ErrorCode::InternalError;
-                    self->m_done = true;
-                    co_return;
+            m_send_awaitable = ProtocolSendAwaitable(this);
+
+            addTask(IOEventType::SEND, &m_send_awaitable);
+            addTask(IOEventType::RECV, &m_recv_awaitable);
+        }
+
+        bool await_ready() const noexcept { return m_done; }
+        using CustomAwaitable::await_suspend;
+
+        std::expected<std::optional<Http2Response>, Http2ErrorCode> await_resume() {
+            if (m_done && m_error.has_value()) {
+                return std::unexpected(*m_error);
+            }
+
+            onCompleted();
+
+            if (!m_result.has_value()) {
+                return std::unexpected(Http2ErrorCode::InternalError);
+            }
+
+            if (m_error.has_value()) {
+                return std::unexpected(*m_error);
+            }
+
+            if (!m_done || !m_response.has_value()) {
+                return std::nullopt;
+            }
+
+            return std::move(*m_response);
+        }
+
+        bool isInvalid() const { return m_done || m_error.has_value(); }
+
+    private:
+        friend class ProtocolSendAwaitable;
+        friend class ProtocolRecvAwaitable;
+
+        void setSslSendError(const galay::ssl::SslError& error) {
+            HTTP_LOG_ERROR("[h2] [send-fail] [{}]", error.message());
+            m_error = Http2ErrorCode::InternalError;
+        }
+
+        void setSslRecvError(const galay::ssl::SslError& error) {
+            HTTP_LOG_ERROR("[h2] [recv-fail] [{}]", error.message());
+            m_error = Http2ErrorCode::InternalError;
+        }
+
+        bool parseNextFrame(Http2Frame::uptr& frame) {
+            auto& ring_buffer = m_client.m_conn->ringBuffer();
+            auto read_iovecs = ring_buffer.getReadIovecs();
+            if (read_iovecs.empty()) {
+                return false;
+            }
+
+            size_t available = 0;
+            for (const auto& iov : read_iovecs) {
+                available += iov.iov_len;
+            }
+
+            if (available < kHttp2FrameHeaderLength) {
+                return false;
+            }
+
+            uint8_t header_buf[kHttp2FrameHeaderLength];
+            size_t copied = 0;
+            for (const auto& iov : read_iovecs) {
+                const size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
+                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= kHttp2FrameHeaderLength) {
+                    break;
                 }
             }
 
-            Http2Response response;
-            while (true) {
-                auto frame_result = co_await client.m_conn->readFrame();
-                if (!frame_result) {
-                    if (frame_result.error() == Http2ErrorCode::NoError) {
-                        continue;
+            Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
+            if (header.length > m_client.m_conn->peerSettings().max_frame_size) {
+                m_error = Http2ErrorCode::FrameSizeError;
+                return false;
+            }
+
+            const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(header.length);
+            if (available < frame_size) {
+                return false;
+            }
+
+            std::vector<uint8_t> frame_buf(frame_size);
+            copied = 0;
+            for (const auto& iov : read_iovecs) {
+                const size_t to_copy = std::min(iov.iov_len, frame_size - copied);
+                std::memcpy(frame_buf.data() + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= frame_size) {
+                    break;
+                }
+            }
+
+            auto frame_result = Http2FrameParser::parseFrame(frame_buf.data(), frame_size);
+            ring_buffer.consume(frame_size);
+            if (!frame_result.has_value()) {
+                m_error = Http2ErrorCode::ProtocolError;
+                return false;
+            }
+
+            frame = std::move(frame_result.value());
+            return true;
+        }
+
+        bool decodeHeaderBlock() {
+            auto decode_result = m_client.m_conn->decoder().decode(m_header_block);
+            if (!decode_result.has_value()) {
+                m_error = Http2ErrorCode::CompressionError;
+                return false;
+            }
+
+            for (const auto& field : decode_result.value()) {
+                if (field.name == ":status") {
+                    try {
+                        m_response_data.status = std::stoi(field.value);
+                    } catch (...) {
+                        m_error = Http2ErrorCode::ProtocolError;
+                        return false;
                     }
-                    self->m_error = frame_result.error();
-                    self->m_done = true;
-                    co_return;
+                } else {
+                    m_response_data.headers.push_back(field);
+                }
+            }
+
+            m_header_block.clear();
+            return true;
+        }
+
+        bool consumeResponseFrames() {
+            if (m_error.has_value() || m_done) {
+                return true;
+            }
+
+            while (true) {
+                Http2Frame::uptr frame;
+                if (!parseNextFrame(frame)) {
+                    return m_error.has_value() || m_done;
                 }
 
-                auto& frame = *frame_result;
-                auto stream = client.m_conn->getStream(self->m_stream_id);
+                if (!frame) {
+                    continue;
+                }
 
                 switch (frame->type()) {
                     case Http2FrameType::Settings: {
                         auto* settings = static_cast<Http2SettingsFrame*>(frame.get());
-                        if (!settings->isAck()) {
-                            auto err = client.m_conn->peerSettings().applySettings(*settings);
+                        if (settings->isAck()) {
+                            m_client.m_conn->markSettingsAckReceived();
+                        } else {
+                            auto err = m_client.m_conn->peerSettings().applySettings(*settings);
                             if (err != Http2ErrorCode::NoError) {
-                                co_await client.m_conn->sendGoaway(err);
-                                co_return;
+                                m_error = err;
+                                return true;
                             }
                         }
                         continue;
                     }
                     case Http2FrameType::Headers: {
                         auto* hdrs = static_cast<Http2HeadersFrame*>(frame.get());
-                        if (frame->streamId() != self->m_stream_id) {
+                        if (frame->streamId() != m_stream_id) {
                             continue;
                         }
 
-                        if (stream) {
-                            stream->appendHeaderBlock(hdrs->headerBlock());
-                            if (hdrs->isEndHeaders()) {
-                                auto decode_result = client.m_conn->decoder().decode(stream->headerBlock());
-                                if (!decode_result) {
-                                    self->m_error = Http2ErrorCode::CompressionError;
-                                    self->m_done = true;
-                                    co_return;
-                                }
-                                stream->clearHeaderBlock();
+                        m_header_block.append(hdrs->headerBlock());
+                        if (hdrs->isEndHeaders()) {
+                            if (!decodeHeaderBlock()) {
+                                return true;
+                            }
+                            if (hdrs->isEndStream()) {
+                                m_response = std::move(m_response_data);
+                                m_done = true;
+                                return true;
+                            }
+                        }
+                        continue;
+                    }
+                    case Http2FrameType::Continuation: {
+                        auto* cont = static_cast<Http2ContinuationFrame*>(frame.get());
+                        if (frame->streamId() != m_stream_id) {
+                            continue;
+                        }
 
-                                for (const auto& field : *decode_result) {
-                                    if (field.name == ":status") {
-                                        try {
-                                            response.status = std::stoi(field.value);
-                                        } catch (...) {
-                                            self->m_error = Http2ErrorCode::ProtocolError;
-                                            self->m_done = true;
-                                            co_return;
-                                        }
-                                    } else {
-                                        response.headers.push_back(field);
-                                    }
-                                }
-
-                                if (hdrs->isEndStream()) {
-                                    self->m_response = std::move(response);
-                                    self->m_done = true;
-                                    co_return;
-                                }
+                        m_header_block.append(cont->headerBlock());
+                        if (cont->isEndHeaders()) {
+                            if (!decodeHeaderBlock()) {
+                                return true;
                             }
                         }
                         continue;
                     }
                     case Http2FrameType::Data: {
                         auto* data = static_cast<Http2DataFrame*>(frame.get());
-                        if (frame->streamId() != self->m_stream_id) {
+                        if (frame->streamId() != m_stream_id) {
                             continue;
                         }
 
-                        response.body.append(data->data());
+                        m_response_data.body.append(data->data());
                         if (data->isEndStream()) {
-                            self->m_response = std::move(response);
-                            self->m_done = true;
-                            co_return;
+                            m_response = std::move(m_response_data);
+                            m_done = true;
+                            return true;
                         }
                         continue;
                     }
-                    case Http2FrameType::WindowUpdate:
-                        continue;
                     case Http2FrameType::GoAway:
-                        self->m_error = Http2ErrorCode::ProtocolError;
-                        self->m_done = true;
-                        co_return;
+                        if (auto* goaway = frame->asGoAway()) {
+                            m_client.m_conn->markGoawayReceived(
+                                goaway->lastStreamId(), goaway->errorCode(), goaway->debugData());
+                            m_error = (m_stream_id > goaway->lastStreamId())
+                                ? Http2ErrorCode::RefusedStream
+                                : Http2ErrorCode::ProtocolError;
+                        } else {
+                            m_error = Http2ErrorCode::ProtocolError;
+                        }
+                        m_done = true;
+                        return true;
                     case Http2FrameType::RstStream:
-                        if (frame->streamId() == self->m_stream_id) {
-                            self->m_error = Http2ErrorCode::StreamClosed;
-                            self->m_done = true;
-                            co_return;
+                        if (frame->streamId() == m_stream_id) {
+                            m_error = Http2ErrorCode::StreamClosed;
+                            m_done = true;
+                            return true;
                         }
                         continue;
                     default:
@@ -425,15 +1199,87 @@ public:
 
         H2Client& m_client;
         Http2Request m_request;
+        std::string m_send_buffer;
+        std::string m_header_block;
+        Http2Response m_response_data;
         std::optional<Http2Response> m_response;
         uint32_t m_stream_id = 0;
-        bool m_started = false;
-        bool m_done = false;
+        ProtocolSendAwaitable m_send_awaitable;
+        ProtocolRecvAwaitable m_recv_awaitable;
         std::optional<Http2ErrorCode> m_error;
-        Coroutine m_flow;
+        bool m_done = false;
+        char m_dummy_recv_buffer[1]{0};
 
     public:
-        std::optional<std::expected<void, IOError>> m_result;
+        std::expected<bool, IOError> m_result;
+    };
+
+    class CloseAwaitable : public TimeoutSupport<CloseAwaitable>
+    {
+    public:
+        explicit CloseAwaitable(H2Client& client)
+            : m_client(client)
+        {
+        }
+
+        bool await_ready() const noexcept { return false; }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (!m_started) {
+                m_started = true;
+                m_wait_result.emplace(m_client.closeImpl().wait());
+            }
+            return m_wait_result->await_suspend(handle);
+        }
+
+        CloseAwaitable& wait() & { return *this; }
+        CloseAwaitable&& wait() && { return std::move(*this); }
+
+        std::expected<bool, Http2ErrorCode> await_resume() {
+            return m_client.m_close_result;
+        }
+
+    private:
+        H2Client& m_client;
+        bool m_started = false;
+        std::optional<WaitResult> m_wait_result;
+    };
+
+    class RuntimeConnectAwaitable : public TimeoutSupport<RuntimeConnectAwaitable>
+    {
+    public:
+        RuntimeConnectAwaitable(H2Client& client, std::string host, uint16_t port)
+            : m_client(client)
+            , m_host(std::move(host))
+            , m_port(port)
+        {
+        }
+
+        bool await_ready() const noexcept { return false; }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (!m_started) {
+                m_started = true;
+                m_wait_result.emplace(m_client.connectImpl(m_host, m_port).wait());
+            }
+            return m_wait_result->await_suspend(handle);
+        }
+
+        RuntimeConnectAwaitable& wait() & { return *this; }
+        RuntimeConnectAwaitable&& wait() && { return std::move(*this); }
+
+        std::expected<bool, Http2ErrorCode> await_resume() {
+            return m_client.m_connect_result;
+        }
+
+    private:
+        H2Client& m_client;
+        std::string m_host;
+        uint16_t m_port;
+        bool m_started = false;
+        std::optional<WaitResult> m_wait_result;
     };
 
 public:
@@ -443,10 +1289,8 @@ public:
         , m_next_stream_id(1)
         , m_ssl_ctx(SslMethod::TLS_Client)
     {
-        // 设置 ALPN 协议列表，优先 h2
         m_ssl_ctx.setALPNProtocols({"h2"});
 
-        // 配置证书验证
         if (config.verify_peer) {
             m_ssl_ctx.setVerifyMode(SslVerifyMode::Peer);
             if (!config.ca_path.empty()) {
@@ -464,48 +1308,56 @@ public:
     H2Client(const H2Client&) = delete;
     H2Client& operator=(const H2Client&) = delete;
 
-    /**
-     * @brief 连接到服务器（包含 TLS 握手和 HTTP/2 协商）
-     */
-    ConnectAwaitable connect(const std::string& host, uint16_t port = 443) {
-        return ConnectAwaitable(*this, host, port);
+    RuntimeConnectAwaitable connect(const std::string& host, uint16_t port = 443) {
+        return RuntimeConnectAwaitable(*this, host, port);
     }
 
-    /**
-     * @brief 发送 GET 请求
-     */
-    RequestAwaitable get(const std::string& path) {
-        return createRequest("GET", path, "");
-    }
-
-    /**
-     * @brief 发送 POST 请求
-     */
-    RequestAwaitable post(const std::string& path,
-                            const std::string& body,
-                            const std::string& content_type = "application/x-www-form-urlencoded") {
-        return createRequest("POST", path, body, {{"content-type", content_type}});
-    }
-
-    /**
-     * @brief 关闭连接
-     */
-    auto close() {
-        m_connected = false;
-        if (m_conn) {
-            return m_conn->close();
+    Http2Stream::ptr get(const std::string& path) {
+        if (!m_connected || !m_conn || !m_conn->streamManager()) {
+            HTTP_LOG_ERROR("[h2] [get] [not-ready]");
+            return nullptr;
         }
-        if (m_socket) {
-            return m_socket->close();
+
+        auto* mgr = m_conn->streamManager();
+        auto stream = mgr->allocateStream();
+        std::vector<Http2HeaderField> headers{
+            {":method", "GET"},
+            {":scheme", "https"},
+            {":authority", m_host + ":" + std::to_string(m_port)},
+            {":path", path.empty() ? "/" : path}
+        };
+        stream->sendHeaders(headers, true);
+        return stream;
+    }
+
+    Http2Stream::ptr post(const std::string& path,
+                          const std::string& body,
+                          const std::string& content_type = "application/x-www-form-urlencoded") {
+        if (!m_connected || !m_conn || !m_conn->streamManager()) {
+            HTTP_LOG_ERROR("[h2] [post] [not-ready]");
+            return nullptr;
         }
-        return m_dummy_socket.close();
+
+        auto* mgr = m_conn->streamManager();
+        auto stream = mgr->allocateStream();
+        std::vector<Http2HeaderField> headers{
+            {":method", "POST"},
+            {":scheme", "https"},
+            {":authority", m_host + ":" + std::to_string(m_port)},
+            {":path", path.empty() ? "/" : path},
+            {"content-type", content_type}
+        };
+        stream->sendHeaders(headers, false);
+        stream->sendData(body, true);
+        return stream;
+    }
+
+    CloseAwaitable close() {
+        return CloseAwaitable(*this);
     }
 
     bool isConnected() const { return m_connected; }
 
-    /**
-     * @brief 获取协商的 ALPN 协议
-     */
     std::string getALPNProtocol() const {
         if (m_socket) {
             return m_socket->getALPNProtocol();
@@ -514,19 +1366,8 @@ public:
     }
 
 private:
-    RequestAwaitable createRequest(const std::string& method,
-                                     const std::string& path,
-                                     const std::string& body,
-                                     const std::vector<Http2HeaderField>& headers = {}) {
-        Http2Request req;
-        req.method = method;
-        req.path = path;
-        req.body = body;
-        req.scheme = "https";
-        req.authority = m_host + ":" + std::to_string(m_port);
-        req.headers = headers;
-        return RequestAwaitable(*this, std::move(req));
-    }
+    Coroutine connectImpl(std::string host, uint16_t port);
+    Coroutine closeImpl();
 
     H2ClientConfig m_config;
     std::string m_host;
@@ -539,7 +1380,108 @@ private:
     SslSocket m_dummy_socket{nullptr};
     std::unique_ptr<SslSocket> m_socket;
     std::unique_ptr<Http2ConnImpl<SslSocket>> m_conn;
+    std::expected<bool, Http2ErrorCode> m_connect_result{true};
+    std::expected<bool, Http2ErrorCode> m_close_result{true};
 };
+
+inline Coroutine H2Client::connectImpl(std::string host, uint16_t port) {
+    m_connected = false;
+    m_host = std::move(host);
+    m_port = port;
+    m_conn.reset();
+    m_connect_result = std::unexpected(Http2ErrorCode::ConnectError);
+
+    m_socket = std::make_unique<SslSocket>(&m_ssl_ctx);
+    auto nonblock_result = m_socket->option().handleNonBlock();
+    if (!nonblock_result) {
+        HTTP_LOG_ERROR("[h2] [connect] [nonblock-fail] [{}]", nonblock_result.error().message());
+        co_await m_socket->close();
+        m_socket.reset();
+        co_return;
+    }
+
+    (void)m_socket->setHostname(m_host);
+
+    Host server_host(IPType::IPV4, m_host, m_port);
+    auto connect_result = co_await m_socket->connect(server_host);
+    if (!connect_result) {
+        HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", connect_result.error().message());
+        co_await m_socket->close();
+        m_socket.reset();
+        co_return;
+    }
+
+    auto handshake_result = co_await m_socket->handshake();
+    if (!handshake_result) {
+        HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
+        co_await m_socket->close();
+        m_socket.reset();
+        co_return;
+    }
+
+    m_alpn_protocol = m_socket->getALPNProtocol();
+    if (m_alpn_protocol != "h2") {
+        HTTP_LOG_ERROR("[h2] [alpn-fail] [got={}] [expect=h2]", m_alpn_protocol);
+        co_await m_socket->close();
+        m_socket.reset();
+        co_return;
+    }
+
+    m_conn = std::make_unique<Http2ConnImpl<SslSocket>>(std::move(*m_socket));
+    m_socket.reset();
+    m_conn->setIsClient(true);
+
+    m_conn->localSettings().max_concurrent_streams = m_config.max_concurrent_streams;
+    m_conn->localSettings().initial_window_size = m_config.initial_window_size;
+    m_conn->localSettings().max_frame_size = m_config.max_frame_size;
+    m_conn->localSettings().max_header_list_size = m_config.max_header_list_size;
+    m_conn->localSettings().enable_push = 0;
+
+    std::string preface(kHttp2ConnectionPreface.begin(), kHttp2ConnectionPreface.end());
+    Http2SettingsFrame settings = m_conn->localSettings().toFrame();
+    settings.header().stream_id = 0;
+    preface.append(settings.serialize());
+
+    auto send_preface_result = co_await m_conn->writeRaw(std::move(preface));
+    if (!send_preface_result) {
+        HTTP_LOG_ERROR("[h2] [preface-send-fail] [code={}]",
+                       http2ErrorCodeToString(send_preface_result.error()));
+        co_await m_conn->close();
+        m_conn.reset();
+        co_return;
+    }
+
+    m_conn->markSettingsSent();
+    m_conn->initStreamManager();
+    co_await m_conn->streamManager()->startInBackground(
+        [](Http2Stream::ptr) -> Coroutine { co_return; });
+
+    m_connected = true;
+    m_connect_result = true;
+    HTTP_LOG_INFO("[connect] [h2] [{}:{}]", m_host, m_port);
+    co_return;
+}
+
+inline Coroutine H2Client::closeImpl() {
+    m_connected = false;
+
+    if (m_conn) {
+        if (auto* mgr = m_conn->streamManager()) {
+            co_await mgr->shutdown(Http2ErrorCode::NoError).wait();
+        } else {
+            co_await m_conn->close();
+        }
+        m_conn.reset();
+    }
+
+    if (m_socket) {
+        co_await m_socket->close();
+        m_socket.reset();
+    }
+
+    m_close_result = true;
+    co_return;
+}
 
 inline H2Client H2ClientBuilder::build() const { return H2Client(m_config); }
 

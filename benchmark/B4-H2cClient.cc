@@ -33,7 +33,17 @@ struct ActiveClientGuard {
 };
 
 Coroutine handleStream(Http2Stream::ptr stream) {
-    co_await stream->readResponse().wait();
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            fail_count++;
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
     auto& response = stream->response();
 
     if (response.status == 200 && response.body == kEchoPayload) {
@@ -68,19 +78,19 @@ Coroutine runClient(std::shared_ptr<H2cClient> client,
             std::cerr << "[connect-fail] " << connect_result.error().message() << "\n";
         }
         fail_count += requests_per_client;
-        co_await client->shutdown().wait();
+        co_await client->shutdown();
         co_return;
     }
 
     // 升级到 HTTP/2（内部启动 StreamManager）
-    co_await client->upgrade("/").wait();
-    if (!client->isUpgraded()) {
+    auto upgrade_result = co_await client->upgrade("/");
+    if (!upgrade_result) {
         int idx = upgrade_failures.fetch_add(1);
         if (idx < 5) {
-            std::cerr << "[upgrade-fail]\n";
+            std::cerr << "[upgrade-fail] " << upgrade_result.error().toString() << "\n";
         }
         fail_count += requests_per_client;
-        co_await client->shutdown().wait();
+        co_await client->shutdown();
         co_return;
     }
 
@@ -103,7 +113,7 @@ Coroutine runClient(std::shared_ptr<H2cClient> client,
         co_await handleStream(stream).wait();
     }
 
-    co_await client->shutdown().wait();
+    co_await client->shutdown();
     co_return;
 }
 

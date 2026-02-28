@@ -47,19 +47,29 @@ Coroutine runClient(const std::string& host, uint16_t port, int num_requests) {
     }
 
     for (int i = 0; i < num_requests; i++) {
-        auto stream = co_await client.get("/h2/test");
+        auto stream = client.get("/h2/test");
         if (!stream) {
             g_fail++;
             continue;
         }
 
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result || !frame_result.value()) {
-            g_fail++;
-            continue;
+        bool finished = false;
+        while (!finished) {
+            auto frame_result = co_await stream->getFrame();
+            if (!frame_result || !frame_result.value()) {
+                break;
+            }
+            auto frame = std::move(frame_result.value());
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+            }
         }
 
-        g_success++;
+        if (finished) {
+            g_success++;
+        } else {
+            g_fail++;
+        }
     }
 
     co_await client.close();

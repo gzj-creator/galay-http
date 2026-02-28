@@ -26,7 +26,16 @@ void signalHandler(int) {
 Coroutine handleStream(Http2Stream::ptr stream) {
     g_requests++;
 
-    co_await stream->readRequest().wait();
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
     auto& req = stream->request();
     if (req.method.empty()) {
         co_return;
@@ -35,13 +44,16 @@ Coroutine handleStream(Http2Stream::ptr stream) {
     HTTP_LOG_INFO("[h2] [req] [{}] [{}] [stream={}]", req.method, req.path, stream->streamId());
 
     std::string body = req.body.empty() ? "Echo: (empty)" : ("Echo: " + req.body);
-    co_await stream->replyAndWait(
+    co_await stream->replyHeader(
         Http2Headers()
             .status(200)
             .contentType("text/plain")
             .server("Galay-H2-Echo/1.0")
             .contentLength(body.size()),
-        body).wait();
+        body.empty());
+    if (!body.empty()) {
+        co_await stream->replyData(body, true);
+    }
     co_return;
 }
 

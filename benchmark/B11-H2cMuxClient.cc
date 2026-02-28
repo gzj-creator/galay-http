@@ -43,7 +43,17 @@ static Stats g;
  * 单个 stream 的响应处理协程（由 spawn 并发运行）
  */
 Coroutine handleResponse(Http2Stream::ptr stream) {
-    co_await stream->readResponse().wait();
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            g.fail++;
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
     auto& resp = stream->response();
 
     if (resp.status == 200 && resp.body == kPayload) {
@@ -72,18 +82,18 @@ Coroutine runConnection(std::shared_ptr<H2cClient> client,
                       << conn_result.error().message() << "\n";
         }
         g.fail += static_cast<int64_t>(streams_per_conn) * rounds;
-        co_await client->shutdown().wait();
+        co_await client->shutdown();
         g.active--;
         co_return;
     }
 
-    co_await client->upgrade("/").wait();
-    if (!client->isUpgraded()) {
+    auto upgrade_result = co_await client->upgrade("/");
+    if (!upgrade_result) {
         if (g.upgrade_err.fetch_add(1) < 3) {
-            std::cerr << "[conn " << id << "] upgrade failed\n";
+            std::cerr << "[conn " << id << "] upgrade failed: " << upgrade_result.error().toString() << "\n";
         }
         g.fail += static_cast<int64_t>(streams_per_conn) * rounds;
-        co_await client->shutdown().wait();
+        co_await client->shutdown();
         g.active--;
         co_return;
     }
@@ -119,7 +129,7 @@ Coroutine runConnection(std::shared_ptr<H2cClient> client,
         }
     }
 
-    co_await client->shutdown().wait();
+    co_await client->shutdown();
     g.active--;
     co_return;
 }

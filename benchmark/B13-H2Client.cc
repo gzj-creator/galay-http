@@ -62,20 +62,31 @@ Coroutine runClient(int id,
     connected_clients++;
 
     for (int i = 0; i < requests_per_client; i++) {
-        auto req_result = co_await client.post("/echo", kEchoPayload, "text/plain");
+        auto stream = client.post("/echo", kEchoPayload, "text/plain");
         total_requests++;
-        if (!req_result) {
+        if (!stream) {
             fail_count++;
             continue;
         }
 
-        auto response_opt = req_result.value();
-        if (!response_opt.has_value()) {
+        bool finished = false;
+        while (!finished) {
+            auto frame_result = co_await stream->getFrame();
+            if (!frame_result || !frame_result.value()) {
+                break;
+            }
+            auto frame = std::move(frame_result.value());
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+            }
+        }
+
+        if (!finished) {
             fail_count++;
             continue;
         }
 
-        auto& response = response_opt.value();
+        auto& response = stream->response();
         if (response.status == 200 && response.body == kEchoPayload) {
             success_count++;
         } else {

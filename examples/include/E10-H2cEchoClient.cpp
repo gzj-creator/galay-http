@@ -33,9 +33,9 @@ Coroutine runClient(const std::string& host, uint16_t port) {
 
     // 升级到 HTTP/2（内部启动 StreamManager）
     std::cout << "Upgrading to HTTP/2...\n";
-    co_await client.upgrade("/").wait();
-    if (!client.isUpgraded()) {
-        std::cerr << "Upgrade failed\n";
+    auto upgrade_result = co_await client.upgrade("/");
+    if (!upgrade_result) {
+        std::cerr << "Upgrade failed: " << upgrade_result.error().toString() << "\n";
         co_return;
     }
     std::cout << "Upgraded to HTTP/2!\n\n";
@@ -54,14 +54,25 @@ Coroutine runClient(const std::string& host, uint16_t port) {
         false, true);
     stream->sendData(body, true);
 
-    co_await stream->readResponse().wait();
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            std::cerr << "Response stream closed unexpectedly\n";
+            co_await client.shutdown();
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
     auto& response = stream->response();
 
     std::cout << "Status: " << response.status << "\n";
     std::cout << "Body: " << response.body << "\n\n";
 
     // 优雅关闭
-    co_await client.shutdown().wait();
+    co_await client.shutdown();
     std::cout << "Connection closed.\n";
 
     co_return;
