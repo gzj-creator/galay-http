@@ -15,6 +15,7 @@
 #include <string>
 #include <optional>
 #include <coroutine>
+#include <utility>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
@@ -819,9 +820,19 @@ public:
         return m_writer.sendText(text, fin);
     }
 
+    // 便捷方法：发送文本消息（移动语义）
+    SendFrameAwaitableImpl<SocketType> sendText(std::string&& text, bool fin = true) {
+        return m_writer.sendText(std::move(text), fin);
+    }
+
     // 便捷方法：发送二进制消息
     SendFrameAwaitableImpl<SocketType> sendBinary(const std::string& data, bool fin = true) {
         return m_writer.sendBinary(data, fin);
+    }
+
+    // 便捷方法：发送二进制消息（移动语义）
+    SendFrameAwaitableImpl<SocketType> sendBinary(std::string&& data, bool fin = true) {
+        return m_writer.sendBinary(std::move(data), fin);
     }
 
     // 便捷方法：发送Ping

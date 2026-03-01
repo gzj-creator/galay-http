@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 
 namespace galay::websocket
 {
@@ -105,6 +106,14 @@ struct WsFrame
         header.fin = fin;
         header.opcode = opcode;
         header.payload_length = data.size();
+    }
+
+    WsFrame(WsOpcode opcode, std::string&& data, bool fin = true)
+        : payload(std::move(data))
+    {
+        header.fin = fin;
+        header.opcode = opcode;
+        header.payload_length = payload.size();
     }
 
     // 便捷的帧类型判断方法

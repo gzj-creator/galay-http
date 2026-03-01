@@ -1,5 +1,7 @@
 #include "WebSocketFrame.h"
+#include <algorithm>
 #include <cstring>
+#include <limits>
 #include <random>
 
 // SIMD 支持检测
@@ -14,19 +16,91 @@
 namespace galay::websocket
 {
 
+namespace {
+
+class IovecCursor {
+public:
+    IovecCursor(const std::vector<iovec>& iovecs, size_t total_length)
+        : m_iovecs(iovecs)
+        , m_total_length(total_length)
+        , m_iov_index(0)
+        , m_iov_offset(0)
+        , m_consumed(0)
+    {
+    }
+
+    size_t consumed() const {
+        return m_consumed;
+    }
+
+    size_t remaining() const {
+        return m_total_length - m_consumed;
+    }
+
+    bool readByte(uint8_t& out) {
+        return readBytes(&out, 1);
+    }
+
+    bool readBytes(void* dst, size_t len) {
+        uint8_t* out = static_cast<uint8_t*>(dst);
+        size_t need = len;
+
+        while (need > 0) {
+            if (m_iov_index >= m_iovecs.size()) {
+                return false;
+            }
+
+            const auto& iov = m_iovecs[m_iov_index];
+            if (m_iov_offset >= iov.iov_len) {
+                ++m_iov_index;
+                m_iov_offset = 0;
+                continue;
+            }
+
+            const size_t available = iov.iov_len - m_iov_offset;
+            const size_t take = std::min(available, need);
+
+            std::memcpy(out,
+                       static_cast<const uint8_t*>(iov.iov_base) + m_iov_offset,
+                       take);
+
+            out += take;
+            need -= take;
+            m_iov_offset += take;
+            m_consumed += take;
+
+            if (m_iov_offset == iov.iov_len) {
+                ++m_iov_index;
+                m_iov_offset = 0;
+            }
+        }
+
+        return true;
+    }
+
+private:
+    const std::vector<iovec>& m_iovecs;
+    size_t m_total_length;
+    size_t m_iov_index;
+    size_t m_iov_offset;
+    size_t m_consumed;
+};
+
+} // namespace
+
 std::expected<size_t, WsError>
 WsFrameParser::fromIOVec(const std::vector<iovec>& iovecs, WsFrame& frame, bool is_server)
 {
-    size_t total_length = getTotalLength(iovecs);
+    const size_t total_length = getTotalLength(iovecs);
     if (total_length < 2) {
         return std::unexpected(WsError(kWsIncomplete));
     }
 
-    size_t offset = 0;
-    uint8_t byte1, byte2;
+    IovecCursor cursor(iovecs, total_length);
+    uint8_t byte1 = 0;
+    uint8_t byte2 = 0;
 
-    // 读取第一个字节
-    if (!readByte(iovecs, offset++, byte1)) {
+    if (!cursor.readByte(byte1)) {
         return std::unexpected(WsError(kWsIncomplete));
     }
 
@@ -53,8 +127,7 @@ WsFrameParser::fromIOVec(const std::vector<iovec>& iovecs, WsFrame& frame, bool 
         return std::unexpected(WsError(kWsControlFrameFragmented));
     }
 
-    // 读取第二个字节
-    if (!readByte(iovecs, offset++, byte2)) {
+    if (!cursor.readByte(byte2)) {
         return std::unexpected(WsError(kWsIncomplete));
     }
 
@@ -77,27 +150,22 @@ WsFrameParser::fromIOVec(const std::vector<iovec>& iovecs, WsFrame& frame, bool 
     if (payload_len < 126) {
         frame.header.payload_length = payload_len;
     } else if (payload_len == 126) {
-        // 16位扩展长度
-        if (total_length < offset + 2) {
+        uint8_t len_buf[2];
+        if (!cursor.readBytes(len_buf, sizeof(len_buf))) {
             return std::unexpected(WsError(kWsIncomplete));
         }
-        uint16_t extended_len;
-        if (!readUint16(iovecs, offset, extended_len)) {
-            return std::unexpected(WsError(kWsIncomplete));
-        }
+        const uint16_t extended_len = (static_cast<uint16_t>(len_buf[0]) << 8) | len_buf[1];
         frame.header.payload_length = extended_len;
-        offset += 2;
     } else {
-        // 64位扩展长度
-        if (total_length < offset + 8) {
+        uint8_t len_buf[8];
+        if (!cursor.readBytes(len_buf, sizeof(len_buf))) {
             return std::unexpected(WsError(kWsIncomplete));
         }
-        uint64_t extended_len;
-        if (!readUint64(iovecs, offset, extended_len)) {
-            return std::unexpected(WsError(kWsIncomplete));
+        uint64_t extended_len = 0;
+        for (size_t i = 0; i < sizeof(len_buf); ++i) {
+            extended_len = (extended_len << 8) | len_buf[i];
         }
         frame.header.payload_length = extended_len;
-        offset += 8;
     }
 
     // 控制帧的payload不能超过125字节
@@ -107,29 +175,25 @@ WsFrameParser::fromIOVec(const std::vector<iovec>& iovecs, WsFrame& frame, bool 
 
     // 读取掩码密钥（如果有）
     if (frame.header.mask) {
-        if (total_length < offset + 4) {
+        if (!cursor.readBytes(frame.header.masking_key, sizeof(frame.header.masking_key))) {
             return std::unexpected(WsError(kWsIncomplete));
-        }
-        for (int i = 0; i < 4; ++i) {
-            if (!readByte(iovecs, offset++, frame.header.masking_key[i])) {
-                return std::unexpected(WsError(kWsIncomplete));
-            }
         }
     }
 
-    // 检查是否有足够的payload数据
-    if (total_length < offset + frame.header.payload_length) {
+    if (cursor.remaining() < frame.header.payload_length) {
         return std::unexpected(WsError(kWsIncomplete));
     }
 
-    // 读取payload数据
-    frame.payload.clear();
-    frame.payload.reserve(frame.header.payload_length);
-    size_t read_bytes = readData(iovecs, offset, frame.header.payload_length, frame.payload);
-    if (read_bytes != frame.header.payload_length) {
+    if (frame.header.payload_length > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
         return std::unexpected(WsError(kWsInvalidFrame));
     }
-    offset += frame.header.payload_length;
+    const size_t payload_size = static_cast<size_t>(frame.header.payload_length);
+
+    frame.payload.clear();
+    frame.payload.resize(payload_size);
+    if (payload_size > 0 && !cursor.readBytes(frame.payload.data(), payload_size)) {
+        return std::unexpected(WsError(kWsInvalidFrame));
+    }
 
     // 如果有掩码，解除掩码
     if (frame.header.mask) {
@@ -143,12 +207,23 @@ WsFrameParser::fromIOVec(const std::vector<iovec>& iovecs, WsFrame& frame, bool 
         }
     }
 
-    return offset;
+    return cursor.consumed();
 }
 
 std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
 {
     std::string result;
+    const uint64_t payload_len = frame.payload.size();
+    size_t header_len = 2;
+    if (payload_len >= 126 && payload_len <= 0xFFFF) {
+        header_len += 2;
+    } else if (payload_len > 0xFFFF) {
+        header_len += 8;
+    }
+    if (use_mask) {
+        header_len += 4;
+    }
+    result.reserve(header_len + static_cast<size_t>(payload_len));
 
     // 第一个字节: FIN + RSV + Opcode
     uint8_t byte1 = 0;
@@ -162,8 +237,6 @@ std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
     // 第二个字节: MASK + Payload length
     uint8_t byte2 = 0;
     if (use_mask) byte2 |= 0x80;
-
-    uint64_t payload_len = frame.payload.size();
 
     if (payload_len < 126) {
         byte2 |= static_cast<uint8_t>(payload_len);
@@ -197,11 +270,13 @@ std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
     }
 
     // Payload数据
-    std::string payload = frame.payload;
-    if (use_mask) {
+    if (!use_mask) {
+        result.append(frame.payload);
+    } else {
+        std::string payload = frame.payload;
         applyMask(payload, masking_key);
+        result += payload;
     }
-    result += payload;
 
     return result;
 }
@@ -209,6 +284,17 @@ std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
 std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, uint8_t masking_key[4])
 {
     std::string result;
+    const uint64_t payload_len = frame.payload.size();
+    size_t header_len = 2;
+    if (payload_len >= 126 && payload_len <= 0xFFFF) {
+        header_len += 2;
+    } else if (payload_len > 0xFFFF) {
+        header_len += 8;
+    }
+    if (use_mask) {
+        header_len += 4;
+    }
+    result.reserve(header_len);
 
     // 第一个字节: FIN + RSV + Opcode
     uint8_t byte1 = 0;
@@ -222,8 +308,6 @@ std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, ui
     // 第二个字节: MASK + Payload length
     uint8_t byte2 = 0;
     if (use_mask) byte2 |= 0x80;
-
-    uint64_t payload_len = frame.payload.size();
 
     if (payload_len < 126) {
         byte2 |= static_cast<uint8_t>(payload_len);
@@ -437,81 +521,23 @@ bool WsFrameParser::isValidUtf8(const std::string& data)
     return true;
 }
 
-size_t WsFrameParser::readData(const std::vector<iovec>& iovecs,
-                               size_t offset,
-                               size_t length,
-                               std::string& output)
-{
-    size_t read_bytes = 0;
-    size_t current_offset = offset;
-
-    for (const auto& iov : iovecs) {
-        if (current_offset >= iov.iov_len) {
-            current_offset -= iov.iov_len;
-            continue;
-        }
-
-        const char* data = static_cast<const char*>(iov.iov_base) + current_offset;
-        size_t available = iov.iov_len - current_offset;
-        size_t to_read = std::min(available, length - read_bytes);
-
-        output.append(data, to_read);
-        read_bytes += to_read;
-
-        if (read_bytes >= length) {
-            break;
-        }
-
-        current_offset = 0;
-    }
-
-    return read_bytes;
-}
-
 size_t WsFrameParser::getTotalLength(const std::vector<iovec>& iovecs)
 {
+    if (iovecs.empty()) {
+        return 0;
+    }
+    if (iovecs.size() == 1) {
+        return iovecs[0].iov_len;
+    }
+    if (iovecs.size() == 2) {
+        return iovecs[0].iov_len + iovecs[1].iov_len;
+    }
+
     size_t total = 0;
     for (const auto& iov : iovecs) {
         total += iov.iov_len;
     }
     return total;
-}
-
-bool WsFrameParser::readByte(const std::vector<iovec>& iovecs, size_t offset, uint8_t& byte)
-{
-    size_t current_offset = offset;
-
-    for (const auto& iov : iovecs) {
-        if (current_offset < iov.iov_len) {
-            const uint8_t* data = static_cast<const uint8_t*>(iov.iov_base);
-            byte = data[current_offset];
-            return true;
-        }
-        current_offset -= iov.iov_len;
-    }
-
-    return false;
-}
-
-bool WsFrameParser::readUint16(const std::vector<iovec>& iovecs, size_t offset, uint16_t& value)
-{
-    uint8_t byte1, byte2;
-    if (!readByte(iovecs, offset, byte1)) return false;
-    if (!readByte(iovecs, offset + 1, byte2)) return false;
-
-    value = (static_cast<uint16_t>(byte1) << 8) | byte2;
-    return true;
-}
-
-bool WsFrameParser::readUint64(const std::vector<iovec>& iovecs, size_t offset, uint64_t& value)
-{
-    value = 0;
-    for (int i = 0; i < 8; ++i) {
-        uint8_t byte;
-        if (!readByte(iovecs, offset + i, byte)) return false;
-        value = (value << 8) | byte;
-    }
-    return true;
 }
 
 } // namespace galay::websocket

@@ -11,6 +11,8 @@
 #include <coroutine>
 #include <optional>
 #include <string>
+#include <cstring>
+#include <utility>
 #include <sys/uio.h>
 
 namespace galay::websocket
@@ -49,7 +51,7 @@ public:
     {
     public:
         explicit ProtocolWritevAwaitable(SendFrameAwaitableImpl* owner)
-            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), owner->m_writer->getIovecsCopy())
+            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), std::vector<iovec>{})
             , m_owner(owner)
         {
         }
@@ -98,13 +100,15 @@ public:
 #else
         bool handleComplete(GHandle handle) override {
             while (m_owner->m_writer->getRemainingBytes() > 0) {
-                syncIovecs();
-                if (m_iovecs.empty()) {
+                const auto& iovecs = m_owner->m_writer->getIovecsRef();
+                if (iovecs.empty()) {
                     m_owner->setSendError(WsError(kWsSendError, "No remaining iovec to write"));
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleWritev(handle, m_iovecs.data(), static_cast<int>(m_iovecs.size()));
+                auto result = galay::kernel::io::handleWritev(handle,
+                                                              const_cast<iovec*>(iovecs.data()),
+                                                              static_cast<int>(iovecs.size()));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -126,9 +130,15 @@ public:
 #endif
 
     private:
+#ifdef USE_IOURING
         void syncIovecs() {
-            m_iovecs = m_owner->m_writer->getIovecsCopy();
+            const auto& src = m_owner->m_writer->getIovecsRef();
+            m_iovecs.resize(src.size());
+            if (!src.empty()) {
+                std::memcpy(m_iovecs.data(), src.data(), src.size() * sizeof(iovec));
+            }
         }
+#endif
 
         SendFrameAwaitableImpl* m_owner;
     };
@@ -241,239 +251,136 @@ public:
         , m_remaining_bytes(0)
         , m_writev_offset(0)
     {
+        m_iovecs.reserve(2);
     }
 
     auto sendText(const std::string& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createTextFrame(text, fin);
-
-            if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
-                m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
-                m_payload_buffer = frame.payload;
-
-                // 如果需要掩码，应用掩码
-                if (m_setting.use_mask) {
-                    WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
-                }
-
-                // 准备 iovec 数组
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_payload_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-                m_writev_offset = 0;
-            } else {
-                // SslSocket: 使用 send
-                m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
-                m_remaining_bytes = m_buffer.size();
-            }
+            prepareSendFrame(std::move(frame));
         }
+        return makeSendAwaitable();
+    }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+    auto sendText(std::string&& text, bool fin = true) {
+        if (m_remaining_bytes == 0) {
+            WsFrame frame(WsOpcode::Text, std::move(text), fin);
+            prepareSendFrame(std::move(frame));
         }
+        return makeSendAwaitable();
     }
 
     auto sendBinary(const std::string& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createBinaryFrame(data, fin);
-
-            if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
-                m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
-                m_payload_buffer = frame.payload;
-
-                // 如果需要掩码，应用掩码
-                if (m_setting.use_mask) {
-                    WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
-                }
-
-                // 准备 iovec 数组
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_payload_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-                m_writev_offset = 0;
-            } else {
-                // SslSocket: 使用 send
-                m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
-                m_remaining_bytes = m_buffer.size();
-            }
+            prepareSendFrame(std::move(frame));
         }
+        return makeSendAwaitable();
+    }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+    auto sendBinary(std::string&& data, bool fin = true) {
+        if (m_remaining_bytes == 0) {
+            WsFrame frame(WsOpcode::Binary, std::move(data), fin);
+            prepareSendFrame(std::move(frame));
         }
+        return makeSendAwaitable();
     }
 
     auto sendPing(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPingFrame(data);
-
-            if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
-                m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
-                m_payload_buffer = frame.payload;
-
-                // 如果需要掩码，应用掩码
-                if (m_setting.use_mask) {
-                    WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
-                }
-
-                // 准备 iovec 数组
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_payload_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-                m_writev_offset = 0;
-            } else {
-                // SslSocket: 使用 send
-                m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
-                m_remaining_bytes = m_buffer.size();
-            }
+            prepareSendFrame(std::move(frame));
         }
-
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
     auto sendPong(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createPongFrame(data);
-
-            if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
-                m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
-                m_payload_buffer = frame.payload;
-
-                // 如果需要掩码，应用掩码
-                if (m_setting.use_mask) {
-                    WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
-                }
-
-                // 准备 iovec 数组
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_payload_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-                m_writev_offset = 0;
-            } else {
-                // SslSocket: 使用 send
-                m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
-                m_remaining_bytes = m_buffer.size();
-            }
+            prepareSendFrame(std::move(frame));
         }
-
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
     auto sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "") {
         if (m_remaining_bytes == 0) {
             WsFrame frame = WsFrameParser::createCloseFrame(code, reason);
-
-            if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
-                m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
-                m_payload_buffer = frame.payload;
-
-                // 如果需要掩码，应用掩码
-                if (m_setting.use_mask) {
-                    WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
-                }
-
-                // 准备 iovec 数组
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_payload_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-                m_writev_offset = 0;
-            } else {
-                // SslSocket: 使用 send
-                m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
-                m_remaining_bytes = m_buffer.size();
-            }
+            prepareSendFrame(std::move(frame));
         }
-
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
     auto sendFrame(const WsFrame& frame) {
         if (m_remaining_bytes == 0) {
-            if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
-                m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
-                m_payload_buffer = frame.payload;
-
-                // 如果需要掩码，应用掩码
-                if (m_setting.use_mask) {
-                    WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
-                }
-
-                // 准备 iovec 数组
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_payload_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-                m_writev_offset = 0;
-            } else {
-                // SslSocket: 使用 send
-                m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
-                m_remaining_bytes = m_buffer.size();
-            }
+            prepareSendFrame(frame);
         }
+        return makeSendAwaitable();
+    }
 
+    auto sendFrame(WsFrame&& frame) {
+        if (m_remaining_bytes == 0) {
+            prepareSendFrame(std::move(frame));
+        }
+        return makeSendAwaitable();
+    }
+
+private:
+    SendFrameAwaitableImpl<SocketType> makeSendAwaitable() {
         if constexpr (is_tcp_socket_v<SocketType>) {
             return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
         } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
+            const size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
             const char* send_ptr = m_buffer.data() + sent_bytes;
             return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
         }
     }
+
+    void prepareSendFrame(const WsFrame& frame) {
+        if constexpr (is_tcp_socket_v<SocketType>) {
+            prepareWritevBuffers(frame);
+        } else {
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_remaining_bytes = m_buffer.size();
+        }
+    }
+
+    void prepareSendFrame(WsFrame&& frame) {
+        if constexpr (is_tcp_socket_v<SocketType>) {
+            prepareWritevBuffers(std::move(frame));
+        } else {
+            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            m_remaining_bytes = m_buffer.size();
+        }
+    }
+
+    void prepareWritevBuffers(const WsFrame& frame) {
+        m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
+        m_payload_buffer = frame.payload;
+        finalizeWritevBuffers();
+    }
+
+    void prepareWritevBuffers(WsFrame&& frame) {
+        m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
+        m_payload_buffer = std::move(frame.payload);
+        finalizeWritevBuffers();
+    }
+
+    void finalizeWritevBuffers() {
+        if (m_setting.use_mask && !m_payload_buffer.empty()) {
+            WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
+        }
+
+        m_iovecs.clear();
+        m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+        if (!m_payload_buffer.empty()) {
+            m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
+        }
+
+        m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
+        m_writev_offset = 0;
+    }
+
+public:
 
     void updateRemaining(size_t bytes_sent) {
         if (bytes_sent >= m_remaining_bytes) {
@@ -495,31 +402,24 @@ public:
         }
 
         m_remaining_bytes -= bytes_sent;
-
-        if (m_remaining_bytes == 0) {
-            m_buffer.clear();
-            m_payload_buffer.clear();
-            m_iovecs.clear();
-            m_writev_offset = 0;
-            return;
-        }
+        m_writev_offset += bytes_sent;
 
         // 更新 iovec 数组，跳过已发送的部分
-        size_t consumed = bytes_sent;
+        size_t offset = m_writev_offset;
         m_iovecs.clear();
 
         // 检查 header 是否已完全发送
-        if (consumed < m_buffer.size()) {
+        if (offset < m_buffer.size()) {
             // header 还有剩余
-            m_iovecs.push_back({const_cast<char*>(m_buffer.data()) + consumed, m_buffer.size() - consumed});
+            m_iovecs.push_back({const_cast<char*>(m_buffer.data()) + offset, m_buffer.size() - offset});
             if (!m_payload_buffer.empty()) {
                 m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
             }
         } else {
             // header 已完全发送，只剩 payload
-            consumed -= m_buffer.size();
-            if (consumed < m_payload_buffer.size()) {
-                m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()) + consumed, m_payload_buffer.size() - consumed});
+            size_t payload_offset = offset - m_buffer.size();
+            if (payload_offset < m_payload_buffer.size()) {
+                m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()) + payload_offset, m_payload_buffer.size() - payload_offset});
             }
         }
     }
@@ -528,7 +428,7 @@ public:
         return m_remaining_bytes;
     }
 
-    std::vector<iovec> getIovecsCopy() const {
+    const std::vector<iovec>& getIovecsRef() const {
         return m_iovecs;
     }
 

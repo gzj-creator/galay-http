@@ -75,10 +75,27 @@ cmake --build . --parallel
 ```cmake
 option(GALAY_HTTP_ENABLE_SSL "Enable SSL/TLS support (requires galay-ssl)" OFF)
 option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) support target" ON)
+option(GALAY_HTTP_DISABLE_FRAMEWORK_LOG "Compile out framework logs (WS/HTTP/HTTPS/WSS/H2C/H2)" OFF)
 ```
 
 > `BUILD_MODULE_EXAMPLES` 需要 CMake `>= 3.28` 且推荐 `Ninja`/`Visual Studio` 生成器。  
 > 当前 AppleClang 环境会自动关闭模块目标，避免构建失败。
+
+### 编译期关闭框架日志
+
+当你做性能压测时，建议直接在编译期裁剪框架日志（覆盖 `WS/HTTP/HTTPS/WSS/H2C/H2`）：
+
+```bash
+cmake -S . -B build-perf \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DGALAY_HTTP_DISABLE_FRAMEWORK_LOG=ON
+cmake --build build-perf --parallel
+```
+
+说明：
+
+- 该开关会定义 `GALAY_HTTP_DISABLE_ALL_LOG`，并将 `SPDLOG_ACTIVE_LEVEL` 设为 `SPDLOG_LEVEL_OFF`。
+- 日志调用点在编译阶段被裁剪，不再产生格式化/输出开销。
 
 ## 模块接口
 

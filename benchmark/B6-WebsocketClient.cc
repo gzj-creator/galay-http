@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <numeric>
 #include <thread>
+#include <cstdlib>
+#include <string_view>
 #include "galay-kernel/concurrency/AsyncMutex.h"
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-http/kernel/websocket/WsConn.h"
@@ -132,20 +134,22 @@ Coroutine benchmarkWebSocketClient(
         }
     }
 
+    WsFrame send_frame;
+    send_frame.header.fin = true;
+    send_frame.header.opcode = WsOpcode::Text;
+    send_frame.header.mask = true;  // 客户端必须设置 mask
+    send_frame.payload = message_payload;
+    send_frame.header.payload_length = message_payload.size();
+
+    std::string echo_msg;
+    WsOpcode echo_opcode = WsOpcode::Text;
+
     // 发送和接收消息（固定时间压测）
     while (!g_stop.load(std::memory_order_relaxed) &&
            std::chrono::steady_clock::now() < end_time) {
         auto round_start = std::chrono::steady_clock::now();
-        // 发送消息
-        WsFrame frame;
-        frame.header.fin = true;
-        frame.header.opcode = WsOpcode::Text;
-        frame.header.mask = true;  // 客户端必须设置 mask
-        frame.payload = message_payload;
-        frame.header.payload_length = message_payload.size();
-
         while(true) {
-            auto send_result = co_await ws_writer.sendFrame(frame);
+            auto send_result = co_await ws_writer.sendFrame(send_frame);
             if (!send_result) {
                 HTTP_LOG_ERROR("[client] [{}] [send-fail] [{}]", client_id, send_result.error().message());
                 co_return;
@@ -157,8 +161,7 @@ Coroutine benchmarkWebSocketClient(
             }
         }
         // 读取回显消息
-        std::string echo_msg;
-        WsOpcode echo_opcode;
+        echo_msg.clear();
         while(true) {
             auto echo_result = co_await ws_reader.getMessage(echo_msg, echo_opcode);
             if (!echo_result.has_value()) {
@@ -242,8 +245,14 @@ void printStats(const std::chrono::steady_clock::time_point& start_time,
 }
 
 int main(int argc, char* argv[]) {
-    // 设置日志为文件模式
-    galay::http::HttpLogger::file("B4-WebsocketClient.log");
+    // 压测默认关闭日志，避免日志 IO 成为吞吐瓶颈。
+    // 设置 GALAY_HTTP_BENCH_LOG=1 可开启文件日志。
+    const char* bench_log = std::getenv("GALAY_HTTP_BENCH_LOG");
+    if (bench_log != nullptr && std::string_view(bench_log) == "1") {
+        galay::http::HttpLogger::file("B4-WebsocketClient.log");
+    } else {
+        galay::http::HttpLogger::disable();
+    }
 
     // 解析命令行参数
     int num_clients = 10;

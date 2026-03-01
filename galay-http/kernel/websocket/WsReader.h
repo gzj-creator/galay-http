@@ -169,10 +169,11 @@ public:
         , m_socket(&socket)
         , m_is_server(is_server)
         , m_total_received(0)
-        , m_has_buffered_frame(checkBufferedFrame())
+        , m_has_buffered_frame(false)
         , m_recv_awaitable(this)
         , m_result(true)
     {
+        m_has_buffered_frame = parseFromBuffer();
         if (!m_has_buffered_frame) {
             addTask(IOEventType::RECV, &m_recv_awaitable);
         }
@@ -186,11 +187,10 @@ public:
 
     std::expected<bool, WsError> await_resume() {
         if (m_has_buffered_frame) {
-            bool done = parseFromBuffer();
             if (m_ws_error.has_value()) {
                 return std::unexpected(std::move(*m_ws_error));
             }
-            return done;
+            return true;
         }
 
         onCompleted();
@@ -210,21 +210,6 @@ public:
     }
 
 private:
-    bool checkBufferedFrame() const {
-        auto iovecs = m_ring_buffer->getReadIovecs();
-        if (iovecs.empty()) {
-            return false;
-        }
-
-        WsFrame frame;
-        auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, m_is_server);
-        if (!parse_result.has_value()) {
-            return parse_result.error().code() != kWsIncomplete;
-        }
-
-        return true;
-    }
-
     bool parseFromBuffer() {
         auto iovecs = m_ring_buffer->getReadIovecs();
         if (iovecs.empty()) {
@@ -416,11 +401,12 @@ public:
         , m_socket(&socket)
         , m_is_server(is_server)
         , m_total_received(0)
-        , m_has_buffered_frame(checkBufferedFrame())
+        , m_has_buffered_frame(false)
         , m_has_async_task(false)
         , m_recv_awaitable(this)
         , m_result(true)
     {
+        m_has_buffered_frame = parseFromBuffer();
         if (!m_has_buffered_frame) {
             addTask(IOEventType::RECV, &m_recv_awaitable);
             m_has_async_task = true;
@@ -435,11 +421,10 @@ public:
 
     std::expected<bool, WsError> await_resume() {
         if (m_has_buffered_frame) {
-            bool done = parseFromBuffer();
             if (m_ws_error.has_value()) {
                 return std::unexpected(std::move(*m_ws_error));
             }
-            return done;
+            return true;
         }
 
         if (m_has_async_task) {
@@ -457,21 +442,6 @@ public:
     }
 
 private:
-    bool checkBufferedFrame() const {
-        auto iovecs = m_ring_buffer->getReadIovecs();
-        if (iovecs.empty()) {
-            return false;
-        }
-
-        WsFrame frame;
-        auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, m_is_server);
-        if (!parse_result.has_value()) {
-            return parse_result.error().code() != kWsIncomplete;
-        }
-
-        return true;
-    }
-
     bool parseFromBuffer() {
         auto iovecs = m_ring_buffer->getReadIovecs();
         if (iovecs.empty()) {
@@ -676,10 +646,11 @@ public:
         , m_total_received(0)
         , m_first_frame(true)
         , m_control_frame_callback(control_frame_callback)
-        , m_has_buffered_message(checkBufferedMessage())
+        , m_has_buffered_message(false)
         , m_recv_awaitable(this)
         , m_result(true)
     {
+        m_has_buffered_message = parseFromBuffer();
         if (!m_has_buffered_message) {
             addTask(IOEventType::RECV, &m_recv_awaitable);
         }
@@ -693,11 +664,10 @@ public:
 
     std::expected<bool, WsError> await_resume() {
         if (m_has_buffered_message) {
-            bool done = parseFromBuffer();
             if (m_ws_error.has_value()) {
                 return std::unexpected(std::move(*m_ws_error));
             }
-            return done;
+            return true;
         }
 
         onCompleted();
@@ -717,78 +687,6 @@ public:
     }
 
 private:
-    static std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t offset) {
-        std::vector<iovec> out;
-        size_t current_offset = offset;
-
-        for (const auto& iov : iovecs) {
-            if (current_offset >= iov.iov_len) {
-                current_offset -= iov.iov_len;
-                continue;
-            }
-
-            iovec sliced = iov;
-            sliced.iov_base = static_cast<char*>(iov.iov_base) + current_offset;
-            sliced.iov_len = iov.iov_len - current_offset;
-            out.push_back(sliced);
-            current_offset = 0;
-        }
-
-        return out;
-    }
-
-    bool checkBufferedMessage() const {
-        auto iovecs = m_ring_buffer->getReadIovecs();
-        if (iovecs.empty()) {
-            return false;
-        }
-
-        size_t total = 0;
-        for (const auto& iov : iovecs) {
-            total += iov.iov_len;
-        }
-
-        size_t offset = 0;
-        bool first_frame = true;
-
-        while (offset < total) {
-            auto sliced = sliceIovecs(iovecs, offset);
-            if (sliced.empty()) {
-                return false;
-            }
-
-            WsFrame frame;
-            auto parse_result = WsFrameParser::fromIOVec(sliced, frame, m_is_server);
-
-            if (!parse_result.has_value()) {
-                return parse_result.error().code() != kWsIncomplete;
-            }
-
-            offset += parse_result.value();
-
-            if (isControlFrame(frame.header.opcode)) {
-                return true;
-            }
-
-            if (first_frame) {
-                if (frame.header.opcode == WsOpcode::Continuation) {
-                    return true;
-                }
-                first_frame = false;
-            } else {
-                if (frame.header.opcode != WsOpcode::Continuation) {
-                    return true;
-                }
-            }
-
-            if (frame.header.fin) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     bool parseFromBuffer() {
         while (true) {
             auto iovecs = m_ring_buffer->getReadIovecs();
@@ -824,7 +722,7 @@ private:
                     return true;
                 }
 
-                *m_message = frame.payload;
+                *m_message = std::move(frame.payload);
                 *m_opcode = frame.header.opcode;
                 return true;
             }
@@ -836,14 +734,16 @@ private:
                 }
                 *m_opcode = frame.header.opcode;
                 m_first_frame = false;
+
+                // Hot path: most messages are single-frame; move payload to avoid an extra copy.
+                *m_message = std::move(frame.payload);
             } else {
                 if (frame.header.opcode != WsOpcode::Continuation) {
                     setParseError(WsError(kWsProtocolError, "Expected continuation frame"));
                     return true;
                 }
+                m_message->append(frame.payload);
             }
-
-            *m_message += frame.payload;
 
             if (m_message->size() > m_setting->max_message_size) {
                 setParseError(WsError(kWsMessageTooLarge, "Message size exceeds limit"));
@@ -1030,11 +930,12 @@ public:
         , m_total_received(0)
         , m_first_frame(true)
         , m_control_frame_callback(control_frame_callback)
-        , m_has_buffered_message(checkBufferedMessage())
+        , m_has_buffered_message(false)
         , m_has_async_task(false)
         , m_recv_awaitable(this)
         , m_result(true)
     {
+        m_has_buffered_message = parseFromBuffer();
         if (!m_has_buffered_message) {
             addTask(IOEventType::RECV, &m_recv_awaitable);
             m_has_async_task = true;
@@ -1049,11 +950,10 @@ public:
 
     std::expected<bool, WsError> await_resume() {
         if (m_has_buffered_message) {
-            bool done = parseFromBuffer();
             if (m_ws_error.has_value()) {
                 return std::unexpected(std::move(*m_ws_error));
             }
-            return done;
+            return true;
         }
 
         if (m_has_async_task) {
@@ -1071,78 +971,6 @@ public:
     }
 
 private:
-    static std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t offset) {
-        std::vector<iovec> out;
-        size_t current_offset = offset;
-
-        for (const auto& iov : iovecs) {
-            if (current_offset >= iov.iov_len) {
-                current_offset -= iov.iov_len;
-                continue;
-            }
-
-            iovec sliced = iov;
-            sliced.iov_base = static_cast<char*>(iov.iov_base) + current_offset;
-            sliced.iov_len = iov.iov_len - current_offset;
-            out.push_back(sliced);
-            current_offset = 0;
-        }
-
-        return out;
-    }
-
-    bool checkBufferedMessage() const {
-        auto iovecs = m_ring_buffer->getReadIovecs();
-        if (iovecs.empty()) {
-            return false;
-        }
-
-        size_t total = 0;
-        for (const auto& iov : iovecs) {
-            total += iov.iov_len;
-        }
-
-        size_t offset = 0;
-        bool first_frame = true;
-
-        while (offset < total) {
-            auto sliced = sliceIovecs(iovecs, offset);
-            if (sliced.empty()) {
-                return false;
-            }
-
-            WsFrame frame;
-            auto parse_result = WsFrameParser::fromIOVec(sliced, frame, m_is_server);
-
-            if (!parse_result.has_value()) {
-                return parse_result.error().code() != kWsIncomplete;
-            }
-
-            offset += parse_result.value();
-
-            if (isControlFrame(frame.header.opcode)) {
-                return true;
-            }
-
-            if (first_frame) {
-                if (frame.header.opcode == WsOpcode::Continuation) {
-                    return true;
-                }
-                first_frame = false;
-            } else {
-                if (frame.header.opcode != WsOpcode::Continuation) {
-                    return true;
-                }
-            }
-
-            if (frame.header.fin) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     bool parseFromBuffer() {
         while (true) {
             auto iovecs = m_ring_buffer->getReadIovecs();
@@ -1178,7 +1006,7 @@ private:
                     return true;
                 }
 
-                *m_message = frame.payload;
+                *m_message = std::move(frame.payload);
                 *m_opcode = frame.header.opcode;
                 return true;
             }
@@ -1190,14 +1018,16 @@ private:
                 }
                 *m_opcode = frame.header.opcode;
                 m_first_frame = false;
+
+                // Hot path: most messages are single-frame; move payload to avoid an extra copy.
+                *m_message = std::move(frame.payload);
             } else {
                 if (frame.header.opcode != WsOpcode::Continuation) {
                     setParseError(WsError(kWsProtocolError, "Expected continuation frame"));
                     return true;
                 }
+                m_message->append(frame.payload);
             }
-
-            *m_message += frame.payload;
 
             if (m_message->size() > m_setting->max_message_size) {
                 setParseError(WsError(kWsMessageTooLarge, "Message size exceeds limit"));

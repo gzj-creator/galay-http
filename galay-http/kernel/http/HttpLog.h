@@ -9,22 +9,31 @@
 #include "galay-http/utils/HttpLogger.h"
 #include <spdlog/spdlog.h>
 
-// 日志宏默认支持运行时 level 控制；如需完全裁剪 debug 日志，可定义 GALAY_HTTP_DISABLE_DEBUG_LOG。
-#ifdef GALAY_HTTP_DISABLE_DEBUG_LOG
+// 日志宏说明：
+// - GALAY_HTTP_DISABLE_ALL_LOG: 完全编译期裁剪（WS/HTTP/HTTPS/WSS/H2C/H2 全部日志）
+// - GALAY_HTTP_DISABLE_DEBUG_LOG: 仅裁剪 debug 日志
+#ifdef GALAY_HTTP_DISABLE_ALL_LOG
 #define HTTP_LOG_DEBUG(...) ((void)0)
+#define HTTP_LOG_INFO(...) ((void)0)
+#define HTTP_LOG_WARN(...) ((void)0)
+#define HTTP_LOG_ERROR(...) ((void)0)
 #else
-#define HTTP_LOG_DEBUG(...) \
-    SPDLOG_LOGGER_DEBUG(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+    #ifdef GALAY_HTTP_DISABLE_DEBUG_LOG
+    #define HTTP_LOG_DEBUG(...) ((void)0)
+    #else
+    #define HTTP_LOG_DEBUG(...) \
+        SPDLOG_LOGGER_DEBUG(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+    #endif
+
+    #define HTTP_LOG_INFO(...) \
+        SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_WARN(...) \
+        SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+    #define HTTP_LOG_ERROR(...) \
+        SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 #endif
-
-#define HTTP_LOG_INFO(...) \
-    SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-#define HTTP_LOG_WARN(...) \
-    SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-#define HTTP_LOG_ERROR(...) \
-    SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
 // 格式化输出宏 - 使用 HTTP_LOG_INFO 以显示源代码位置
 #define SERVER_REQUEST_LOG(METHOD, URI) \

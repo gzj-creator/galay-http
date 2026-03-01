@@ -20,6 +20,9 @@
 #include <algorithm>
 #include <numeric>
 #include <signal.h>
+#include <cstdlib>
+#include <string_view>
+#include <utility>
 
 using namespace galay::http;
 using namespace galay::websocket;
@@ -91,7 +94,7 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
             // 回显消息
             if (opcode == WsOpcode::Text) {
                 HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sending]", conn_id);
-                auto send_res = co_await writer.sendText(message);
+                auto send_res = co_await writer.sendText(std::move(message));
                 if (!send_res) {
                     HTTP_LOG_ERROR("[ws] [conn-{}] [echo-text] [send-fail] [{}]", conn_id, send_res.error().message());
                     goto cleanup;
@@ -99,7 +102,7 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
                 HTTP_LOG_INFO("[ws] [conn-{}] [echo-text] [sent]", conn_id);
             } else {
                 HTTP_LOG_INFO("[ws] [conn-{}] [echo-binary] [sending]", conn_id);
-                auto send_res = co_await writer.sendBinary(message);
+                auto send_res = co_await writer.sendBinary(std::move(message));
                 if (!send_res) {
                     HTTP_LOG_ERROR("[ws] [conn-{}] [echo-binary] [send-fail] [{}]", conn_id, send_res.error().message());
                     goto cleanup;
@@ -215,8 +218,14 @@ Coroutine handleHttpRequest(HttpConn conn) {
 }
 
 int main(int argc, char* argv[]) {
-    // 设置日志为文件模式
-    galay::http::HttpLogger::file("B5-Websocket.log");
+    // 压测默认关闭日志，避免日志 IO 成为吞吐瓶颈。
+    // 设置 GALAY_HTTP_BENCH_LOG=1 可开启文件日志。
+    const char* bench_log = std::getenv("GALAY_HTTP_BENCH_LOG");
+    if (bench_log != nullptr && std::string_view(bench_log) == "1") {
+        galay::http::HttpLogger::file("B5-Websocket.log");
+    } else {
+        galay::http::HttpLogger::disable();
+    }
 
     uint16_t port = 8080;
     if (argc >= 2) {

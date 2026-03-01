@@ -5,6 +5,7 @@
 #include "WebSocketError.h"
 #include <expected>
 #include <vector>
+#include <utility>
 #include <sys/uio.h>
 
 namespace galay::websocket
@@ -57,6 +58,11 @@ public:
         return WsFrame(WsOpcode::Text, text, fin);
     }
 
+    static WsFrame createTextFrame(std::string&& text, bool fin = true)
+    {
+        return WsFrame(WsOpcode::Text, std::move(text), fin);
+    }
+
     /**
      * @brief 创建二进制帧
      * @param data 二进制数据
@@ -66,6 +72,11 @@ public:
     static WsFrame createBinaryFrame(const std::string& data, bool fin = true)
     {
         return WsFrame(WsOpcode::Binary, data, fin);
+    }
+
+    static WsFrame createBinaryFrame(std::string&& data, bool fin = true)
+    {
+        return WsFrame(WsOpcode::Binary, std::move(data), fin);
     }
 
     /**
@@ -113,37 +124,9 @@ public:
 
 private:
     /**
-     * @brief 从iovec读取指定长度的数据
-     * @param iovecs iovec数组
-     * @param offset 起始偏移量
-     * @param length 要读取的长度
-     * @param output 输出buffer
-     * @return 实际读取的字节数
-     */
-    static size_t readData(const std::vector<iovec>& iovecs,
-                          size_t offset,
-                          size_t length,
-                          std::string& output);
-
-    /**
      * @brief 计算iovec总长度
      */
     static size_t getTotalLength(const std::vector<iovec>& iovecs);
-
-    /**
-     * @brief 从iovec读取单个字节
-     */
-    static bool readByte(const std::vector<iovec>& iovecs, size_t offset, uint8_t& byte);
-
-    /**
-     * @brief 从iovec读取uint16_t（大端序）
-     */
-    static bool readUint16(const std::vector<iovec>& iovecs, size_t offset, uint16_t& value);
-
-    /**
-     * @brief 从iovec读取uint64_t（大端序）
-     */
-    static bool readUint64(const std::vector<iovec>& iovecs, size_t offset, uint64_t& value);
 };
 
 } // namespace galay::websocket
