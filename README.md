@@ -170,6 +170,37 @@ cmake --build build-mod --target galay-http-modules --parallel
 ./build/examples/E10-H2cEchoClient 127.0.0.1 9080
 ```
 
+### HTTP/2 新用法（h2 / h2c）
+
+`h2` 与 `h2c` 已统一为 frame-first 流接口，推荐按帧驱动消费：
+
+```cpp
+auto stream = client.get("/");
+while (true) {
+    auto frame_result = co_await stream->getFrame();
+    if (!frame_result || !frame_result.value()) break;
+    auto frame = std::move(frame_result.value());
+    if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+        break;
+    }
+}
+auto& resp = stream->response();
+```
+
+服务端响应建议使用：
+
+```cpp
+co_await stream->replyHeader(Http2Headers().status(200), false);
+co_await stream->replyData("ok", true);
+```
+
+最小回归命令（h2c + h2）：
+
+```bash
+cmake --build build --target T25-H2cServer T25-H2cClient --parallel 4
+cmake --build build-ssl --target T27-H2Server T28-H2Client --parallel 4
+```
+
 ### 静态文件服务
 
 ```bash
