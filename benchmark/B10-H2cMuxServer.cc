@@ -22,6 +22,8 @@ using namespace galay::http2;
 using namespace galay::kernel;
 
 static volatile bool g_running = true;
+static const Http2HeaderField kStatus200{":status", "200"};
+static const Http2HeaderField kContentTypeTextPlain{"content-type", "text/plain"};
 
 void signalHandler(int) {
     g_running = false;
@@ -30,22 +32,36 @@ void signalHandler(int) {
 Coroutine handleStream(Http2Stream::ptr stream) {
     std::string body;
 
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) break;
-        auto frame = std::move(frame_result.value());
-        if (!frame) break;
-        if (frame->isData()) {
-            body.append(frame->asData()->data());
+    bool end_stream = false;
+    while (!end_stream) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) break;
+
+        auto frames = std::move(batch_result.value());
+        for (auto& frame : frames) {
+            if (!frame) {
+                end_stream = true;
+                break;
+            }
+            if (frame->isData()) {
+                body.append(frame->asData()->data());
+            }
+            if (frame->isEndStream()) {
+                end_stream = true;
+                break;
+            }
         }
-        if (frame->isEndStream()) break;
     }
 
-    co_await stream->replyHeader(
-        Http2Headers().status(200).contentType("text/plain").contentLength(body.size()),
-        body.empty());
+    std::vector<Http2HeaderField> headers;
+    headers.reserve(3);
+    headers.push_back(kStatus200);
+    headers.push_back(kContentTypeTextPlain);
+    headers.push_back({"content-length", std::to_string(body.size())});
+
+    stream->sendHeaders(headers, body.empty(), true);
     if (!body.empty()) {
-        co_await stream->replyData(body, true);
+        stream->sendData(body, true);
     }
 
     co_return;

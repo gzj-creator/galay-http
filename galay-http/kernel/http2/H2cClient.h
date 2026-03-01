@@ -435,6 +435,7 @@ public:
     auto connect(const std::string& host, uint16_t port) {
         m_host = host;
         m_port = port;
+        m_authority = m_host + ":" + std::to_string(m_port);
         HTTP_LOG_INFO("[connect] [h2c] [{}:{}]", host, port);
         m_socket = std::make_unique<TcpSocket>(IPType::IPV4);
         m_ring_buffer = std::make_unique<RingBuffer>(m_ring_buffer_size);
@@ -463,6 +464,7 @@ private:
 
     H2cClientConfig m_config;
     std::string m_host;
+    std::string m_authority;
     uint16_t m_port;
     size_t m_ring_buffer_size;
     std::unique_ptr<TcpSocket> m_socket;
@@ -505,7 +507,7 @@ inline H2cUpgradeAwaitable::H2cUpgradeAwaitable(H2cClient& client, const std::st
     sb.erase(std::remove(sb.begin(), sb.end(), '='), sb.end());
 
     auto req = Http1_1RequestBuilder::get(path)
-        .host(client.m_host + ":" + std::to_string(client.m_port))
+        .host(client.m_authority)
         .header("Connection", "Upgrade, HTTP2-Settings")
         .header("Upgrade", "h2c")
         .header("HTTP2-Settings", sb)
@@ -632,9 +634,10 @@ inline Http2Stream::ptr H2cClient::get(const std::string& path) {
     auto* mgr = m_conn->streamManager();
     auto stream = mgr->allocateStream();
     std::vector<Http2HeaderField> headers;
+    headers.reserve(4);
     headers.push_back({":method", "GET"});
     headers.push_back({":scheme", "http"});
-    headers.push_back({":authority", m_host + ":" + std::to_string(m_port)});
+    headers.push_back({":authority", m_authority});
     headers.push_back({":path", path.empty() ? "/" : path});
     stream->sendHeaders(headers, true);
     return stream;
@@ -650,9 +653,10 @@ inline Http2Stream::ptr H2cClient::post(const std::string& path,
     auto* mgr = m_conn->streamManager();
     auto stream = mgr->allocateStream();
     std::vector<Http2HeaderField> headers;
+    headers.reserve(5);
     headers.push_back({":method", "POST"});
     headers.push_back({":scheme", "http"});
-    headers.push_back({":authority", m_host + ":" + std::to_string(m_port)});
+    headers.push_back({":authority", m_authority});
     headers.push_back({":path", path.empty() ? "/" : path});
     headers.push_back({"content-type", content_type});
     stream->sendHeaders(headers, false);

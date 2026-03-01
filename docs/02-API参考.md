@@ -410,10 +410,17 @@ public:
 // co_await client.upgrade("/");
 //
 // auto stream = client.get("/api/data");
-// while (true) {
-//     auto frame = co_await stream->getFrame();
-//     if (!frame || !frame.value()) break;
-//     if (frame.value()->isEndStream()) break;
+// bool finished = false;
+// while (!finished) {
+//     auto batch = co_await stream->getFrames(16);
+//     if (!batch) break;
+//     for (auto& frame : batch.value()) {
+//         if (!frame) break;
+//         if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+//             finished = true;
+//             break;
+//         }
+//     }
 // }
 // auto& resp = stream->response();
 ```
@@ -427,6 +434,7 @@ class Http2Stream {
 public:
     uint32_t streamId() const;
     auto getFrame();
+    auto getFrames(size_t max_count = 16);
     auto replyHeader(const std::vector<Http2HeaderField>& headers, bool end_stream = false);
     auto replyData(const std::string& data, bool end_stream = false);
     auto replyRst(Http2ErrorCode error);

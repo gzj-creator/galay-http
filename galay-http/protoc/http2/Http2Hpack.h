@@ -87,18 +87,10 @@ public:
     size_t size() const { return m_table.size(); }
 
 private:
-    struct PairHash {
-        size_t operator()(const std::pair<std::string, std::string>& p) const {
-            size_t h1 = std::hash<std::string>{}(p.first);
-            size_t h2 = std::hash<std::string>{}(p.second);
-            return h1 ^ (h2 << 32 | h2 >> 32);
-        }
-    };
-
     HpackStaticTable();
     std::vector<Http2HeaderField> m_table;
-    std::unordered_map<std::pair<std::string, std::string>, size_t, PairHash> m_full_index;
-    std::unordered_map<std::string, size_t> m_name_index;
+    // name -> static table indices (1-based), in declaration order.
+    std::unordered_map<std::string, std::vector<size_t>> m_name_to_indices;
 };
 
 /**

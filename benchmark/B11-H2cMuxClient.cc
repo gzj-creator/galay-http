@@ -43,15 +43,23 @@ static Stats g;
  * 单个 stream 的响应处理协程（由 spawn 并发运行）
  */
 Coroutine handleResponse(Http2Stream::ptr stream) {
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result || !frame_result.value()) {
+    bool finished = false;
+    while (!finished) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) {
             g.fail++;
             co_return;
         }
-        auto frame = std::move(frame_result.value());
-        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
-            break;
+        auto frames = std::move(batch_result.value());
+        for (auto& frame : frames) {
+            if (!frame) {
+                g.fail++;
+                co_return;
+            }
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+                break;
+            }
         }
     }
     auto& resp = stream->response();
@@ -101,6 +109,16 @@ Coroutine runConnection(std::shared_ptr<H2cClient> client,
     g.connected++;
     auto* mgr = client->getConn()->streamManager();
     std::string authority = host + ":" + std::to_string(port);
+    const std::string kContentLength = std::to_string(kPayload.size());
+
+    std::vector<Http2HeaderField> request_headers;
+    request_headers.reserve(6);
+    request_headers.emplace_back(":method", "POST");
+    request_headers.emplace_back(":scheme", "http");
+    request_headers.emplace_back(":authority", authority);
+    request_headers.emplace_back(":path", "/echo");
+    request_headers.emplace_back("content-type", "text/plain");
+    request_headers.emplace_back("content-length", kContentLength);
 
     for (int r = 0; r < rounds && mgr->isRunning(); r++) {
         // 并发发射一批 stream
@@ -109,13 +127,7 @@ Coroutine runConnection(std::shared_ptr<H2cClient> client,
 
         for (int s = 0; s < streams_per_conn; s++) {
             auto stream = mgr->allocateStream();
-            stream->sendHeaders(
-                Http2Headers()
-                    .method("POST").scheme("http")
-                    .authority(authority).path("/echo")
-                    .contentType("text/plain")
-                    .contentLength(kPayload.size()),
-                false, true);
+            stream->sendHeaders(request_headers, false, true);
             stream->sendData(kPayload, true);
 
             Coroutine coro = handleResponse(stream);

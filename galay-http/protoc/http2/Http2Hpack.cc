@@ -4801,13 +4801,11 @@ constexpr size_t kStaticTableSize = sizeof(kStaticTableEntries) / sizeof(kStatic
 HpackStaticTable::HpackStaticTable()
 {
     m_table.reserve(kStaticTableSize);
+    m_name_to_indices.reserve(kStaticTableSize);
     for (size_t i = 0; i < kStaticTableSize; ++i) {
         m_table.push_back(kStaticTableEntries[i]);
-        // 建立 (name, value) → index 的完全匹配索引
-        auto key = std::make_pair(kStaticTableEntries[i].name, kStaticTableEntries[i].value);
-        m_full_index.emplace(std::move(key), i + 1);  // 索引从 1 开始
-        // 建立 name → index 的名称匹配索引（只记录第一个出现的）
-        m_name_index.emplace(kStaticTableEntries[i].name, i + 1);
+        // 建立 name -> [indices] 索引，避免热路径构造临时 pair<string,string>
+        m_name_to_indices[kStaticTableEntries[i].name].push_back(i + 1);
     }
 }
 
@@ -4827,17 +4825,18 @@ const Http2HeaderField* HpackStaticTable::get(size_t index) const
 
 std::pair<size_t, bool> HpackStaticTable::find(const std::string& name, const std::string& value) const
 {
-    // 先尝试完全匹配
-    auto it = m_full_index.find(std::make_pair(name, value));
-    if (it != m_full_index.end()) {
-        return {it->second, false};  // 完全匹配
+    auto nit = m_name_to_indices.find(name);
+    if (nit == m_name_to_indices.end()) {
+        return {0, false};  // 未找到
     }
-    // 再尝试名称匹配
-    auto nit = m_name_index.find(name);
-    if (nit != m_name_index.end()) {
-        return {nit->second, true};  // 只匹配名称
+
+    const auto& indices = nit->second;
+    for (size_t index : indices) {
+        if (m_table[index - 1].value == value) {
+            return {index, false};  // 完全匹配
+        }
     }
-    return {0, false};  // 未找到
+    return {indices.front(), true};  // 只匹配名称
 }
 
 

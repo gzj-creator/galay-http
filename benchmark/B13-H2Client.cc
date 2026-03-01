@@ -12,6 +12,7 @@
 #include <thread>
 #include <algorithm>
 #include <cstdlib>
+#include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-http/kernel/http2/H2Client.h"
@@ -36,10 +37,46 @@ struct ActiveClientGuard {
     ~ActiveClientGuard() { active_clients.fetch_sub(1); }
 };
 
+Coroutine handleResponse(Http2Stream::ptr stream) {
+    bool finished = false;
+    while (!finished) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) {
+            fail_count++;
+            co_return;
+        }
+        auto frames = std::move(batch_result.value());
+        bool stream_closed = false;
+        for (auto& frame : frames) {
+            if (!frame) {
+                stream_closed = true;
+                break;
+            }
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+                break;
+            }
+        }
+        if (stream_closed) {
+            fail_count++;
+            co_return;
+        }
+    }
+
+    auto& response = stream->response();
+    if (response.status == 200 && response.body == kEchoPayload) {
+        success_count++;
+    } else {
+        fail_count++;
+    }
+    co_return;
+}
+
 Coroutine runClient(int id,
                     const std::string& host,
                     uint16_t port,
-                    int requests_per_client) {
+                    int requests_per_client,
+                    int streams_per_batch) {
     (void)id;
     ActiveClientGuard guard;
 
@@ -62,37 +99,29 @@ Coroutine runClient(int id,
 
     connected_clients++;
 
-    for (int i = 0; i < requests_per_client; i++) {
-        auto stream = client.post("/echo", kEchoPayload, "text/plain");
-        total_requests++;
-        if (!stream) {
-            fail_count++;
-            continue;
-        }
+    streams_per_batch = std::max(1, streams_per_batch);
+    for (int sent = 0; sent < requests_per_client; ) {
+        const int batch = std::min(streams_per_batch, requests_per_client - sent);
+        std::vector<Coroutine> waiters;
+        waiters.reserve(batch);
 
-        bool finished = false;
-        while (!finished) {
-            auto frame_result = co_await stream->getFrame();
-            if (!frame_result || !frame_result.value()) {
-                break;
+        for (int i = 0; i < batch; ++i) {
+            auto stream = client.post("/echo", kEchoPayload, "text/plain");
+            total_requests++;
+            if (!stream) {
+                fail_count++;
+                continue;
             }
-            auto frame = std::move(frame_result.value());
-            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
-                finished = true;
-            }
+            Coroutine coro = handleResponse(stream);
+            co_await spawn(coro);
+            waiters.push_back(std::move(coro));
         }
 
-        if (!finished) {
-            fail_count++;
-            continue;
+        for (auto& waiter : waiters) {
+            co_await waiter.wait();
         }
 
-        auto& response = stream->response();
-        if (response.status == 200 && response.body == kEchoPayload) {
-            success_count++;
-        } else {
-            fail_count++;
-        }
+        sent += batch;
     }
 
     co_await client.close();
@@ -103,6 +132,7 @@ void runBenchmark(const std::string& host,
                   uint16_t port,
                   int concurrent_clients,
                   int requests_per_client,
+                  int streams_per_batch,
                   int max_wait_seconds,
                   int io_schedulers) {
     const int64_t expected_requests =
@@ -120,6 +150,7 @@ void runBenchmark(const std::string& host,
     std::cout << "  目标服务器: " << host << ":" << port << "\n";
     std::cout << "  并发客户端: " << concurrent_clients << "\n";
     std::cout << "  每客户端请求数: " << requests_per_client << "\n";
+    std::cout << "  每连接并发流批次: " << streams_per_batch << "\n";
     std::cout << "  总请求数: " << expected_requests << "\n";
     std::cout << "  IO 调度器线程: " << io_schedulers << "\n";
     std::cout << "========================================\n\n";
@@ -130,7 +161,7 @@ void runBenchmark(const std::string& host,
 
     for (int i = 0; i < concurrent_clients; i++) {
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(runClient(i, host, port, requests_per_client));
+        scheduler->spawn(runClient(i, host, port, requests_per_client, streams_per_batch));
     }
 
     std::cout << "压测进行中";
@@ -190,17 +221,28 @@ int main(int argc, char* argv[]) {
     uint16_t port = 9443;
     int concurrent_clients = 20;
     int requests_per_client = 20;
+    int streams_per_batch = 16;
     int max_wait_seconds = 60;
     int io_schedulers = 2;
+
+    std::cout << "========================================\n";
+    std::cout << "H2 (HTTP/2 over TLS) Client Benchmark\n";
+    std::cout << "========================================\n";
+    std::cout << "用法: " << argv[0]
+              << " [host] [port] [clients] [requests] [streams_per_batch] [max_wait] [io_threads]\n";
+    std::cout << "示例: " << argv[0] << " 127.0.0.1 9443 400 400 16 180 4\n";
+    std::cout << "========================================\n";
 
     if (argc > 1) host = argv[1];
     if (argc > 2) port = static_cast<uint16_t>(std::atoi(argv[2]));
     if (argc > 3) concurrent_clients = std::atoi(argv[3]);
     if (argc > 4) requests_per_client = std::atoi(argv[4]);
-    if (argc > 5) max_wait_seconds = std::atoi(argv[5]);
-    if (argc > 6) io_schedulers = std::max(1, std::atoi(argv[6]));
+    if (argc > 5) streams_per_batch = std::max(1, std::atoi(argv[5]));
+    if (argc > 6) max_wait_seconds = std::atoi(argv[6]);
+    if (argc > 7) io_schedulers = std::max(1, std::atoi(argv[7]));
 
-    runBenchmark(host, port, concurrent_clients, requests_per_client, max_wait_seconds, io_schedulers);
+    runBenchmark(host, port, concurrent_clients, requests_per_client, streams_per_batch,
+                 max_wait_seconds, io_schedulers);
     return 0;
 }
 

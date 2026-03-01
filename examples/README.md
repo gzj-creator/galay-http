@@ -3,11 +3,12 @@
 目录结构（参考 galay-rpc）：
 
 - `common/`：示例公共配置
-- `include/`：示例实现（E1~E12）
+- `include/`：示例实现（E1~E14）
 
 保留示例类型：
 
 - 各协议 Echo：HTTP / HTTPS / WS / WSS / H2c
+- 各协议 Echo：HTTP / HTTPS / WS / WSS / H2c / H2(TLS)
 - 静态服务器
 - Proxy
 

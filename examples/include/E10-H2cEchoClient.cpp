@@ -14,6 +14,7 @@
 #include "galay-http/kernel/http2/H2cClient.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include <iostream>
+#include <vector>
 
 using namespace galay::http2;
 using namespace galay::kernel;
@@ -44,26 +45,42 @@ Coroutine runClient(const std::string& host, uint16_t port) {
 
     // 发送 POST /echo
     std::string body = "Hello from H2cEchoClient!";
+    const std::string authority = host + ":" + std::to_string(port);
+    const std::string content_length = std::to_string(body.size());
+    std::vector<Http2HeaderField> headers;
+    headers.reserve(6);
+    headers.emplace_back(":method", "POST");
+    headers.emplace_back(":scheme", "http");
+    headers.emplace_back(":authority", authority);
+    headers.emplace_back(":path", "/echo");
+    headers.emplace_back("content-type", "text/plain");
+    headers.emplace_back("content-length", content_length);
+
     auto stream = mgr->allocateStream();
 
     std::cout << "=== POST /echo ===\n";
-    stream->sendHeaders(
-        Http2Headers().method("POST").scheme("http")
-            .authority(host + ":" + std::to_string(port)).path("/echo")
-            .contentType("text/plain").contentLength(body.size()),
-        false, true);
+    stream->sendHeaders(headers, false, true);
     stream->sendData(body, true);
 
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result || !frame_result.value()) {
+    bool finished = false;
+    while (!finished) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) {
             std::cerr << "Response stream closed unexpectedly\n";
             co_await client.shutdown();
             co_return;
         }
-        auto frame = std::move(frame_result.value());
-        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
-            break;
+        auto frames = std::move(batch_result.value());
+        for (auto& frame : frames) {
+            if (!frame) {
+                std::cerr << "Response stream closed unexpectedly\n";
+                co_await client.shutdown();
+                co_return;
+            }
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+                break;
+            }
         }
     }
     auto& response = stream->response();

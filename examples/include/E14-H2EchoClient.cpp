@@ -47,13 +47,24 @@ Coroutine runClient(const std::string& host, uint16_t port) {
 
     bool finished = false;
     while (!finished) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result || !frame_result.value()) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) {
             break;
         }
-        auto frame = std::move(frame_result.value());
-        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
-            finished = true;
+        auto frames = std::move(batch_result.value());
+        bool stream_closed = false;
+        for (auto& frame : frames) {
+            if (!frame) {
+                stream_closed = true;
+                break;
+            }
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+                break;
+            }
+        }
+        if (stream_closed) {
+            break;
         }
     }
 

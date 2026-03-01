@@ -1320,12 +1320,12 @@ public:
 
         auto* mgr = m_conn->streamManager();
         auto stream = mgr->allocateStream();
-        std::vector<Http2HeaderField> headers{
-            {":method", "GET"},
-            {":scheme", "https"},
-            {":authority", m_host + ":" + std::to_string(m_port)},
-            {":path", path.empty() ? "/" : path}
-        };
+        std::vector<Http2HeaderField> headers;
+        headers.reserve(4);
+        headers.emplace_back(":method", "GET");
+        headers.emplace_back(":scheme", "https");
+        headers.emplace_back(":authority", m_authority);
+        headers.emplace_back(":path", path.empty() ? "/" : path);
         stream->sendHeaders(headers, true);
         return stream;
     }
@@ -1340,13 +1340,13 @@ public:
 
         auto* mgr = m_conn->streamManager();
         auto stream = mgr->allocateStream();
-        std::vector<Http2HeaderField> headers{
-            {":method", "POST"},
-            {":scheme", "https"},
-            {":authority", m_host + ":" + std::to_string(m_port)},
-            {":path", path.empty() ? "/" : path},
-            {"content-type", content_type}
-        };
+        std::vector<Http2HeaderField> headers;
+        headers.reserve(5);
+        headers.emplace_back(":method", "POST");
+        headers.emplace_back(":scheme", "https");
+        headers.emplace_back(":authority", m_authority);
+        headers.emplace_back(":path", path.empty() ? "/" : path);
+        headers.emplace_back("content-type", content_type);
         stream->sendHeaders(headers, false);
         stream->sendData(body, true);
         return stream;
@@ -1371,6 +1371,7 @@ private:
 
     H2ClientConfig m_config;
     std::string m_host;
+    std::string m_authority;
     uint16_t m_port = 0;
     bool m_connected = false;
     uint32_t m_next_stream_id = 1;
@@ -1388,6 +1389,7 @@ inline Coroutine H2Client::connectImpl(std::string host, uint16_t port) {
     m_connected = false;
     m_host = std::move(host);
     m_port = port;
+    m_authority = m_host + ":" + std::to_string(m_port);
     m_conn.reset();
     m_connect_result = std::unexpected(Http2ErrorCode::ConnectError);
 
