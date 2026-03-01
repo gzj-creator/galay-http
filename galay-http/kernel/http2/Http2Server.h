@@ -7,9 +7,9 @@
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/protoc/http/HttpHeader.h"
+#include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-http/kernel/http/HttpConn.h"
-#include "galay-http/kernel/http/SslHandshakeAwaitable.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
@@ -29,6 +29,7 @@
 #include <string>
 #include <array>
 #include <optional>
+#include <chrono>
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -40,6 +41,37 @@ namespace galay::http2
 
 using namespace galay::async;
 using namespace galay::kernel;
+
+template<typename SocketType>
+inline Coroutine runDefaultHttp1FallbackLoop(const char* log_tag,
+                                             galay::http::HttpConnImpl<SocketType>&& conn) {
+    bool keep_alive = true;
+    while (keep_alive) {
+        galay::http::HttpRequest request;
+        auto reader = conn.getReader();
+        auto read_result = co_await reader.getRequest(request);
+        if (!read_result) {
+            HTTP_LOG_DEBUG("{} [recv-fail] [{}]", log_tag, read_result.error().message());
+            break;
+        }
+
+        keep_alive = request.header().isKeepAlive() && !request.header().isConnectionClose();
+
+        auto response = galay::http::Http1_1ResponseBuilder()
+            .status(galay::http::HttpStatusCode::NotFound_404)
+            .header("Content-Type", "text/plain")
+            .body("404 Not Found")
+            .buildMove();
+        auto writer = conn.getWriter();
+        auto write_result = co_await writer.sendResponse(response);
+        if (!write_result) {
+            HTTP_LOG_DEBUG("{} [send-fail] [{}]", log_tag, write_result.error().message());
+            break;
+        }
+    }
+    co_await conn.close();
+    co_return;
+}
 
 /**
  * @brief h2c 服务器配置
@@ -59,6 +91,16 @@ struct H2cServerConfig
     uint32_t max_frame_size = 16384;
     uint32_t max_header_list_size = 8192;
     bool enable_push = false;  // 默认禁用 Server Push（curl 不支持）
+
+    // 连接运行时策略
+    bool ping_enabled = true;
+    std::chrono::milliseconds ping_interval{30000};
+    std::chrono::milliseconds ping_timeout{10000};
+    std::chrono::milliseconds settings_ack_timeout{10000};
+    std::chrono::milliseconds graceful_shutdown_rtt{100};
+    std::chrono::milliseconds graceful_shutdown_timeout{5000};
+    uint32_t flow_control_target_window = kDefaultInitialWindowSize;
+    Http2FlowControlStrategy flow_control_strategy;
 };
 
 class H2cServer;
@@ -75,6 +117,17 @@ public:
     H2cServerBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
     H2cServerBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
     H2cServerBuilder& enablePush(bool v)               { m_config.enable_push = v; return *this; }
+    H2cServerBuilder& pingEnabled(bool v)              { m_config.ping_enabled = v; return *this; }
+    H2cServerBuilder& pingInterval(std::chrono::milliseconds v) { m_config.ping_interval = v; return *this; }
+    H2cServerBuilder& pingTimeout(std::chrono::milliseconds v) { m_config.ping_timeout = v; return *this; }
+    H2cServerBuilder& settingsAckTimeout(std::chrono::milliseconds v) { m_config.settings_ack_timeout = v; return *this; }
+    H2cServerBuilder& gracefulShutdownRtt(std::chrono::milliseconds v) { m_config.graceful_shutdown_rtt = v; return *this; }
+    H2cServerBuilder& gracefulShutdownTimeout(std::chrono::milliseconds v) { m_config.graceful_shutdown_timeout = v; return *this; }
+    H2cServerBuilder& flowControlTargetWindow(uint32_t v) { m_config.flow_control_target_window = v; return *this; }
+    H2cServerBuilder& flowControlStrategy(Http2FlowControlStrategy v) {
+        m_config.flow_control_strategy = std::move(v);
+        return *this;
+    }
     H2cServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
         m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
         m_config.affinity.seq_io_count = io_count;
@@ -305,6 +358,7 @@ private:
 
         // 配置本地设置
         conn.localSettings().from(m_config);
+        conn.runtimeConfig().from(m_config);
 
         DetectedProtocol protocol = DetectedProtocol::Unknown;
         galay::http::HttpRequestHeader upgrade_request;
@@ -468,6 +522,11 @@ private:
                 co_return;
             }
 
+            // 回退到 HTTP/1.1 链路时，需要把已经读出的首个请求头（和可能携带的 body）
+            // 回灌到 RingBuffer，交给标准 HttpReader 继续解析。
+            if (!header_data.empty() && !m_http1_fallback) {
+                rb.write(header_data.data(), header_data.size());
+            }
             protocol = DetectedProtocol::Http1;
             co_return;
         }
@@ -486,16 +545,9 @@ private:
             co_return;
         }
 
-        auto writer = conn.getWriter();
-        auto response = galay::http::Http1_1ResponseBuilder()
-            .status(galay::http::HttpStatusCode::HttpVersionNotSupported_505)
-            .body("505 HTTP Version Not Supported - Use h2c")
-            .buildMove();
-        auto result = co_await writer.sendResponse(response);
-        if (!result) {
-            HTTP_LOG_ERROR("[h1-fallback] [send-fail] [{}]", result.error().message());
-        }
-        co_await conn.close();
+        (void)first_request_header;
+        // 默认行为：进入 HTTP/1.1 处理链路，而不是直接返回 505。
+        co_await runDefaultHttp1FallbackLoop("[h2c] [h1-fallback]", std::move(conn)).wait();
         co_return;
     }
 
@@ -536,6 +588,16 @@ struct H2ServerConfig
     uint32_t max_frame_size = 16384;
     uint32_t max_header_list_size = 8192;
     bool enable_push = false;
+
+    // 连接运行时策略
+    bool ping_enabled = true;
+    std::chrono::milliseconds ping_interval{30000};
+    std::chrono::milliseconds ping_timeout{10000};
+    std::chrono::milliseconds settings_ack_timeout{10000};
+    std::chrono::milliseconds graceful_shutdown_rtt{100};
+    std::chrono::milliseconds graceful_shutdown_timeout{5000};
+    uint32_t flow_control_target_window = kDefaultInitialWindowSize;
+    Http2FlowControlStrategy flow_control_strategy;
 };
 
 class H2Server;
@@ -573,6 +635,17 @@ public:
     H2ServerBuilder& maxFrameSize(uint32_t v)         { m_config.max_frame_size = v; return *this; }
     H2ServerBuilder& maxHeaderListSize(uint32_t v)    { m_config.max_header_list_size = v; return *this; }
     H2ServerBuilder& enablePush(bool v)               { m_config.enable_push = v; return *this; }
+    H2ServerBuilder& pingEnabled(bool v)              { m_config.ping_enabled = v; return *this; }
+    H2ServerBuilder& pingInterval(std::chrono::milliseconds v) { m_config.ping_interval = v; return *this; }
+    H2ServerBuilder& pingTimeout(std::chrono::milliseconds v) { m_config.ping_timeout = v; return *this; }
+    H2ServerBuilder& settingsAckTimeout(std::chrono::milliseconds v) { m_config.settings_ack_timeout = v; return *this; }
+    H2ServerBuilder& gracefulShutdownRtt(std::chrono::milliseconds v) { m_config.graceful_shutdown_rtt = v; return *this; }
+    H2ServerBuilder& gracefulShutdownTimeout(std::chrono::milliseconds v) { m_config.graceful_shutdown_timeout = v; return *this; }
+    H2ServerBuilder& flowControlTargetWindow(uint32_t v) { m_config.flow_control_target_window = v; return *this; }
+    H2ServerBuilder& flowControlStrategy(Http2FlowControlStrategy v) {
+        m_config.flow_control_strategy = std::move(v);
+        return *this;
+    }
     H2Server build() const;
     H2ServerConfig buildConfig() const                { return m_config; }
 private:
@@ -609,6 +682,11 @@ public:
         startInternal();
     }
 
+    void setHttp1Fallback(
+        std::function<Coroutine(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> handler) {
+        m_http1_fallback = std::move(handler);
+    }
+
     void stop() {
         if (!m_running.load()) {
             return;
@@ -636,6 +714,7 @@ private:
                                     unsigned int inlen,
                                     void*) {
         // `in` is a vector of 8-bit length-prefixed protocols.
+        const unsigned char* http11 = nullptr;
         unsigned int i = 0;
         while (i < inlen) {
             unsigned int len = in[i++];
@@ -647,7 +726,15 @@ private:
                 *outlen = 2;
                 return SSL_TLSEXT_ERR_OK;
             }
+            if (len == 8 && std::memcmp(in + i, "http/1.1", 8) == 0) {
+                http11 = in + i;
+            }
             i += len;
+        }
+        if (http11 != nullptr) {
+            *out = http11;
+            *outlen = 8;
+            return SSL_TLSEXT_ERR_OK;
         }
         return SSL_TLSEXT_ERR_NOACK;
     }
@@ -721,7 +808,7 @@ private:
             m_ssl_ctx.setVerifyMode(galay::ssl::SslVerifyMode::None);
         }
 
-        auto alpn_result = m_ssl_ctx.setALPNProtocols({"h2"});
+        auto alpn_result = m_ssl_ctx.setALPNProtocols({"h2", "http/1.1"});
         if (!alpn_result) {
             HTTP_LOG_ERROR("[h2] [ssl] [alpn-set-fail] [{}]", alpn_result.error().message());
             return false;
@@ -806,7 +893,7 @@ private:
     }
 
     Coroutine handleConnection(galay::ssl::SslSocket socket) {
-        auto handshake_result = co_await galay::http::handshakeCompletely(socket);
+        auto handshake_result = co_await socket.handshake();
         if (!handshake_result) {
             HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
             co_await socket.close();
@@ -815,8 +902,9 @@ private:
 
         std::string alpn = socket.getALPNProtocol();
         if (alpn != "h2") {
-            HTTP_LOG_ERROR("[h2] [alpn-mismatch] [got={}]", alpn);
-            co_await socket.close();
+            HTTP_LOG_INFO("[h2] [alpn-fallback] [to=http/1.1] [got={}]",
+                          alpn.empty() ? "(empty)" : alpn);
+            co_await handleHttp1Fallback(std::move(socket)).wait();
             co_return;
         }
         HTTP_LOG_DEBUG("[h2] [alpn-ok]");
@@ -833,6 +921,7 @@ private:
 
         Http2ConnImpl<galay::ssl::SslSocket> conn(std::move(socket));
         conn.localSettings().from(m_config);
+        conn.runtimeConfig().from(m_config);
 
         auto settings_result = co_await conn.sendSettings();
         if (!settings_result) {
@@ -850,10 +939,21 @@ private:
         co_return;
     }
 
+    Coroutine handleHttp1Fallback(galay::ssl::SslSocket socket) {
+        galay::http::HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket));
+        if (m_http1_fallback) {
+            co_await m_http1_fallback(std::move(conn)).wait();
+            co_return;
+        }
+        co_await runDefaultHttp1FallbackLoop("[h2] [h1-fallback]", std::move(conn)).wait();
+        co_return;
+    }
+
 private:
     Runtime m_runtime;
     H2ServerConfig m_config;
     Http2ConnectionHandler m_handler;
+    std::function<Coroutine(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> m_http1_fallback;
     std::atomic<bool> m_running;
     galay::ssl::SslContext m_ssl_ctx;
 };

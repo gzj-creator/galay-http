@@ -34,15 +34,23 @@ struct ActiveClientGuard {
 };
 
 Coroutine handleStream(Http2Stream::ptr stream) {
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result || !frame_result.value()) {
+    bool finished = false;
+    while (!finished) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) {
             fail_count++;
             co_return;
         }
-        auto frame = std::move(frame_result.value());
-        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
-            break;
+        auto frames = std::move(batch_result.value());
+        for (auto& frame : frames) {
+            if (!frame) {
+                fail_count++;
+                co_return;
+            }
+            if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+                finished = true;
+                break;
+            }
         }
     }
     auto& response = stream->response();

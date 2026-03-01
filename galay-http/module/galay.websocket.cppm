@@ -9,7 +9,6 @@ export {
 
 #include "galay-http/kernel/websocket/WsClient.h"
 #include "galay-http/kernel/websocket/WsConn.h"
-#include "galay-http/kernel/websocket/WsHeartbeat.h"
 #include "galay-http/kernel/websocket/WsReader.h"
 #include "galay-http/kernel/websocket/WsReaderSetting.h"
 #include "galay-http/kernel/websocket/WsSession.h"

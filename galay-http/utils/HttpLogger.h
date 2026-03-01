@@ -37,6 +37,11 @@ namespace galay::http
         // 设置自定义 logger
         static void setLogger(std::shared_ptr<spdlog::logger> logger);
 
+        // 运行时日志级别控制
+        static void setLevel(spdlog::level::level_enum level);
+        static bool setLevel(const std::string& level_name);
+        static spdlog::level::level_enum level();
+
         // 禁用日志输出（设置为 off 级别）
         static void disable();
 

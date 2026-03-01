@@ -8,7 +8,7 @@
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
-#include "galay-kernel/concurrency/UnsafeChannel.h"
+#include "galay-kernel/common/Sleep.hpp"
 #include <memory>
 #include <queue>
 #include <string>
@@ -18,6 +18,11 @@
 #include <functional>
 #include <type_traits>
 #include <atomic>
+#include <chrono>
+#include <array>
+#include <cstring>
+#include <algorithm>
+#include <deque>
 
 namespace galay::http2
 {
@@ -59,13 +64,80 @@ using Http2StreamHandler = std::function<Coroutine(Http2Stream::ptr)>;
  *
  * 职责：
  * 1. 运行帧读取协程（Reader），处理连接级帧，分发流级帧到对应 Http2Stream
- * 2. 运行帧写入协程（Writer），从 UnsafeChannel 接收帧并发送到 socket
+ * 2. 运行帧写入协程（Writer），从连接内 send_queue 批量发送到 socket
  * 3. 新流创建后自动 spawn 用户 handler
  */
 template<typename SocketType>
 class Http2StreamManagerImpl
 {
 public:
+    class StartInBackgroundAwaitable
+        : public galay::kernel::TimeoutSupport<StartInBackgroundAwaitable>
+    {
+    public:
+        StartInBackgroundAwaitable(Http2StreamManagerImpl* manager, Http2StreamHandler handler)
+            : m_manager(manager)
+            , m_handler(std::move(handler))
+        {
+        }
+
+        bool await_ready() const noexcept { return false; }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (!m_started) {
+                m_started = true;
+                m_wait_result.emplace(
+                    m_manager->startInBackgroundOnce(std::move(m_handler)).wait());
+            }
+            return m_wait_result->await_suspend(handle);
+        }
+
+        StartInBackgroundAwaitable& wait() & { return *this; }
+        StartInBackgroundAwaitable&& wait() && { return std::move(*this); }
+
+        void await_resume() const noexcept {}
+
+    private:
+        Http2StreamManagerImpl* m_manager;
+        Http2StreamHandler m_handler;
+        bool m_started = false;
+        std::optional<galay::kernel::WaitResult> m_wait_result;
+    };
+
+    class ShutdownAwaitable
+        : public galay::kernel::TimeoutSupport<ShutdownAwaitable>
+    {
+    public:
+        ShutdownAwaitable(Http2StreamManagerImpl* manager, Http2ErrorCode error)
+            : m_manager(manager)
+            , m_error(error)
+        {
+        }
+
+        bool await_ready() const noexcept { return false; }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (!m_started) {
+                m_started = true;
+                m_wait_result.emplace(m_manager->shutdownOnce(m_error).wait());
+            }
+            return m_wait_result->await_suspend(handle);
+        }
+
+        ShutdownAwaitable& wait() & { return *this; }
+        ShutdownAwaitable&& wait() && { return std::move(*this); }
+
+        void await_resume() const noexcept {}
+
+    private:
+        Http2StreamManagerImpl* m_manager;
+        Http2ErrorCode m_error;
+        bool m_started = false;
+        std::optional<galay::kernel::WaitResult> m_wait_result;
+    };
+
     Http2StreamManagerImpl(Http2ConnImpl<SocketType>& conn)
         : m_conn(conn)
         , m_running(false)
@@ -84,6 +156,9 @@ public:
         m_started = true;
         m_running = true;
         m_draining_handlers.store(false, std::memory_order_release);
+        m_reject_new_streams = false;
+        m_last_frame_recv_at = std::chrono::steady_clock::now();
+        m_waiting_ping_ack = false;
 
         // 初始化自动分配的 stream ID
         if (m_next_local_stream_id == 0) {
@@ -93,6 +168,10 @@ public:
         // spawn writer 协程（后台运行），保存句柄用于等待结束
         Coroutine writer = writerLoop();
         co_await spawn(writer);
+
+        // 后台监控：PING 心跳 + SETTINGS ACK 超时
+        Coroutine monitor = monitorLoop();
+        co_await spawn(monitor);
         m_writer_ready.notify();
 
         // reader 协程在当前协程中运行
@@ -104,11 +183,13 @@ public:
             co_await m_handler_waiter.wait();
         }
 
+        m_running = false;
+
         // reader 退出后，发送关闭信号给 writer，并等待其退出
         m_send_channel.send(Http2OutgoingFrame{});
         co_await writer.wait();
+        co_await monitor.wait();
 
-        m_running = false;
         m_stop_waiter.notify();
         co_return;
     }
@@ -143,10 +224,32 @@ public:
      *          返回时 writer 已启动，可以安全地向 send channel 推送帧。
      *          调用者之后可以直接 sendHeaders/sendData，无需担心调度时序。
      */
-    Coroutine startInBackground(Http2StreamHandler handler) {
-        co_await spawn(start(std::move(handler)));
-        co_await m_writer_ready.wait();
-        co_return;
+    StartInBackgroundAwaitable startInBackground(Http2StreamHandler handler) {
+        return StartInBackgroundAwaitable(this, std::move(handler));
+    }
+
+    /**
+     * @brief 从非协程上下文启动 StreamManager
+     * @param scheduler 当前 IO 调度器
+     * @param handler 用户流处理回调
+     * @details 通过 scheduler->spawn() 启动 reader/writer/monitor，
+     *          不需要协程上下文，可从 CustomAwaitable::await_resume() 等普通函数调用。
+     */
+    void startWithScheduler(galay::kernel::Scheduler* scheduler, Http2StreamHandler handler) {
+        m_started = true;
+        m_running = true;
+        m_draining_handlers.store(false, std::memory_order_release);
+        m_reject_new_streams = false;
+        m_last_frame_recv_at = std::chrono::steady_clock::now();
+        m_waiting_ping_ack = false;
+
+        if (m_next_local_stream_id == 0) {
+            m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
+        }
+
+        scheduler->spawn(writerLoop());
+        scheduler->spawn(monitorLoop());
+        scheduler->spawn(readerLoopThenCleanup(std::move(handler)));
     }
 
     /**
@@ -163,13 +266,68 @@ public:
      * @brief 优雅关闭：发送 GOAWAY、关闭连接、等待 StreamManager 停止
      * @details 替代手动的 sendGoaway + conn.close() + waitStopped() 序列
      */
-    Coroutine shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
+    ShutdownAwaitable shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
+        return ShutdownAwaitable(this, error);
+    }
+
+private:
+    Coroutine startInBackgroundOnce(Http2StreamHandler handler) {
+        co_await spawn(start(std::move(handler)));
+        co_await m_writer_ready.wait();
+        co_return;
+    }
+
+    Coroutine readerLoopThenCleanup(Http2StreamHandler handler) {
+        co_await readerLoop(std::move(handler)).wait();
+
+        m_draining_handlers.store(true, std::memory_order_release);
+        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
+            co_await m_handler_waiter.wait();
+        }
+
+        m_running = false;
+        m_send_channel.send(Http2OutgoingFrame{});
+        m_stop_waiter.notify();
+        co_return;
+    }
+
+    Coroutine shutdownOnce(Http2ErrorCode error = Http2ErrorCode::NoError) {
         if (!m_started) co_return;
 
         if (m_running) {
-            auto waiter = sendGoaway(error);
-            if (waiter) {
-                co_await waiter->wait();
+            m_conn.setDraining(true);
+
+            if (m_conn.isClient()) {
+                m_reject_new_streams = true;
+                auto waiter = sendGoaway(error);
+                if (waiter) {
+                    co_await waiter->wait();
+                }
+            } else {
+                // RFC 推荐的 graceful shutdown：先发 MAX_INT，再发真实 last_stream_id。
+                auto first = sendGoaway(error, "draining", kMaxStreamId);
+                if (first) {
+                    co_await first->wait();
+                }
+
+                auto rtt = m_conn.runtimeConfig().graceful_shutdown_rtt;
+                if (rtt.count() > 0) {
+                    co_await galay::kernel::sleep(rtt);
+                }
+
+                m_reject_new_streams = true;
+                auto last_accepted = m_conn.lastPeerStreamId();
+                auto second = sendGoaway(error, "", last_accepted);
+                if (second) {
+                    co_await second->wait();
+                }
+            }
+
+            // 服务端等待活跃流处理完成，避免直接断开造成业务中断。
+            auto deadline = std::chrono::steady_clock::now() + m_conn.runtimeConfig().graceful_shutdown_timeout;
+            while (m_active_handlers.load(std::memory_order_acquire) > 0 &&
+                   std::chrono::steady_clock::now() < deadline) {
+                co_await galay::kernel::sleep(std::chrono::milliseconds(5));
             }
 
             // 关闭所有流的帧队列
@@ -188,14 +346,16 @@ public:
         co_return;
     }
 
+public:
     /**
      * @brief 发送 GOAWAY 帧
      * @return waiter，co_await waiter->wait() 等待发送完成
      */
     Http2OutgoingFrame::WaiterPtr sendGoaway(Http2ErrorCode error = Http2ErrorCode::NoError,
-                                             const std::string& debug = "") {
+                                             const std::string& debug = "",
+                                             std::optional<uint32_t> last_stream_id = std::nullopt) {
         auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
-        enqueueGoaway(error, debug, waiter);
+        enqueueGoaway(error, debug, waiter, last_stream_id);
         return waiter;
     }
 
@@ -258,6 +418,7 @@ private:
 
             auto& frame = *frame_result;
             uint32_t stream_id = frame->streamId();
+            m_last_frame_recv_at = std::chrono::steady_clock::now();
 
             HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
                           http2FrameTypeToString(frame->type()), stream_id, frame->header().flags);
@@ -311,6 +472,56 @@ private:
         co_return;
     }
 
+    Coroutine monitorLoop() {
+        while (m_running) {
+            co_await galay::kernel::sleep(std::chrono::milliseconds(100));
+            if (!m_running) {
+                break;
+            }
+
+            auto now = std::chrono::steady_clock::now();
+
+            const auto settings_timeout = m_conn.runtimeConfig().settings_ack_timeout;
+            if (settings_timeout.count() > 0 &&
+                m_conn.isSettingsAckPending() &&
+                now - m_conn.settingsSentAt() > settings_timeout) {
+                HTTP_LOG_WARN("[stream-mgr] [settings-timeout] [ack-missing]");
+                enqueueGoaway(Http2ErrorCode::SettingsTimeout, "SETTINGS ACK timeout");
+                m_conn.initiateClose();
+                break;
+            }
+
+            if (!m_conn.runtimeConfig().ping_enabled ||
+                m_conn.runtimeConfig().ping_interval.count() <= 0) {
+                continue;
+            }
+
+            if (!m_waiting_ping_ack) {
+                if (now - m_last_frame_recv_at >= m_conn.runtimeConfig().ping_interval) {
+                    Http2PingFrame ping;
+                    m_last_ping_payload.fill(0);
+                    auto nonce = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            now.time_since_epoch()).count());
+                    for (int i = 0; i < 8; ++i) {
+                        m_last_ping_payload[7 - i] = static_cast<uint8_t>((nonce >> (i * 8)) & 0xFF);
+                    }
+                    ping.setOpaqueData(m_last_ping_payload.data());
+                    enqueueSendFrame(std::move(ping));
+                    m_waiting_ping_ack = true;
+                    m_last_ping_sent_at = now;
+                }
+            } else if (m_conn.runtimeConfig().ping_timeout.count() > 0 &&
+                       now - m_last_ping_sent_at > m_conn.runtimeConfig().ping_timeout) {
+                HTTP_LOG_WARN("[stream-mgr] [ping-timeout] [ack-missing]");
+                enqueueGoaway(Http2ErrorCode::ProtocolError, "PING ACK timeout");
+                m_conn.initiateClose();
+                break;
+            }
+        }
+        co_return;
+    }
+
     /**
      * @brief Writer 协程：从 send channel 接收数据并写入 socket
      * @details 使用 writev 批量发送多个帧，减少系统调用和内存拷贝
@@ -319,36 +530,52 @@ private:
         // 预分配序列化缓冲区和 iovec 数组，避免每次循环分配
         std::vector<std::string> frame_buffers;
         std::vector<iovec> iovecs;
+        std::vector<Http2OutgoingFrame::WaiterPtr> waiters;
         frame_buffers.reserve(64);
         iovecs.reserve(64);
+        waiters.reserve(64);
 
         while (true) {
-            auto batch_result = co_await m_send_channel.recvBatch();
-            if (!batch_result) {
+            auto item_result = co_await m_send_channel.recv();
+            if (!item_result) {
                 HTTP_LOG_ERROR("[stream-mgr] [writer] [recv-fail]");
                 break;
             }
 
-            auto& batch = *batch_result;
             frame_buffers.clear();
             iovecs.clear();
+            waiters.clear();
+            size_t total_bytes = 0;
 
             // 先批量序列化，再构建 iovec，避免 vector 扩容导致 data() 指针失效。
             bool has_shutdown = false;
-            for (auto& item : batch) {
+            auto collect_item = [&](Http2OutgoingFrame&& item) {
                 if (!item.frame) {
                     // 收到关闭信号，先发送已有数据再退出
                     HTTP_LOG_DEBUG("[stream-mgr] [writer] [shutdown]");
                     has_shutdown = true;
+                    return;
+                }
+                if (item.waiter) {
+                    waiters.push_back(std::move(item.waiter));
+                }
+                frame_buffers.push_back(item.frame->serialize());
+            };
+
+            collect_item(std::move(item_result.value()));
+
+            while (!has_shutdown) {
+                auto next = m_send_channel.tryRecv();
+                if (!next.has_value()) {
                     break;
                 }
-
-                frame_buffers.push_back(item.frame->serialize());
+                collect_item(std::move(next.value()));
             }
 
             if (!frame_buffers.empty()) {
                 iovecs.reserve(frame_buffers.size());
                 for (auto& buffer : frame_buffers) {
+                    total_bytes += buffer.size();
                     iovecs.push_back({
                         .iov_base = buffer.data(),
                         .iov_len = buffer.size()
@@ -359,12 +586,8 @@ private:
             if (!iovecs.empty()) {
                 if constexpr (requires(SocketType& socket, std::vector<iovec>& vec) { socket.writev(vec); }) {
                     // 支持 writev 的 socket（如 TcpSocket）：一次批量发送
-                    size_t total_bytes = 0;
-                    for (const auto& iov : iovecs) {
-                        total_bytes += iov.iov_len;
-                    }
-
                     size_t sent = 0;
+                    size_t iov_index = 0;
                     while (sent < total_bytes) {
                         auto result = co_await m_conn.socket().writev(iovecs);
                         if (!result) {
@@ -374,34 +597,46 @@ private:
                             } else {
                                 HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-fail]");
                             }
-                            for (auto& item : batch) {
-                                if (item.waiter) {
-                                    item.waiter->notify();
+                            for (auto& waiter : waiters) {
+                                if (waiter) {
+                                    waiter->notify();
+                                }
+                            }
+                            co_return;
+                        }
+                        if (result.value() == 0) {
+                            HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-zero]");
+                            for (auto& waiter : waiters) {
+                                if (waiter) {
+                                    waiter->notify();
                                 }
                             }
                             co_return;
                         }
 
-                        sent += result.value();
+                        size_t written = result.value();
+                        sent += written;
                         if (sent >= total_bytes) {
                             break;
                         }
 
-                        size_t remaining = result.value();
-                        for (auto& iov : iovecs) {
-                            if (remaining >= iov.iov_len) {
-                                remaining -= iov.iov_len;
-                                iov.iov_len = 0;
+                        while (written > 0 && iov_index < iovecs.size()) {
+                            if (iovecs[iov_index].iov_len == 0) {
+                                ++iov_index;
+                                continue;
+                            }
+
+                            if (written < iovecs[iov_index].iov_len) {
+                                iovecs[iov_index].iov_base =
+                                    static_cast<char*>(iovecs[iov_index].iov_base) + written;
+                                iovecs[iov_index].iov_len -= written;
+                                written = 0;
                             } else {
-                                iov.iov_base = static_cast<char*>(iov.iov_base) + remaining;
-                                iov.iov_len -= remaining;
-                                break;
+                                written -= iovecs[iov_index].iov_len;
+                                iovecs[iov_index].iov_len = 0;
+                                ++iov_index;
                             }
                         }
-                        iovecs.erase(
-                            std::remove_if(iovecs.begin(), iovecs.end(),
-                                           [](const iovec& iov) { return iov.iov_len == 0; }),
-                            iovecs.end());
                     }
                 } else {
                     // 不支持 writev 的 socket（如 SslSocket）：按帧串行 send
@@ -416,9 +651,9 @@ private:
                                 } else {
                                     HTTP_LOG_ERROR("[stream-mgr] [writer] [send-fail]");
                                 }
-                                for (auto& item : batch) {
-                                    if (item.waiter) {
-                                        item.waiter->notify();
+                                for (auto& waiter : waiters) {
+                                    if (waiter) {
+                                        waiter->notify();
                                     }
                                 }
                                 co_return;
@@ -430,9 +665,9 @@ private:
             }
 
             // 通知所有 waiter
-            for (auto& item : batch) {
-                if (item.waiter) {
-                    item.waiter->notify();
+            for (auto& waiter : waiters) {
+                if (waiter) {
+                    waiter->notify();
                 }
             }
 
@@ -452,11 +687,12 @@ private:
             case Http2FrameType::Settings: {
                 auto* settings = frame->asSettings();
                 if (settings->isAck()) {
+                    m_conn.markSettingsAckReceived();
                     HTTP_LOG_DEBUG("[stream-mgr] [settings] [ack]");
                 } else {
                     auto err = m_conn.peerSettings().applySettings(*settings);
                     if (err != Http2ErrorCode::NoError) {
-                        m_conn.sendGoaway(err);
+                        enqueueGoaway(err);
                         return;
                     }
                     m_conn.encoder().setMaxTableSize(m_conn.peerSettings().header_table_size);
@@ -480,17 +716,39 @@ private:
                     pong.setOpaqueData(ping->opaqueData());
                     pong.setAck(true);
                     enqueueSendFrame(std::move(pong));
+                } else if (m_waiting_ping_ack &&
+                           std::memcmp(ping->opaqueData(), m_last_ping_payload.data(), 8) == 0) {
+                    m_waiting_ping_ack = false;
                 }
                 break;
             }
 
             case Http2FrameType::GoAway: {
                 auto* goaway = frame->asGoAway();
-                m_conn.setGoawayReceived();
+                m_reject_new_streams = true;
+                m_conn.markGoawayReceived(
+                    goaway->lastStreamId(), goaway->errorCode(), goaway->debugData());
                 HTTP_LOG_INFO("[stream-mgr] [goaway] [recv] [last={}] [err={}] [debug={}]",
                              goaway->lastStreamId(),
                              http2ErrorCodeToString(goaway->errorCode()),
                              goaway->debugData());
+
+                if (m_conn.isClient()) {
+                    const uint32_t last = goaway->lastStreamId();
+                    m_conn.forEachStream([&](uint32_t stream_id, Http2Stream::ptr& stream) {
+                        if (!stream || stream_id <= last) {
+                            return;
+                        }
+                        Http2GoAwayError err;
+                        err.stream_id = stream_id;
+                        err.last_stream_id = last;
+                        err.error_code = goaway->errorCode();
+                        err.retryable = true;
+                        err.debug = goaway->debugData();
+                        stream->setGoAwayError(std::move(err));
+                        stream->closeFrameQueue();
+                    });
+                }
                 break;
             }
 
@@ -531,6 +789,11 @@ private:
                     return;
                 }
                 // 服务端模式：对端发起的新请求
+                if (m_reject_new_streams ||
+                    (m_conn.isGoawaySent() && m_conn.goawayLastStreamId() != kMaxStreamId)) {
+                    m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::RefusedStream});
+                    return;
+                }
                 if (stream_id <= m_conn.lastPeerStreamId()) {
                     m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
                     return;
@@ -554,9 +817,9 @@ private:
             }
 
             bool end_headers = hdrs->isEndHeaders();
-            stream->onHeadersReceived(hdrs->isEndStream());
+            bool end_stream = hdrs->isEndStream();
+            stream->onHeadersReceived(end_stream);
             stream->appendHeaderBlock(hdrs->headerBlock());
-            stream->pushFrame(std::move(frame));
 
             if (end_headers) {
                 // HPACK 解码必须在 readerLoop 中按帧到达顺序执行，
@@ -567,13 +830,23 @@ private:
                 }
                 stream->clearHeaderBlock();
                 m_conn.setExpectingContinuation(false);
-                if (!m_conn.isClient()) {
+                if (m_conn.isClient()) {
+                    stream->consumeDecodedHeadersAsResponse();
+                    if (end_stream) {
+                        stream->markResponseCompleted();
+                    }
+                } else {
+                    stream->consumeDecodedHeadersAsRequest();
+                    if (end_stream) {
+                        stream->markRequestCompleted();
+                    }
                     // 服务端：新请求就绪，spawn handler
                     queueStreamHandler(stream);
                 }
             } else {
                 m_conn.setExpectingContinuation(true, stream_id);
             }
+            stream->pushFrame(std::move(frame));
             return;
         }
 
@@ -589,7 +862,6 @@ private:
             auto* cont = frame->asContinuation();
             bool end_headers = cont->isEndHeaders();
             stream->appendHeaderBlock(cont->headerBlock());
-            stream->pushFrame(std::move(frame));
 
             if (end_headers) {
                 auto fields = m_conn.decoder().decode(stream->headerBlock());
@@ -598,10 +870,14 @@ private:
                 }
                 stream->clearHeaderBlock();
                 m_conn.setExpectingContinuation(false);
-                if (!m_conn.isClient()) {
+                if (m_conn.isClient()) {
+                    stream->consumeDecodedHeadersAsResponse();
+                } else {
+                    stream->consumeDecodedHeadersAsRequest();
                     queueStreamHandler(stream);
                 }
             }
+            stream->pushFrame(std::move(frame));
             return;
         }
 
@@ -632,16 +908,29 @@ private:
             m_conn.adjustConnRecvWindow(-data_size);
             stream->adjustRecvWindow(-data_size);
 
-            // 标记需要发送 WINDOW_UPDATE
-            if (m_conn.connRecvWindow() < static_cast<int32_t>(kDefaultInitialWindowSize / 2)) {
-                uint32_t inc = kDefaultInitialWindowSize - m_conn.connRecvWindow();
-                m_pending_actions.push_back({PendingAction::Type::SendWindowUpdate, 0, Http2ErrorCode::NoError, inc});
-                m_conn.adjustConnRecvWindow(inc);
+            // 标记需要发送 WINDOW_UPDATE（策略可配置）
+            auto update = m_conn.evaluateRecvWindowUpdate(stream->recvWindow(), data->data().size());
+            if (update.conn_increment > 0) {
+                m_pending_actions.push_back({
+                    PendingAction::Type::SendWindowUpdate, 0, Http2ErrorCode::NoError, update.conn_increment});
+                m_conn.adjustConnRecvWindow(static_cast<int32_t>(update.conn_increment));
             }
-            if (stream->recvWindow() < static_cast<int32_t>(kDefaultInitialWindowSize / 2)) {
-                uint32_t inc = kDefaultInitialWindowSize - stream->recvWindow();
-                m_pending_actions.push_back({PendingAction::Type::SendWindowUpdate, stream_id, Http2ErrorCode::NoError, inc});
-                stream->adjustRecvWindow(inc);
+            if (update.stream_increment > 0) {
+                m_pending_actions.push_back({
+                    PendingAction::Type::SendWindowUpdate, stream_id, Http2ErrorCode::NoError, update.stream_increment});
+                stream->adjustRecvWindow(static_cast<int32_t>(update.stream_increment));
+            }
+
+            if (m_conn.isClient()) {
+                stream->appendResponseData(data->data());
+                if (data->isEndStream()) {
+                    stream->markResponseCompleted();
+                }
+            } else {
+                stream->appendRequestData(data->data());
+                if (data->isEndStream()) {
+                    stream->markRequestCompleted();
+                }
             }
 
             stream->pushFrame(std::move(frame));
@@ -672,6 +961,8 @@ private:
                 HTTP_LOG_DEBUG("[stream-mgr] [stream] [rst] [id={}] [err={}]",
                               stream_id, http2ErrorCodeToString(frame->asRstStream()->errorCode()));
                 stream->pushFrame(std::move(frame));
+                stream->markRequestCompleted();
+                stream->markResponseCompleted();
                 stream->closeFrameQueue();
             }
             return;
@@ -722,7 +1013,7 @@ private:
     void processPendingActions() {
         while (!m_pending_actions.empty()) {
             auto action = m_pending_actions.front();
-            m_pending_actions.erase(m_pending_actions.begin());
+            m_pending_actions.pop_front();
 
             switch (action.type) {
                 case PendingAction::Type::SendGoaway: {
@@ -756,14 +1047,16 @@ private:
      */
     void enqueueGoaway(Http2ErrorCode error,
                        const std::string& debug = "",
-                       const Http2OutgoingFrame::WaiterPtr& waiter = nullptr) {
+                       const Http2OutgoingFrame::WaiterPtr& waiter = nullptr,
+                       std::optional<uint32_t> last_stream_id = std::nullopt) {
         Http2GoAwayFrame frame;
-        frame.setLastStreamId(m_conn.lastPeerStreamId());
+        uint32_t last = last_stream_id.value_or(m_conn.lastPeerStreamId());
+        frame.setLastStreamId(last);
         frame.setErrorCode(error);
         if (!debug.empty()) {
             frame.setDebugData(debug);
         }
-        m_conn.setGoawaySent();
+        m_conn.markGoawaySent(last, error, debug);
         enqueueSendFrame(std::move(frame), waiter);
     }
 
@@ -794,12 +1087,17 @@ private:
     std::atomic<int> m_active_handlers{0};
     std::atomic<bool> m_draining_handlers{false};
     galay::kernel::AsyncWaiter<void> m_handler_waiter;
+    bool m_reject_new_streams = false;
+    std::chrono::steady_clock::time_point m_last_frame_recv_at{};
+    std::chrono::steady_clock::time_point m_last_ping_sent_at{};
+    std::array<uint8_t, 8> m_last_ping_payload{};
+    bool m_waiting_ping_ack = false;
 
     // 发送通道：空指针表示关闭信号
     UnsafeChannel<Http2OutgoingFrame> m_send_channel;
 
     // 待处理动作队列
-    std::vector<PendingAction> m_pending_actions;
+    std::deque<PendingAction> m_pending_actions;
 
     // 待 spawn 的流队列（按优先级排序）
     std::priority_queue<Http2Stream::ptr, std::vector<Http2Stream::ptr>, StreamPriorityCompare> m_pending_spawns;

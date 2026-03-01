@@ -174,7 +174,6 @@ inline HttpClient HttpClientBuilder::build() const { return HttpClient(m_config)
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
 #include "galay-ssl/ssl/SslContext.h"
-#include "SslHandshakeAwaitable.h"
 
 namespace galay::http {
 
@@ -264,7 +263,7 @@ public:
         if (!m_socket) {
             throw std::runtime_error("Client not connected");
         }
-        return handshakeCompletely(*m_socket);
+        return m_socket->handshake();
     }
 
     /**

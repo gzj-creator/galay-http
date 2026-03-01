@@ -182,9 +182,6 @@
 #if __has_include("galay-http/kernel/http/HttpWriter.h")
 #include "galay-http/kernel/http/HttpWriter.h"
 #endif
-#if __has_include("galay-http/kernel/http/SslHandshakeAwaitable.h")
-#include "galay-http/kernel/http/SslHandshakeAwaitable.h"
-#endif
 #if __has_include("galay-http/kernel/http2/H2Client.h")
 #include "galay-http/kernel/http2/H2Client.h"
 #endif

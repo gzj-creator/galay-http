@@ -22,7 +22,6 @@
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
 #include "galay-ssl/ssl/SslContext.h"
-#include "SslHandshakeAwaitable.h"
 #endif
 
 namespace galay::http
@@ -535,7 +534,7 @@ protected:
 
 private:
     Coroutine handleSslConnection(galay::ssl::SslSocket socket) {
-        auto handshake_result = co_await handshakeCompletely(socket);
+        auto handshake_result = co_await socket.handshake();
         if (!handshake_result) {
             HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
             co_await socket.close();

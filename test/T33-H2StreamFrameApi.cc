@@ -36,6 +36,26 @@ int main() {
         s->getFrame();
     }, "Http2Stream must expose getFrame()");
 
+    static_assert(requires(Http2Stream* s) {
+        s->getFrames(16);
+    }, "Http2Stream must expose getFrames(max_count)");
+
+    static_assert(requires(Http2Stream* s, std::vector<Http2Frame::uptr> frames) {
+        s->sendFrames(std::move(frames));
+    }, "Http2Stream must expose sendFrames(frames)");
+
+    static_assert(requires(Http2Stream* s, const std::vector<std::string>& chunks) {
+        s->sendDataBatch(chunks, true);
+    }, "Http2Stream must expose sendDataBatch(chunks, end_stream)");
+
+    static_assert(requires(Http2Stream* s, std::vector<Http2Frame::uptr> frames) {
+        s->replyFrames(std::move(frames));
+    }, "Http2Stream must expose replyFrames(frames)");
+
+    static_assert(requires(Http2Stream* s, const std::vector<std::string>& chunks) {
+        s->replyDataBatch(chunks, true);
+    }, "Http2Stream must expose replyDataBatch(chunks, end_stream)");
+
     static_assert(!HasReadRequest<Http2Stream>, "Http2Stream must not expose readRequest()");
     static_assert(!HasReadResponse<Http2Stream>, "Http2Stream must not expose readResponse()");
 

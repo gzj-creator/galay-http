@@ -9,36 +9,22 @@
 #include "galay-http/utils/HttpLogger.h"
 #include <spdlog/spdlog.h>
 
-// 调试日志宏 - 通过 ENABLE_DEBUG 宏控制是否编译
-// 当 ENABLE_DEBUG 未定义时，这些宏在编译时会被完全移除，零性能开销
-// 显式传递源代码位置（文件名和行号）
-
-#ifdef ENABLE_DEBUG
-    // Debug 模式：启用所有日志
-    #define HTTP_LOG_DEBUG(...) \
-        SPDLOG_LOGGER_DEBUG(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-    #define HTTP_LOG_INFO(...) \
-        SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-    #define HTTP_LOG_WARN(...) \
-        SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-    #define HTTP_LOG_ERROR(...) \
-        SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+// 日志宏默认支持运行时 level 控制；如需完全裁剪 debug 日志，可定义 GALAY_HTTP_DISABLE_DEBUG_LOG。
+#ifdef GALAY_HTTP_DISABLE_DEBUG_LOG
+#define HTTP_LOG_DEBUG(...) ((void)0)
 #else
-    // Release 模式：移除 debug 日志，保留 info 及以上级别
-    #define HTTP_LOG_DEBUG(...) ((void)0)  // 编译时完全移除
-
-    #define HTTP_LOG_INFO(...) \
-        SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-    #define HTTP_LOG_WARN(...) \
-        SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
-
-    #define HTTP_LOG_ERROR(...) \
-        SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+#define HTTP_LOG_DEBUG(...) \
+    SPDLOG_LOGGER_DEBUG(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 #endif
+
+#define HTTP_LOG_INFO(...) \
+    SPDLOG_LOGGER_INFO(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+#define HTTP_LOG_WARN(...) \
+    SPDLOG_LOGGER_WARN(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
+
+#define HTTP_LOG_ERROR(...) \
+    SPDLOG_LOGGER_ERROR(galay::http::HttpLog::getInstance()->getSpdlogger(), __VA_ARGS__)
 
 // 格式化输出宏 - 使用 HTTP_LOG_INFO 以显示源代码位置
 #define SERVER_REQUEST_LOG(METHOD, URI) \

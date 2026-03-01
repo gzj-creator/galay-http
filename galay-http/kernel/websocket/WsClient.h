@@ -21,7 +21,7 @@
 #include <type_traits>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-http/kernel/http/SslHandshakeAwaitable.h"
+#include "galay-ssl/async/SslSocket.h"
 #endif
 
 namespace galay::websocket
@@ -607,7 +607,7 @@ public:
         }
 #ifdef GALAY_HTTP_SSL_ENABLED
         if constexpr (std::is_same_v<SocketType, galay::ssl::SslSocket>) {
-            return galay::http::handshakeCompletely(*m_socket);
+            return m_socket->handshake();
         }
 #endif
         return m_socket->handshake();
@@ -1109,7 +1109,7 @@ public:
         if (!m_socket) {
             throw std::runtime_error("WssClient not connected. Call connect() first.");
         }
-        return galay::http::handshakeCompletely(*m_socket);
+        return m_socket->handshake();
     }
 
     /**

@@ -25,16 +25,26 @@ Coroutine handleStream(Http2Stream::ptr stream) {
     std::string body;
 
     // 消费所有帧直到 END_STREAM
-    while (true) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) break;
-        auto frame = std::move(frame_result.value());
-        if (!frame) break;
-        if (frame->isData()) {
-            auto* data = frame->asData();
-            body.append(data->data());
+    bool end_stream = false;
+    while (!end_stream) {
+        auto batch_result = co_await stream->getFrames(16);
+        if (!batch_result) break;
+
+        auto frames = std::move(batch_result.value());
+        for (auto& frame : frames) {
+            if (!frame) {
+                end_stream = true;
+                break;
+            }
+            if (frame->isData()) {
+                auto* data = frame->asData();
+                body.append(data->data());
+            }
+            if (frame->isEndStream()) {
+                end_stream = true;
+                break;
+            }
         }
-        if (frame->isEndStream()) break;
     }
 
     if (g_debug_log) {
@@ -45,11 +55,11 @@ Coroutine handleStream(Http2Stream::ptr stream) {
     }
 
     // 构造响应（echo body）
-    co_await stream->replyHeader(
+    stream->sendHeaders(
         Http2Headers().status(200).contentType("text/plain").contentLength(body.size()),
-        body.empty());
+        body.empty(), true);
     if (!body.empty()) {
-        co_await stream->replyData(body, true);
+        stream->sendData(body, true);
     }
 
     co_return;

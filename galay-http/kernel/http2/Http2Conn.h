@@ -319,6 +319,7 @@ public:
         , m_last_error_msg(last_error_msg)
         , m_closing(closing)
         , m_has_buffered_frame(false)
+        , m_buffered_total_frame_size(0)
         , m_has_async_task(false)
         , m_recv_awaitable(this)
         , m_result(true)
@@ -366,6 +367,7 @@ public:
 
 private:
     bool checkBufferedFrame() {
+        m_buffered_total_frame_size = 0;
         if (m_ring_buffer.readable() < kHttp2FrameHeaderLength) {
             m_has_buffered_frame = false;
             return false;
@@ -377,19 +379,32 @@ private:
             return false;
         }
 
-        uint8_t header_buf[kHttp2FrameHeaderLength];
-        size_t copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
-            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= kHttp2FrameHeaderLength) break;
+        Http2FrameHeader header;
+        if (read_iovecs[0].iov_len >= kHttp2FrameHeaderLength) {
+            header = Http2FrameHeader::deserialize(
+                static_cast<const uint8_t*>(read_iovecs[0].iov_base));
+        } else {
+            uint8_t header_buf[kHttp2FrameHeaderLength];
+            size_t copied = 0;
+            for (const auto& iov : read_iovecs) {
+                size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
+                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= kHttp2FrameHeaderLength) break;
+            }
+            header = Http2FrameHeader::deserialize(header_buf);
         }
-
-        Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
+        if (header.length > m_peer_settings.max_frame_size) {
+            setProtocolError(Http2ErrorCode::FrameSizeError, "frame too large");
+            m_has_buffered_frame = true;
+            return true;
+        }
         size_t total_frame_size = kHttp2FrameHeaderLength + header.length;
 
         m_has_buffered_frame = (m_ring_buffer.readable() >= total_frame_size);
+        if (m_has_buffered_frame) {
+            m_buffered_total_frame_size = total_frame_size;
+        }
         return m_has_buffered_frame;
     }
 
@@ -426,38 +441,56 @@ private:
             return std::unexpected(Http2ErrorCode::NoError);
         }
 
-        uint8_t header_buf[kHttp2FrameHeaderLength];
-        size_t copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
-            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= kHttp2FrameHeaderLength) break;
+        size_t total_frame_size = m_buffered_total_frame_size;
+        if (total_frame_size == 0 || m_ring_buffer.readable() < total_frame_size) {
+            Http2FrameHeader header;
+            if (read_iovecs[0].iov_len >= kHttp2FrameHeaderLength) {
+                header = Http2FrameHeader::deserialize(
+                    static_cast<const uint8_t*>(read_iovecs[0].iov_base));
+            } else {
+                uint8_t header_buf[kHttp2FrameHeaderLength];
+                size_t copied = 0;
+                for (const auto& iov : read_iovecs) {
+                    size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
+                    std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+                    copied += to_copy;
+                    if (copied >= kHttp2FrameHeaderLength) break;
+                }
+                header = Http2FrameHeader::deserialize(header_buf);
+            }
+
+            if (header.length > m_peer_settings.max_frame_size) {
+                return std::unexpected(Http2ErrorCode::FrameSizeError);
+            }
+
+            total_frame_size = kHttp2FrameHeaderLength + header.length;
         }
-
-        Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
-
-        if (header.length > m_peer_settings.max_frame_size) {
-            return std::unexpected(Http2ErrorCode::FrameSizeError);
-        }
-
-        size_t total_frame_size = kHttp2FrameHeaderLength + header.length;
 
         if (m_ring_buffer.readable() < total_frame_size) {
             return std::unexpected(Http2ErrorCode::NoError);
         }
 
-        std::vector<uint8_t> frame_buf(total_frame_size);
-        copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, total_frame_size - copied);
-            std::memcpy(frame_buf.data() + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= total_frame_size) break;
+        std::expected<Http2Frame::uptr, Http2ErrorCode> frame_result =
+            std::unexpected(Http2ErrorCode::ProtocolError);
+
+        if (read_iovecs[0].iov_len >= total_frame_size) {
+            frame_result = Http2FrameParser::parseFrame(
+                static_cast<const uint8_t*>(read_iovecs[0].iov_base), total_frame_size);
+        } else {
+            if (m_parse_buffer.size() < total_frame_size) {
+                m_parse_buffer.resize(total_frame_size);
+            }
+            size_t copied = 0;
+            for (const auto& iov : read_iovecs) {
+                size_t to_copy = std::min(iov.iov_len, total_frame_size - copied);
+                std::memcpy(m_parse_buffer.data() + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= total_frame_size) break;
+            }
+            frame_result = Http2FrameParser::parseFrame(m_parse_buffer.data(), total_frame_size);
         }
 
-        auto frame_result = Http2FrameParser::parseFrame(frame_buf.data(), total_frame_size);
-
+        m_buffered_total_frame_size = 0;
         if (frame_result) {
             m_ring_buffer.consume(total_frame_size);
         }
@@ -472,6 +505,8 @@ private:
     std::string* m_last_error_msg;
     const bool* m_closing;
     bool m_has_buffered_frame;
+    size_t m_buffered_total_frame_size;
+    std::vector<uint8_t> m_parse_buffer;
     bool m_has_async_task;
     ProtocolRecvAwaitable m_recv_awaitable;
     std::optional<Http2ErrorCode> m_error;
@@ -639,6 +674,7 @@ public:
         , m_last_error_msg(last_error_msg)
         , m_closing(closing)
         , m_has_buffered_frame(false)
+        , m_buffered_total_frame_size(0)
         , m_has_async_task(false)
         , m_recv_awaitable(this)
         , m_result(true)
@@ -682,6 +718,7 @@ public:
 
 private:
     bool checkBufferedFrame() {
+        m_buffered_total_frame_size = 0;
         if (m_ring_buffer.readable() < kHttp2FrameHeaderLength) {
             m_has_buffered_frame = false;
             return false;
@@ -693,19 +730,32 @@ private:
             return false;
         }
 
-        uint8_t header_buf[kHttp2FrameHeaderLength];
-        size_t copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
-            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= kHttp2FrameHeaderLength) break;
+        Http2FrameHeader header;
+        if (read_iovecs[0].iov_len >= kHttp2FrameHeaderLength) {
+            header = Http2FrameHeader::deserialize(
+                static_cast<const uint8_t*>(read_iovecs[0].iov_base));
+        } else {
+            uint8_t header_buf[kHttp2FrameHeaderLength];
+            size_t copied = 0;
+            for (const auto& iov : read_iovecs) {
+                size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
+                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= kHttp2FrameHeaderLength) break;
+            }
+            header = Http2FrameHeader::deserialize(header_buf);
         }
-
-        Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
+        if (header.length > m_peer_settings.max_frame_size) {
+            setProtocolError(Http2ErrorCode::FrameSizeError, "frame too large");
+            m_has_buffered_frame = true;
+            return true;
+        }
         size_t total_frame_size = kHttp2FrameHeaderLength + header.length;
 
         m_has_buffered_frame = (m_ring_buffer.readable() >= total_frame_size);
+        if (m_has_buffered_frame) {
+            m_buffered_total_frame_size = total_frame_size;
+        }
         return m_has_buffered_frame;
     }
 
@@ -749,36 +799,53 @@ private:
             return std::unexpected(Http2ErrorCode::NoError);
         }
 
-        uint8_t header_buf[kHttp2FrameHeaderLength];
-        size_t copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
-            std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= kHttp2FrameHeaderLength) break;
+        size_t total_frame_size = m_buffered_total_frame_size;
+        if (total_frame_size == 0 || m_ring_buffer.readable() < total_frame_size) {
+            Http2FrameHeader header;
+            if (read_iovecs[0].iov_len >= kHttp2FrameHeaderLength) {
+                header = Http2FrameHeader::deserialize(
+                    static_cast<const uint8_t*>(read_iovecs[0].iov_base));
+            } else {
+                uint8_t header_buf[kHttp2FrameHeaderLength];
+                size_t copied = 0;
+                for (const auto& iov : read_iovecs) {
+                    size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
+                    std::memcpy(header_buf + copied, iov.iov_base, to_copy);
+                    copied += to_copy;
+                    if (copied >= kHttp2FrameHeaderLength) break;
+                }
+                header = Http2FrameHeader::deserialize(header_buf);
+            }
+
+            if (header.length > m_peer_settings.max_frame_size) {
+                return std::unexpected(Http2ErrorCode::FrameSizeError);
+            }
+
+            total_frame_size = kHttp2FrameHeaderLength + header.length;
         }
-
-        Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
-
-        if (header.length > m_peer_settings.max_frame_size) {
-            return std::unexpected(Http2ErrorCode::FrameSizeError);
-        }
-
-        size_t total_frame_size = kHttp2FrameHeaderLength + header.length;
         if (m_ring_buffer.readable() < total_frame_size) {
             return std::unexpected(Http2ErrorCode::NoError);
         }
 
-        std::vector<uint8_t> frame_buf(total_frame_size);
-        copied = 0;
-        for (const auto& iov : read_iovecs) {
-            size_t to_copy = std::min(iov.iov_len, total_frame_size - copied);
-            std::memcpy(frame_buf.data() + copied, iov.iov_base, to_copy);
-            copied += to_copy;
-            if (copied >= total_frame_size) break;
+        std::expected<Http2Frame::uptr, Http2ErrorCode> frame_result =
+            std::unexpected(Http2ErrorCode::ProtocolError);
+        if (read_iovecs[0].iov_len >= total_frame_size) {
+            frame_result = Http2FrameParser::parseFrame(
+                static_cast<const uint8_t*>(read_iovecs[0].iov_base), total_frame_size);
+        } else {
+            if (m_parse_buffer.size() < total_frame_size) {
+                m_parse_buffer.resize(total_frame_size);
+            }
+            size_t copied = 0;
+            for (const auto& iov : read_iovecs) {
+                size_t to_copy = std::min(iov.iov_len, total_frame_size - copied);
+                std::memcpy(m_parse_buffer.data() + copied, iov.iov_base, to_copy);
+                copied += to_copy;
+                if (copied >= total_frame_size) break;
+            }
+            frame_result = Http2FrameParser::parseFrame(m_parse_buffer.data(), total_frame_size);
         }
-
-        auto frame_result = Http2FrameParser::parseFrame(frame_buf.data(), total_frame_size);
+        m_buffered_total_frame_size = 0;
         if (frame_result) {
             m_ring_buffer.consume(total_frame_size);
         }
@@ -792,6 +859,8 @@ private:
     std::string* m_last_error_msg;
     const bool* m_closing;
     bool m_has_buffered_frame;
+    size_t m_buffered_total_frame_size;
+    std::vector<uint8_t> m_parse_buffer;
     bool m_has_async_task;
     char m_dummy_recv_buffer[1];
     ProtocolRecvAwaitable m_recv_awaitable;

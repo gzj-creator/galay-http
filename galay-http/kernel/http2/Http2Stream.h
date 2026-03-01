@@ -12,6 +12,7 @@
 #include <charconv>
 #include <memory>
 #include <optional>
+#include <iterator>
 
 namespace galay::http2
 {
@@ -287,6 +288,14 @@ public:
     }
 
     /**
+     * @brief 批量获取帧（至少 1 帧，最多 max_count）
+     * @return co_await 后得到 expected<vector<uptr>, IOError>
+     */
+    auto getFrames(size_t max_count = galay::kernel::UnsafeChannel<Http2Frame::uptr>::DEFAULT_BATCH_SIZE) {
+        return m_frame_channel.recvBatch(max_count);
+    }
+
+    /**
      * @brief 解码头部块
      */
     std::vector<Http2HeaderField> decodeHeaders(const std::string& header_block) {
@@ -377,6 +386,40 @@ public:
     }
 
     /**
+     * @brief 批量发送帧（按顺序入队）
+     */
+    void sendFrames(std::vector<Http2Frame::uptr> frames) {
+        sendFrameBatchInternal(std::move(frames), nullptr);
+    }
+
+    /**
+     * @brief 批量发送 DATA 帧（最后一帧可带 END_STREAM）
+     */
+    void sendDataBatch(const std::vector<std::string>& chunks, bool end_stream = false) {
+        std::vector<Http2Frame::uptr> frames;
+        frames.reserve(chunks.size() + (chunks.empty() && end_stream ? 1 : 0));
+
+        if (chunks.empty()) {
+            if (end_stream) {
+                auto frame = std::make_unique<Http2DataFrame>();
+                frame->setData("");
+                frame->setEndStream(true);
+                frames.push_back(std::move(frame));
+            }
+            sendFrameBatchInternal(std::move(frames), nullptr);
+            return;
+        }
+
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            auto frame = std::make_unique<Http2DataFrame>();
+            frame->setData(chunks[i]);
+            frame->setEndStream(end_stream && (i + 1 == chunks.size()));
+            frames.push_back(std::move(frame));
+        }
+        sendFrameBatchInternal(std::move(frames), nullptr);
+    }
+
+    /**
      * @brief 帧优先 API：发送 HEADERS 并等待入队完成
      */
     ReplyAndWaitAwaitable replyHeader(const std::vector<Http2HeaderField>& headers,
@@ -402,6 +445,45 @@ public:
     ReplyAndWaitAwaitable replyRst(Http2ErrorCode error) {
         auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
         sendRstStreamInternal(error, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    /**
+     * @brief 帧优先 API：批量发送帧并等待“最后一帧入队”完成
+     */
+    ReplyAndWaitAwaitable replyFrames(std::vector<Http2Frame::uptr> frames) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendFrameBatchInternal(std::move(frames), waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    /**
+     * @brief 帧优先 API：批量发送 DATA 并等待最后一帧入队
+     */
+    ReplyAndWaitAwaitable replyDataBatch(const std::vector<std::string>& chunks,
+                                         bool end_stream = false) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        std::vector<Http2Frame::uptr> frames;
+        frames.reserve(chunks.size() + (chunks.empty() && end_stream ? 1 : 0));
+
+        if (chunks.empty()) {
+            if (end_stream) {
+                auto frame = std::make_unique<Http2DataFrame>();
+                frame->setData("");
+                frame->setEndStream(true);
+                frames.push_back(std::move(frame));
+            }
+            sendFrameBatchInternal(std::move(frames), waiter);
+            return ReplyAndWaitAwaitable(std::move(waiter));
+        }
+
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            auto frame = std::make_unique<Http2DataFrame>();
+            frame->setData(chunks[i]);
+            frame->setEndStream(end_stream && (i + 1 == chunks.size()));
+            frames.push_back(std::move(frame));
+        }
+        sendFrameBatchInternal(std::move(frames), waiter);
         return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
@@ -567,6 +649,65 @@ private:
         } else {
             m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
         }
+    }
+
+    void sendFrameBatchInternal(std::vector<Http2Frame::uptr> frames,
+                                const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        std::vector<Http2OutgoingFrame> outgoing;
+        outgoing.reserve(frames.size());
+
+        for (auto& frame : frames) {
+            if (!frame) {
+                continue;
+            }
+
+            frame->header().stream_id = m_stream_id;
+
+            if (frame->isHeaders()) {
+                onHeadersSent(frame->asHeaders()->isEndStream());
+            } else if (frame->isData()) {
+                auto* data = frame->asData();
+                if (m_send_window < static_cast<int32_t>(data->data().size())) {
+                    continue;
+                }
+                m_send_window -= static_cast<int32_t>(data->data().size());
+                if (data->isEndStream()) {
+                    onDataSent(true);
+                }
+            } else if (frame->isRstStream()) {
+                onRstStreamSent();
+            }
+
+            outgoing.push_back(Http2OutgoingFrame{std::move(frame)});
+        }
+
+        if (outgoing.empty()) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        if (waiter) {
+            outgoing.back().waiter = waiter;
+        }
+
+        if (m_send_channel) {
+            m_send_channel->sendBatch(std::move(outgoing));
+            return;
+        }
+
+        m_send_queue->insert(
+            m_send_queue->end(),
+            std::make_move_iterator(outgoing.begin()),
+            std::make_move_iterator(outgoing.end()));
     }
 };
 
