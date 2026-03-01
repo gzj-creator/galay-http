@@ -10,6 +10,7 @@
 #include <iostream>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 
 using namespace galay::http2;
@@ -126,12 +127,15 @@ void runBenchmark(const std::string& host,
                   int requests_per_client,
                   int max_wait_seconds,
                   int io_schedulers) {
+    const int64_t expected_requests =
+        static_cast<int64_t>(concurrent_clients) * requests_per_client;
+
     std::cout << "\n========================================\n";
     std::cout << "测试配置:\n";
     std::cout << "  目标服务器: " << host << ":" << port << "\n";
     std::cout << "  并发客户端: " << concurrent_clients << "\n";
     std::cout << "  每客户端请求数: " << requests_per_client << "\n";
-    std::cout << "  总请求数: " << (concurrent_clients * requests_per_client) << "\n";
+    std::cout << "  总请求数: " << expected_requests << "\n";
     std::cout << "  IO 调度器线程: " << io_schedulers << "\n";
     if (max_wait_seconds <= 0) {
         std::cout << "  最大等待: 无限\n";
@@ -168,23 +172,38 @@ void runBenchmark(const std::string& host,
 
     // 等待所有客户端完成
     std::cout << "压测进行中";
-    int elapsed = 0;
+    auto wait_begin = std::chrono::steady_clock::now();
+    auto next_dot = wait_begin + std::chrono::seconds(1);
     while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "." << std::flush;
+        auto done = static_cast<int64_t>(success_count.load()) + fail_count.load();
+        if (done >= expected_requests) {
+            break;
+        }
 
-        // 所有客户端协程都已退出（正常完成或提前失败）
+        // 避免协程尚未启动时 active=0 造成的早退。
         if (active_clients.load() == 0) {
+            auto decided_clients =
+                connected_clients.load() + connect_failures.load() + upgrade_failures.load();
+            if (decided_clients >= concurrent_clients) {
+                break;
+            }
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (now >= next_dot) {
+            std::cout << "." << std::flush;
+            next_dot += std::chrono::seconds(1);
+        }
+
+        if (max_wait_seconds > 0 &&
+            now - wait_begin >= std::chrono::seconds(max_wait_seconds)) {
+            std::cerr << "\n[warn] wait timeout, active_clients=" << active_clients.load()
+                      << ", done=" << done
+                      << "/" << expected_requests << "\n";
             break;
         }
 
-        elapsed += 1;
-        if (max_wait_seconds > 0 && elapsed >= max_wait_seconds) {
-            std::cerr << "\n[warn] wait timeout, active_clients=" << active_clients.load()
-                      << ", done=" << (success_count.load() + fail_count.load())
-                      << "/" << (concurrent_clients * requests_per_client) << "\n";
-            break;
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::cout << "\n\n";
 
@@ -217,7 +236,7 @@ void runBenchmark(const std::string& host,
         std::cout << "连接速率: " << static_cast<int>(cps) << " conn/s\n";
 
         if (success_count.load() > 0) {
-            double success_rate = (success_count.load() * 100.0) / (concurrent_clients * requests_per_client);
+            double success_rate = (success_count.load() * 100.0) / expected_requests;
             std::cout << "成功率: " << success_rate << "%\n";
         }
     }

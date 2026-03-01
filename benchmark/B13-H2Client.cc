@@ -7,6 +7,7 @@
 #include <iostream>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <thread>
 #include <algorithm>
@@ -104,6 +105,9 @@ void runBenchmark(const std::string& host,
                   int requests_per_client,
                   int max_wait_seconds,
                   int io_schedulers) {
+    const int64_t expected_requests =
+        static_cast<int64_t>(concurrent_clients) * requests_per_client;
+
     total_requests = 0;
     success_count = 0;
     fail_count = 0;
@@ -116,7 +120,7 @@ void runBenchmark(const std::string& host,
     std::cout << "  目标服务器: " << host << ":" << port << "\n";
     std::cout << "  并发客户端: " << concurrent_clients << "\n";
     std::cout << "  每客户端请求数: " << requests_per_client << "\n";
-    std::cout << "  总请求数: " << (concurrent_clients * requests_per_client) << "\n";
+    std::cout << "  总请求数: " << expected_requests << "\n";
     std::cout << "  IO 调度器线程: " << io_schedulers << "\n";
     std::cout << "========================================\n\n";
 
@@ -130,20 +134,35 @@ void runBenchmark(const std::string& host,
     }
 
     std::cout << "压测进行中";
-    int elapsed = 0;
+    auto wait_begin = std::chrono::steady_clock::now();
+    auto next_dot = wait_begin + std::chrono::seconds(1);
     while (true) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "." << std::flush;
+        auto done = static_cast<int64_t>(success_count.load()) + fail_count.load();
+        if (done >= expected_requests) {
+            break;
+        }
 
         if (active_clients.load() == 0) {
+            auto decided_clients = connected_clients.load() + connect_failures.load();
+            if (decided_clients >= concurrent_clients) {
+                break;
+            }
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (now >= next_dot) {
+            std::cout << "." << std::flush;
+            next_dot += std::chrono::seconds(1);
+        }
+
+        if (max_wait_seconds > 0 &&
+            now - wait_begin >= std::chrono::seconds(max_wait_seconds)) {
+            std::cerr << "\n[warn] wait timeout, active_clients=" << active_clients.load()
+                      << ", done=" << done << "/" << expected_requests << "\n";
             break;
         }
 
-        elapsed += 1;
-        if (max_wait_seconds > 0 && elapsed >= max_wait_seconds) {
-            std::cerr << "\n[warn] wait timeout, active_clients=" << active_clients.load() << "\n";
-            break;
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::cout << "\n\n";
 

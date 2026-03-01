@@ -202,17 +202,32 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "压测进行中";
-    for (int elapsed = 0; ; elapsed++) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-        std::cout << "." << std::flush;
+    auto wait_begin = std::chrono::steady_clock::now();
+    auto next_dot = wait_begin + std::chrono::seconds(1);
+    while (true) {
+        auto done = g.success.load() + g.fail.load();
+        if (done >= total_requests) break;
 
-        if (g.active.load() == 0) break;
-        if (max_wait > 0 && elapsed >= max_wait) {
+        if (g.active.load() == 0) {
+            auto decided_connections =
+                g.connected.load() + g.connect_err.load() + g.upgrade_err.load();
+            if (decided_connections >= connections) break;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        if (now >= next_dot) {
+            std::cout << "." << std::flush;
+            next_dot += std::chrono::seconds(1);
+        }
+
+        if (max_wait > 0 && now - wait_begin >= std::chrono::seconds(max_wait)) {
             std::cerr << "\n[warn] wait timeout, active=" << g.active.load()
-                      << ", done=" << (g.success.load() + g.fail.load())
+                      << ", done=" << done
                       << "/" << total_requests << "\n";
             break;
         }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     std::cout << "\n";
 
