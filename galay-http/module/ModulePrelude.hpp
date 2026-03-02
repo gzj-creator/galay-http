@@ -293,9 +293,6 @@
 #if __has_include("galay-kernel/common/Error.h")
 #include "galay-kernel/common/Error.h"
 #endif
-#if __has_include("galay-kernel/common/Log.h")
-#include "galay-kernel/common/Log.h"
-#endif
 #if __has_include("galay-kernel/common/Sleep.hpp")
 #include "galay-kernel/common/Sleep.hpp"
 #endif

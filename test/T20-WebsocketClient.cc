@@ -8,7 +8,7 @@
 #include "galay-http/kernel/websocket/WsConn.h"
 #include "galay-http/utils/Http1_1RequestBuilder.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/common/Sleep.hpp"
 
 #ifdef USE_KQUEUE
@@ -34,24 +34,24 @@ using namespace galay::kernel;
  * @brief WebSocket 客户端测试
  */
 Coroutine testWebSocketClient(IOScheduler* scheduler) {
-    LogInfo("Starting WebSocket client test");
+    HTTP_LOG_INFO("Starting WebSocket client test");
 
     // 创建 socket 并连接
     TcpSocket socket(IPType::IPV4);
     auto nonblock_result = socket.option().handleNonBlock();
     if (!nonblock_result) {
-        LogError("Failed to set non-block");
+        HTTP_LOG_ERROR("Failed to set non-block");
         co_return;
     }
 
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect to server: {}", connect_result.error().message());
+        HTTP_LOG_ERROR("Failed to connect to server: {}", connect_result.error().message());
         co_return;
     }
 
-    LogInfo("Connected to server");
+    HTTP_LOG_INFO("Connected to server");
 
     // 创建 HTTP 客户端
     HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -65,7 +65,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
         .header("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
         .build();
 
-    LogInfo("Sending WebSocket upgrade request");
+    HTTP_LOG_INFO("Sending WebSocket upgrade request");
 
     auto session = client.getSession();
 
@@ -73,7 +73,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     auto writer = session.getWriter();
     auto send_result = co_await writer.sendRequest(request);
     if (!send_result) {
-        LogError("Failed to send upgrade request: {}", send_result.error().message());
+        HTTP_LOG_ERROR("Failed to send upgrade request: {}", send_result.error().message());
         co_await client.close();
         co_return;
     }
@@ -85,7 +85,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     while (!complete) {
         auto read_result = co_await reader.getResponse(response);
         if (!read_result) {
-            LogError("Failed to read upgrade response: {}", read_result.error().message());
+            HTTP_LOG_ERROR("Failed to read upgrade response: {}", read_result.error().message());
             co_await client.close();
             co_return;
         }
@@ -94,12 +94,12 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
 
     // 检查升级是否成功
     if (response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-        LogError("WebSocket upgrade failed: {}", static_cast<int>(response.header().code()));
+        HTTP_LOG_ERROR("WebSocket upgrade failed: {}", static_cast<int>(response.header().code()));
         co_await client.close();
         co_return;
     }
 
-    LogInfo("WebSocket upgrade successful");
+    HTTP_LOG_INFO("WebSocket upgrade successful");
 
     // 升级到 WebSocket 连接
     WsReaderSetting reader_setting;
@@ -121,13 +121,13 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     WsOpcode welcome_opcode;
     auto welcome_result = co_await ws_reader.getMessage(welcome_msg, welcome_opcode);
     if (welcome_result.has_value() && welcome_result.value()) {
-        LogInfo("Received welcome message: {}", welcome_msg);
+        HTTP_LOG_INFO("Received welcome message: {}", welcome_msg);
     }
 
     // 发送测试消息
     for (int i = 1; i <= 5; i++) {
         std::string test_msg = "Test message " + std::to_string(i);
-        LogInfo("Sending: {}", test_msg);
+        HTTP_LOG_INFO("Sending: {}", test_msg);
 
         WsFrame frame;
         frame.header.fin = true;
@@ -138,7 +138,7 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
 
         auto send_result = co_await ws_writer.sendFrame(frame);
         if (!send_result) {
-            LogError("Failed to send message: {}", send_result.error().message());
+            HTTP_LOG_ERROR("Failed to send message: {}", send_result.error().message());
             break;
         }
 
@@ -147,9 +147,9 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
         WsOpcode echo_opcode;
         auto echo_result = co_await ws_reader.getMessage(echo_msg, echo_opcode);
         if (echo_result.has_value() && echo_result.value()) {
-            LogInfo("Received echo: {}", echo_msg);
+            HTTP_LOG_INFO("Received echo: {}", echo_msg);
         } else {
-            LogError("Failed to read echo message");
+            HTTP_LOG_ERROR("Failed to read echo message");
             break;
         }
 
@@ -158,17 +158,17 @@ Coroutine testWebSocketClient(IOScheduler* scheduler) {
     }
 
     // 关闭连接
-    LogInfo("Closing WebSocket connection");
+    HTTP_LOG_INFO("Closing WebSocket connection");
     co_await ws_conn.close();
 
-    LogInfo("WebSocket client test completed");
+    HTTP_LOG_INFO("WebSocket client test completed");
     co_return;
 }
 
 int main() {
-    LogInfo("========================================");
-    LogInfo("WebSocket Client Test");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("WebSocket Client Test");
+    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     galay::kernel::Runtime rt;
@@ -177,7 +177,7 @@ int main() {
     // 获取 IO 调度器并启动测试协程
     auto* scheduler = rt.getNextIOScheduler();
     if (!scheduler) {
-        LogError("Failed to get IO scheduler");
+        HTTP_LOG_ERROR("Failed to get IO scheduler");
         return 1;
     }
 
@@ -187,10 +187,10 @@ int main() {
     std::this_thread::sleep_for(std::chrono::seconds(30));
 
     rt.stop();
-    LogInfo("Test completed");
+    HTTP_LOG_INFO("Test completed");
     return 0;
 #else
-    LogError("No scheduler defined. Please compile with -DUSE_KQUEUE, -DUSE_EPOLL, or -DUSE_IOURING");
+    HTTP_LOG_ERROR("No scheduler defined. Please compile with -DUSE_KQUEUE, -DUSE_EPOLL, or -DUSE_IOURING");
     return 1;
 #endif
 }

@@ -9,7 +9,7 @@
 #include <chrono>
 #include <cctype>
 #include "galay-kernel/async/TcpSocket.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/kernel/Runtime.h"
 
 #ifdef USE_KQUEUE
@@ -106,7 +106,7 @@ bool parseExpectedResponseSize(const std::string& response, size_t& expected_siz
 
 // 客户端测试
 Coroutine testClient(int test_id, std::string path) {
-    LogInfo("=== Test #{}: {} ===", test_id, path);
+    HTTP_LOG_INFO("=== Test #{}: {} ===", test_id, path);
 
     TcpSocket client;
     client.option().handleNonBlock();
@@ -115,12 +115,12 @@ Coroutine testClient(int test_id, std::string path) {
     Host serverHost(IPType::IPV4, "127.0.0.1", 9999);
     auto connectResult = co_await client.connect(serverHost);
     if (!connectResult) {
-        LogError("Test #{} FAILED: Failed to connect: {}", test_id, connectResult.error().message());
+        HTTP_LOG_ERROR("Test #{} FAILED: Failed to connect: {}", test_id, connectResult.error().message());
         g_failed++;
         co_return;
     }
 
-    LogInfo("Test #{}: Connected to server", test_id);
+    HTTP_LOG_INFO("Test #{}: Connected to server", test_id);
 
     // 构造HTTP请求
     std::string requestStr =
@@ -133,13 +133,13 @@ Coroutine testClient(int test_id, std::string path) {
     // 发送请求
     auto sendResult = co_await client.send(requestStr.c_str(), requestStr.size());
     if (!sendResult) {
-        LogError("Test #{} FAILED: Failed to send request: {}", test_id, sendResult.error().message());
+        HTTP_LOG_ERROR("Test #{} FAILED: Failed to send request: {}", test_id, sendResult.error().message());
         g_failed++;
         co_await client.close();
         co_return;
     }
 
-    LogInfo("Test #{}: Request sent: complete", test_id);
+    HTTP_LOG_INFO("Test #{}: Request sent: complete", test_id);
 
     // 接收完整响应（处理分片场景）
     std::string response;
@@ -151,7 +151,7 @@ Coroutine testClient(int test_id, std::string path) {
         auto recvResult = co_await client.recv(buffer, sizeof(buffer));
         if (!recvResult) {
             if (response.empty()) {
-                LogError("Test #{} FAILED: Failed to receive response: {}", test_id, recvResult.error().message());
+                HTTP_LOG_ERROR("Test #{} FAILED: Failed to receive response: {}", test_id, recvResult.error().message());
                 g_failed++;
                 co_await client.close();
                 co_return;
@@ -176,23 +176,23 @@ Coroutine testClient(int test_id, std::string path) {
     }
 
     if (response.empty()) {
-        LogError("Test #{} FAILED: Empty response", test_id);
+        HTTP_LOG_ERROR("Test #{} FAILED: Empty response", test_id);
         g_failed++;
         co_await client.close();
         co_return;
     }
 
-    LogInfo("Test #{}: Response received: {} bytes", test_id, response.size());
-    LogInfo("Test #{}: Response content:\n{}", test_id, response);
+    HTTP_LOG_INFO("Test #{}: Response received: {} bytes", test_id, response.size());
+    HTTP_LOG_INFO("Test #{}: Response content:\n{}", test_id, response);
 
     // 验证响应
     std::string expected_path = normalizeExpectedEchoPath(path);
     if (response.find("HTTP/1.1 200 OK") != std::string::npos &&
         response.find("Echo: " + expected_path) != std::string::npos) {
-        LogInfo("Test #{} PASSED", test_id);
+        HTTP_LOG_INFO("Test #{} PASSED", test_id);
         g_passed++;
     } else {
-        LogError("Test #{} FAILED: Invalid response", test_id);
+        HTTP_LOG_ERROR("Test #{} FAILED: Invalid response", test_id);
         g_failed++;
     }
 
@@ -228,23 +228,23 @@ Coroutine runAllTests(IOScheduler* scheduler) {
 }
 
 int main() {
-    LogInfo("========================================");
-    LogInfo("HTTP Reader/Writer Test - Client");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HTTP Reader/Writer Test - Client");
+    HTTP_LOG_INFO("========================================\n");
 
-    LogInfo("Make sure the server is running on 127.0.0.1:9999");
-    LogInfo("You can start it with: ./test_reader_writer_server\n");
+    HTTP_LOG_INFO("Make sure the server is running on 127.0.0.1:9999");
+    HTTP_LOG_INFO("You can start it with: ./test_reader_writer_server\n");
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
-    LogInfo("Scheduler started\n");
+    HTTP_LOG_INFO("Scheduler started\n");
 
     auto* scheduler = rt.getNextIOScheduler();
     if (!scheduler) {
-        LogError("Failed to get IO scheduler");
+        HTTP_LOG_ERROR("Failed to get IO scheduler");
         rt.stop();
         return 1;
     }
@@ -258,14 +258,14 @@ int main() {
     }
 
     rt.stop();
-    LogInfo("\n========================================");
-    LogInfo("Test Results:");
-    LogInfo("  Passed: {}", g_passed.load());
-    LogInfo("  Failed: {}", g_failed.load());
-    LogInfo("  Total:  {}", g_passed.load() + g_failed.load());
-    LogInfo("========================================");
+    HTTP_LOG_INFO("\n========================================");
+    HTTP_LOG_INFO("Test Results:");
+    HTTP_LOG_INFO("  Passed: {}", g_passed.load());
+    HTTP_LOG_INFO("  Failed: {}", g_failed.load());
+    HTTP_LOG_INFO("  Total:  {}", g_passed.load() + g_failed.load());
+    HTTP_LOG_INFO("========================================");
 #else
-    LogWarn("This test requires kqueue (macOS), epoll or io_uring (Linux)");
+    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

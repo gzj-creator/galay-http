@@ -4,7 +4,6 @@
 #include <string>
 #include <unordered_map>
 #include <atomic>
-#include "galay-kernel/common/Log.h"
 
 #define GALAY_VERSION "1.0.0"
 

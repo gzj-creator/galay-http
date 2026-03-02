@@ -12,7 +12,7 @@
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/kernel/Runtime.h"
 
 #ifdef USE_KQUEUE
@@ -38,21 +38,21 @@ std::atomic<int> g_request_count{0};
 
 // Echo服务器
 Coroutine echoServer() {
-    LogInfo("=== HTTP Reader/Writer Test Server ===");
-    LogInfo("Starting server...");
+    HTTP_LOG_INFO("=== HTTP Reader/Writer Test Server ===");
+    HTTP_LOG_INFO("Starting server...");
 
     TcpSocket listener;
 
     // 设置选项
     auto optResult = listener.option().handleReuseAddr();
     if (!optResult) {
-        LogError("Failed to set reuse addr: {}", optResult.error().message());
+        HTTP_LOG_ERROR("Failed to set reuse addr: {}", optResult.error().message());
         co_return;
     }
 
     optResult = listener.option().handleNonBlock();
     if (!optResult) {
-        LogError("Failed to set non-block: {}", optResult.error().message());
+        HTTP_LOG_ERROR("Failed to set non-block: {}", optResult.error().message());
         co_return;
     }
 
@@ -60,30 +60,30 @@ Coroutine echoServer() {
     Host bindHost(IPType::IPV4, "127.0.0.1", 9999);
     auto bindResult = listener.bind(bindHost);
     if (!bindResult) {
-        LogError("Failed to bind: {}", bindResult.error().message());
+        HTTP_LOG_ERROR("Failed to bind: {}", bindResult.error().message());
         co_return;
     }
 
     // 监听
     auto listenResult = listener.listen(128);
     if (!listenResult) {
-        LogError("Failed to listen: {}", listenResult.error().message());
+        HTTP_LOG_ERROR("Failed to listen: {}", listenResult.error().message());
         co_return;
     }
 
-    LogInfo("Server listening on 127.0.0.1:9999");
-    LogInfo("Waiting for client connections...");
+    HTTP_LOG_INFO("Server listening on 127.0.0.1:9999");
+    HTTP_LOG_INFO("Waiting for client connections...");
 
     while (true) {
         // 接受连接
         Host clientHost;
         auto acceptResult = co_await listener.accept(&clientHost);
         if (!acceptResult) {
-            LogError("Failed to accept: {}", acceptResult.error().message());
+            HTTP_LOG_ERROR("Failed to accept: {}", acceptResult.error().message());
             continue;
         }
 
-        LogInfo("Client connected from {}:{}", clientHost.ip(), clientHost.port());
+        HTTP_LOG_INFO("Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
         // 创建客户端socket
         TcpSocket client(acceptResult.value());
@@ -107,9 +107,9 @@ Coroutine echoServer() {
             if (!result) {
                 auto& error = result.error();
                 if (error.code() == kConnectionClose) {
-                    LogInfo("Client disconnected");
+                    HTTP_LOG_INFO("Client disconnected");
                 } else {
-                    LogError("Request parse error: {}", error.message());
+                    HTTP_LOG_ERROR("Request parse error: {}", error.message());
                 }
                 break;
             }
@@ -119,7 +119,7 @@ Coroutine echoServer() {
 
         if (requestComplete) {
             g_request_count++;
-            LogInfo("Request #{} received: {} {}",
+            HTTP_LOG_INFO("Request #{} received: {} {}",
                     g_request_count.load(),
                     static_cast<int>(request.header().method()),
                     request.header().uri());
@@ -140,9 +140,9 @@ Coroutine echoServer() {
 
                 auto sendResult = co_await writer.sendResponse(response);
                 if (!sendResult) {
-                    LogError("Failed to send response: {}", sendResult.error().message());
+                    HTTP_LOG_ERROR("Failed to send response: {}", sendResult.error().message());
                 } else {
-                    LogInfo("Response sent (sendResponse): complete");
+                    HTTP_LOG_INFO("Response sent (sendResponse): complete");
                 }
             } else if (testCase == 1) {
                 // 方式2: 使用 sendHeader + send(string) 分离发送
@@ -159,14 +159,14 @@ Coroutine echoServer() {
                 // 发送头部
                 auto headerResult = co_await writer.sendHeader(std::move(respHeader));
                 if (!headerResult) {
-                    LogError("Failed to send header: {}", headerResult.error().message());
+                    HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
                 } else {
                     // 发送body
                     auto bodyResult = co_await writer.send(std::move(body));
                     if (bodyResult) {
-                        LogInfo("Response sent (sendHeader+send): complete");
+                        HTTP_LOG_INFO("Response sent (sendHeader+send): complete");
                     } else {
-                        LogError("Failed to send body: {}", bodyResult.error().message());
+                        HTTP_LOG_ERROR("Failed to send body: {}", bodyResult.error().message());
                     }
                 }
             } else {
@@ -186,21 +186,21 @@ Coroutine echoServer() {
                 // 发送头部（原始数据）
                 auto headerResult = co_await writer.send(headerStr.data(), headerStr.size());
                 if (!headerResult) {
-                    LogError("Failed to send header: {}", headerResult.error().message());
+                    HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
                 } else {
                     // 发送body（原始数据）
                     auto bodyResult = co_await writer.send(body.data(), body.size());
                     if (bodyResult) {
-                        LogInfo("Response sent (send raw): complete");
+                        HTTP_LOG_INFO("Response sent (send raw): complete");
                     } else {
-                        LogError("Failed to send body: {}", bodyResult.error().message());
+                        HTTP_LOG_ERROR("Failed to send body: {}", bodyResult.error().message());
                     }
                 }
             }
         }
 
         co_await client.close();
-        LogInfo("Connection closed\n");
+        HTTP_LOG_INFO("Connection closed\n");
     }
 
     co_await listener.close();
@@ -208,18 +208,18 @@ Coroutine echoServer() {
 }
 
 int main() {
-    LogInfo("========================================");
-    LogInfo("HTTP Reader/Writer Test - Server");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HTTP Reader/Writer Test - Server");
+    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
-    LogInfo("Scheduler started");
+    HTTP_LOG_INFO("Scheduler started");
 
     auto* scheduler = rt.getNextIOScheduler();
     if (!scheduler) {
-        LogError("Failed to get IO scheduler");
+        HTTP_LOG_ERROR("Failed to get IO scheduler");
         rt.stop();
         return 1;
     }
@@ -227,7 +227,7 @@ int main() {
     // 启动服务器
     scheduler->spawn(echoServer());
 
-    LogInfo("Server is ready. Press Ctrl+C to stop.\n");
+    HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 
     // 保持运行
     while (true) {
@@ -236,7 +236,7 @@ int main() {
 
     rt.stop();
 #else
-    LogWarn("This test requires kqueue (macOS), epoll or io_uring (Linux)");
+    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

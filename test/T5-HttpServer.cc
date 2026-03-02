@@ -12,7 +12,7 @@
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/KqueueScheduler.h"
@@ -51,9 +51,9 @@ Coroutine handleRequest(HttpConn conn) {
             if (!result) {
                 auto& error = result.error();
                 if (error.code() == kConnectionClose) {
-                    LogInfo("Client disconnected");
+                    HTTP_LOG_INFO("Client disconnected");
                 } else {
-                    LogError("Request parse error: {}", error.message());
+                    HTTP_LOG_ERROR("Request parse error: {}", error.message());
                 }
                 co_await conn.close();
                 co_return;
@@ -64,7 +64,7 @@ Coroutine handleRequest(HttpConn conn) {
 
         int req_no = g_request_count.fetch_add(1) + 1;
 
-        LogInfo("Request #{} received: {} {}",
+        HTTP_LOG_INFO("Request #{} received: {} {}",
                 req_no,
                 static_cast<int>(request.header().method()),
                 request.header().uri());
@@ -161,10 +161,10 @@ Coroutine handleRequest(HttpConn conn) {
 
         auto sendResult = co_await writer.sendResponse(response);
         if (!sendResult) {
-            LogError("Failed to send response: {}", sendResult.error().message());
+            HTTP_LOG_ERROR("Failed to send response: {}", sendResult.error().message());
             keep_alive = false;
         } else {
-            LogInfo("Response sent: complete");
+            HTTP_LOG_INFO("Response sent: complete");
         }
 
         if (!keep_alive) {
@@ -177,9 +177,9 @@ Coroutine handleRequest(HttpConn conn) {
 }
 
 int main() {
-    LogInfo("========================================");
-    LogInfo("HTTP Server Test");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HTTP Server Test");
+    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     // 配置并启动服务器
@@ -190,17 +190,17 @@ int main() {
         .build());
 
     g_server_running = true;
-    LogInfo("========================================");
-    LogInfo("HTTP Server is running on http://127.0.0.1:8080");
-    LogInfo("========================================");
-    LogInfo("Available endpoints:");
-    LogInfo("  - http://127.0.0.1:8080/");
-    LogInfo("  - http://127.0.0.1:8080/hello");
-    LogInfo("  - http://127.0.0.1:8080/test");
-    LogInfo("  - http://127.0.0.1:8080/api/info");
-    LogInfo("========================================");
-    LogInfo("Press Ctrl+C to stop the server");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HTTP Server is running on http://127.0.0.1:8080");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Available endpoints:");
+    HTTP_LOG_INFO("  - http://127.0.0.1:8080/");
+    HTTP_LOG_INFO("  - http://127.0.0.1:8080/hello");
+    HTTP_LOG_INFO("  - http://127.0.0.1:8080/test");
+    HTTP_LOG_INFO("  - http://127.0.0.1:8080/api/info");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("Press Ctrl+C to stop the server");
+    HTTP_LOG_INFO("========================================\n");
 
     // 运行服务器（阻塞）
     server.start(handleRequest);
@@ -209,9 +209,9 @@ int main() {
     }
 
     server.stop();
-    LogInfo("Server stopped");
+    HTTP_LOG_INFO("Server stopped");
 #else
-    LogWarn("This test requires kqueue (macOS), epoll or io_uring (Linux)");
+    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

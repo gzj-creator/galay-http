@@ -5,7 +5,7 @@
 
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 
 using namespace galay::http;
 using namespace galay::kernel;
@@ -16,24 +16,24 @@ using namespace galay::async;
  */
 Coroutine testGet(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 1: GET Request ===");
+    HTTP_LOG_INFO("=== Test 1: GET Request ===");
 
     // 创建socket并连接
     TcpSocket socket(IPType::IPV4);
     auto nonblock_result = socket.option().handleNonBlock();
     if (!nonblock_result) {
-        LogError("Failed to set non-block");
+        HTTP_LOG_ERROR("Failed to set non-block");
         co_return;
     }
 
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect: {}", connect_result.error().message());
+        HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
         co_return;
     }
 
-    LogInfo("Connected to 127.0.0.1:8080");
+    HTTP_LOG_INFO("Connected to 127.0.0.1:8080");
 
     // 创建HttpClient
     HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -43,34 +43,34 @@ Coroutine testGet(IOScheduler* scheduler)
     int loop_count = 0;
     while (true) {
         loop_count++;
-        LogInfo("Loop iteration: {}", loop_count);
+        HTTP_LOG_INFO("Loop iteration: {}", loop_count);
 
         auto result = co_await session.get("/api/info");
 
         if (!result) {
             // 错误处理
-            LogError("Request failed: {}", result.error().message());
+            HTTP_LOG_ERROR("Request failed: {}", result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
             // 完成，获取响应
             HttpResponse response = std::move(result.value().value());
-            LogInfo("✓ GET request completed successfully!");
-            LogInfo("  Status: {} {}",
+            HTTP_LOG_INFO("✓ GET request completed successfully!");
+            HTTP_LOG_INFO("  Status: {} {}",
                     static_cast<int>(response.header().code()),
                     httpStatusCodeToString(response.header().code()));
-            LogInfo("  Body: {}", response.getBodyStr());
-            LogInfo("  Total loops: {}", loop_count);
+            HTTP_LOG_INFO("  Body: {}", response.getBodyStr());
+            HTTP_LOG_INFO("  Total loops: {}", loop_count);
             break;
         }
 
         // std::nullopt，继续循环
-        LogInfo("  Request in progress, continuing...");
+        HTTP_LOG_INFO("  Request in progress, continuing...");
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -79,24 +79,24 @@ Coroutine testGet(IOScheduler* scheduler)
  */
 Coroutine testPost(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 2: POST Request ===");
+    HTTP_LOG_INFO("=== Test 2: POST Request ===");
 
     // 创建socket并连接
     TcpSocket socket(IPType::IPV4);
     auto nonblock_result = socket.option().handleNonBlock();
     if (!nonblock_result) {
-        LogError("Failed to set non-block");
+        HTTP_LOG_ERROR("Failed to set non-block");
         co_return;
     }
 
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect: {}", connect_result.error().message());
+        HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
         co_return;
     }
 
-    LogInfo("Connected to 127.0.0.1:8080");
+    HTTP_LOG_INFO("Connected to 127.0.0.1:8080");
 
     // 创建HttpClient
     HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -107,30 +107,30 @@ Coroutine testPost(IOScheduler* scheduler)
     auto session = client.getSession();
     while (true) {
         loop_count++;
-        LogInfo("Loop iteration: {}", loop_count);
+        HTTP_LOG_INFO("Loop iteration: {}", loop_count);
 
         auto result = co_await session.post("/api/data", body, "application/json");
 
         if (!result) {
-            LogError("Request failed: {}", result.error().message());
+            HTTP_LOG_ERROR("Request failed: {}", result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
             HttpResponse response = std::move(result.value().value());
-            LogInfo("✓ POST request completed successfully!");
-            LogInfo("  Status: {} {}",
+            HTTP_LOG_INFO("✓ POST request completed successfully!");
+            HTTP_LOG_INFO("  Status: {} {}",
                     static_cast<int>(response.header().code()),
                     httpStatusCodeToString(response.header().code()));
-            LogInfo("  Total loops: {}", loop_count);
+            HTTP_LOG_INFO("  Total loops: {}", loop_count);
             break;
         }
 
-        LogInfo("  Request in progress, continuing...");
+        HTTP_LOG_INFO("  Request in progress, continuing...");
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -139,24 +139,24 @@ Coroutine testPost(IOScheduler* scheduler)
  */
 Coroutine testMultipleRequests(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 3: Multiple Requests ===");
+    HTTP_LOG_INFO("=== Test 3: Multiple Requests ===");
 
     // 创建socket并连接
     TcpSocket socket(IPType::IPV4);
     auto nonblock_result = socket.option().handleNonBlock();
     if (!nonblock_result) {
-        LogError("Failed to set non-block");
+        HTTP_LOG_ERROR("Failed to set non-block");
         co_return;
     }
 
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect: {}", connect_result.error().message());
+        HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
         co_return;
     }
 
-    LogInfo("Connected to 127.0.0.1:8080");
+    HTTP_LOG_INFO("Connected to 127.0.0.1:8080");
 
     // 创建HttpClient
     HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -169,47 +169,47 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
         if (!session_alive) {
             break;
         }
-        LogInfo("Requesting: {}", uri);
+        HTTP_LOG_INFO("Requesting: {}", uri);
 
         while (true) {
             auto result = co_await session.get(uri);
 
             if (!result) {
-                LogError("Request failed: {}", result.error().message());
+                HTTP_LOG_ERROR("Request failed: {}", result.error().message());
                 session_alive = false;
                 break;
             }
 
             if (result.value().has_value()) {
                 HttpResponse response = std::move(result.value().value());
-                LogInfo("✓ Request to {} completed", uri);
-                LogInfo("  Status: {}", static_cast<int>(response.header().code()));
-                LogInfo("  Body length: {} bytes", response.getBodyStr().size());
+                HTTP_LOG_INFO("✓ Request to {} completed", uri);
+                HTTP_LOG_INFO("  Status: {}", static_cast<int>(response.header().code()));
+                HTTP_LOG_INFO("  Body length: {} bytes", response.getBodyStr().size());
                 break;
             }
         }
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
 int main()
 {
-    LogInfo("========================================");
-    LogInfo("HttpClientAwaitable Functionality Test");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HttpClientAwaitable Functionality Test");
+    HTTP_LOG_INFO("========================================\n");
 
     try {
         Runtime runtime;
         runtime.start();
 
-        LogInfo("Runtime started with {} IO schedulers\n", runtime.getIOSchedulerCount());
+        HTTP_LOG_INFO("Runtime started with {} IO schedulers\n", runtime.getIOSchedulerCount());
 
         auto* scheduler = runtime.getNextIOScheduler();
         if (!scheduler) {
-            LogError("No IO scheduler available");
+            HTTP_LOG_ERROR("No IO scheduler available");
             return 1;
         }
 
@@ -225,12 +225,12 @@ int main()
 
         runtime.stop();
 
-        LogInfo("========================================");
-        LogInfo("All Tests Completed");
-        LogInfo("========================================");
+        HTTP_LOG_INFO("========================================");
+        HTTP_LOG_INFO("All Tests Completed");
+        HTTP_LOG_INFO("========================================");
 
     } catch (const std::exception& e) {
-        LogError("Test error: {}", e.what());
+        HTTP_LOG_ERROR("Test error: {}", e.what());
         return 1;
     }
 

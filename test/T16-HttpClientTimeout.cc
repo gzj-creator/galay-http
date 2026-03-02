@@ -6,7 +6,7 @@
 
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 #include <chrono>
 #include <thread>
 
@@ -25,14 +25,14 @@ constexpr uint16_t TEST_PORT = 8080;
  */
 Coroutine testRequestTimeout(IOScheduler* scheduler)
 {
-    LogInfo("=== Test: Request Timeout ===");
+    HTTP_LOG_INFO("=== Test: Request Timeout ===");
 
     try {
         // 创建socket并连接
         TcpSocket socket(IPType::IPV4);
         auto nonblock_result = socket.option().handleNonBlock();
         if (!nonblock_result) {
-            LogError("Failed to set non-block");
+            HTTP_LOG_ERROR("Failed to set non-block");
             co_return;
         }
 
@@ -40,10 +40,10 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
         auto connectResult = co_await socket.connect(host);
 
         if (!connectResult) {
-            LogError("❌ Connect failed: {}", connectResult.error().message());
+            HTTP_LOG_ERROR("❌ Connect failed: {}", connectResult.error().message());
             co_return;
         }
-        LogInfo("✓ Connected to server");
+        HTTP_LOG_INFO("✓ Connected to server");
 
         // 创建 HttpClient
         HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -52,7 +52,7 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
         auto session = client.getSession();
 
         // 发送请求并设置 1 秒超时（假设服务器会延迟 5 秒响应）
-        LogInfo("Sending GET request with 1s timeout...");
+        HTTP_LOG_INFO("Sending GET request with 1s timeout...");
 
         int loop_count = 0;
         while (true) {
@@ -62,25 +62,25 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
             if (!result) {
                 // 期望超时错误
                 if (result.error().code() == kRequestTimeOut || result.error().code() == kRecvTimeOut) {
-                    LogInfo("✓ Request timed out as expected: {}", result.error().message());
+                    HTTP_LOG_INFO("✓ Request timed out as expected: {}", result.error().message());
                 } else {
-                    LogError("❌ Unexpected error: {}", result.error().message());
+                    HTTP_LOG_ERROR("❌ Unexpected error: {}", result.error().message());
                 }
                 break;
             } else if (result.value().has_value()) {
-                LogError("❌ Request should have timed out but succeeded");
+                HTTP_LOG_ERROR("❌ Request should have timed out but succeeded");
                 break;
             }
             // std::nullopt，继续循环
-            LogInfo("  Request in progress (loop {})...", loop_count);
+            HTTP_LOG_INFO("  Request in progress (loop {})...", loop_count);
         }
 
         // 关闭连接
         co_await client.close();
-        LogInfo("✓ Connection closed\n");
+        HTTP_LOG_INFO("✓ Connection closed\n");
 
     } catch (const std::exception& e) {
-        LogError("❌ Exception: {}", e.what());
+        HTTP_LOG_ERROR("❌ Exception: {}", e.what());
     }
     co_return;
 }
@@ -91,36 +91,36 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
  */
 Coroutine testConnectTimeout(IOScheduler* scheduler)
 {
-    LogInfo("=== Test: Connect Timeout ===");
+    HTTP_LOG_INFO("=== Test: Connect Timeout ===");
 
     try {
         // 尝试连接到不存在的服务器（使用不可路由的 IP）
         TcpSocket socket(IPType::IPV4);
         auto nonblock_result = socket.option().handleNonBlock();
         if (!nonblock_result) {
-            LogError("Failed to set non-block");
+            HTTP_LOG_ERROR("Failed to set non-block");
             co_return;
         }
 
-        LogInfo("Attempting to connect to unreachable host with 2s timeout...");
+        HTTP_LOG_INFO("Attempting to connect to unreachable host with 2s timeout...");
         Host host(IPType::IPV4, "192.0.2.1", 9999);
         auto connectResult = co_await socket.connect(host).timeout(2000ms);
 
         if (!connectResult) {
             if (connectResult.error().code() == kTimeout) {
-                LogInfo("✓ Connect timed out as expected: {}", connectResult.error().message());
+                HTTP_LOG_INFO("✓ Connect timed out as expected: {}", connectResult.error().message());
             } else {
-                LogInfo("⚠ Connect failed with error: {}", connectResult.error().message());
+                HTTP_LOG_INFO("⚠ Connect failed with error: {}", connectResult.error().message());
             }
         } else {
-            LogError("❌ Connect should have timed out but succeeded");
+            HTTP_LOG_ERROR("❌ Connect should have timed out but succeeded");
         }
 
     } catch (const std::exception& e) {
-        LogError("❌ Exception: {}", e.what());
+        HTTP_LOG_ERROR("❌ Exception: {}", e.what());
     }
 
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -130,14 +130,14 @@ Coroutine testConnectTimeout(IOScheduler* scheduler)
  */
 Coroutine testServerDisconnect(IOScheduler* scheduler)
 {
-    LogInfo("=== Test: Server Disconnect ===");
+    HTTP_LOG_INFO("=== Test: Server Disconnect ===");
 
     try {
         // 创建socket并连接
         TcpSocket socket(IPType::IPV4);
         auto nonblock_result = socket.option().handleNonBlock();
         if (!nonblock_result) {
-            LogError("Failed to set non-block");
+            HTTP_LOG_ERROR("Failed to set non-block");
             co_return;
         }
 
@@ -145,10 +145,10 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
         auto connectResult = co_await socket.connect(host);
 
         if (!connectResult) {
-            LogError("❌ Connect failed: {}", connectResult.error().message());
+            HTTP_LOG_ERROR("❌ Connect failed: {}", connectResult.error().message());
             co_return;
         }
-        LogInfo("✓ Connected to server");
+        HTTP_LOG_INFO("✓ Connected to server");
 
         // 创建 HttpClient
         HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -157,7 +157,7 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
         auto session = client.getSession();
 
         // 请求一个会导致服务器断开连接的端点
-        LogInfo("Sending GET request to /disconnect endpoint...");
+        HTTP_LOG_INFO("Sending GET request to /disconnect endpoint...");
 
         int loop_count = 0;
         while (true) {
@@ -166,30 +166,30 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
 
             if (!result) {
                 // 期望连接错误
-                LogInfo("✓ Detected server disconnect: {}", result.error().message());
+                HTTP_LOG_INFO("✓ Detected server disconnect: {}", result.error().message());
                 break;
             } else if (result.value().has_value()) {
-                LogError("❌ Request should have failed but succeeded");
+                HTTP_LOG_ERROR("❌ Request should have failed but succeeded");
                 break;
             }
             // std::nullopt，继续循环
-            LogInfo("  Request in progress (loop {})...", loop_count);
+            HTTP_LOG_INFO("  Request in progress (loop {})...", loop_count);
         }
 
         // 尝试关闭连接（可能已经断开）
         auto closeResult = co_await client.close();
         if (closeResult) {
-            LogInfo("✓ Connection closed");
+            HTTP_LOG_INFO("✓ Connection closed");
         } else {
-            LogInfo("⚠ Close failed (connection may already be closed): {}",
+            HTTP_LOG_INFO("⚠ Close failed (connection may already be closed): {}",
                     closeResult.error().message());
         }
 
     } catch (const std::exception& e) {
-        LogError("❌ Exception: {}", e.what());
+        HTTP_LOG_ERROR("❌ Exception: {}", e.what());
     }
 
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -199,14 +199,14 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
  */
 Coroutine testReceiveTimeout(IOScheduler* scheduler)
 {
-    LogInfo("=== Test: Receive Timeout ===");
+    HTTP_LOG_INFO("=== Test: Receive Timeout ===");
 
     try {
         // 创建socket并连接
         TcpSocket socket(IPType::IPV4);
         auto nonblock_result = socket.option().handleNonBlock();
         if (!nonblock_result) {
-            LogError("Failed to set non-block");
+            HTTP_LOG_ERROR("Failed to set non-block");
             co_return;
         }
 
@@ -214,16 +214,16 @@ Coroutine testReceiveTimeout(IOScheduler* scheduler)
         auto connectResult = co_await socket.connect(host);
 
         if (!connectResult) {
-            LogError("❌ Connect failed: {}", connectResult.error().message());
+            HTTP_LOG_ERROR("❌ Connect failed: {}", connectResult.error().message());
             co_return;
         }
-        LogInfo("✓ Connected to server");
+        HTTP_LOG_INFO("✓ Connected to server");
 
         // 创建 HttpClient
         HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         // 请求一个会发送部分数据然后停止的端点
-        LogInfo("Sending GET request to /partial endpoint with 2s timeout...");
+        HTTP_LOG_INFO("Sending GET request to /partial endpoint with 2s timeout...");
         auto session = client.getSession();
 
         int loop_count = 0;
@@ -233,25 +233,25 @@ Coroutine testReceiveTimeout(IOScheduler* scheduler)
 
             if (!result) {
                 if (result.error().code() == kRequestTimeOut || result.error().code() == kRecvTimeOut) {
-                    LogInfo("✓ Receive timed out as expected: {}", result.error().message());
+                    HTTP_LOG_INFO("✓ Receive timed out as expected: {}", result.error().message());
                 } else {
-                    LogInfo("⚠ Request failed with error: {}", result.error().message());
+                    HTTP_LOG_INFO("⚠ Request failed with error: {}", result.error().message());
                 }
                 break;
             } else if (result.value().has_value()) {
-                LogError("❌ Request should have timed out but succeeded");
+                HTTP_LOG_ERROR("❌ Request should have timed out but succeeded");
                 break;
             }
             // std::nullopt，继续循环
-            LogInfo("  Request in progress (loop {})...", loop_count);
+            HTTP_LOG_INFO("  Request in progress (loop {})...", loop_count);
         }
 
         // 关闭连接
         co_await client.close();
-        LogInfo("✓ Connection closed\n");
+        HTTP_LOG_INFO("✓ Connection closed\n");
 
     } catch (const std::exception& e) {
-        LogError("❌ Exception: {}", e.what());
+        HTTP_LOG_ERROR("❌ Exception: {}", e.what());
     }
     co_return;
 }
@@ -262,14 +262,14 @@ Coroutine testReceiveTimeout(IOScheduler* scheduler)
  */
 Coroutine testTimeoutRetry(IOScheduler* scheduler)
 {
-    LogInfo("=== Test: Timeout Retry ===");
+    HTTP_LOG_INFO("=== Test: Timeout Retry ===");
 
     try {
         // 创建socket并连接
         TcpSocket socket(IPType::IPV4);
         auto nonblock_result = socket.option().handleNonBlock();
         if (!nonblock_result) {
-            LogError("Failed to set non-block");
+            HTTP_LOG_ERROR("Failed to set non-block");
             co_return;
         }
 
@@ -277,10 +277,10 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
         auto connectResult = co_await socket.connect(host);
 
         if (!connectResult) {
-            LogError("❌ Connect failed: {}", connectResult.error().message());
+            HTTP_LOG_ERROR("❌ Connect failed: {}", connectResult.error().message());
             co_return;
         }
-        LogInfo("✓ Connected to server");
+        HTTP_LOG_INFO("✓ Connected to server");
 
         // 创建 HttpClient
         HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
@@ -288,7 +288,7 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
         auto session = client.getSession();
 
         // 第一次请求：超时
-        LogInfo("First request with 1s timeout...");
+        HTTP_LOG_INFO("First request with 1s timeout...");
         int loop_count = 0;
         while (true) {
             loop_count++;
@@ -296,43 +296,43 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
 
             if (!result1) {
                 if (result1.error().code() == kRequestTimeOut || result1.error().code() == kRecvTimeOut) {
-                    LogInfo("✓ First request timed out as expected");
+                    HTTP_LOG_INFO("✓ First request timed out as expected");
                 } else {
-                    LogInfo("⚠ First request failed: {}", result1.error().message());
+                    HTTP_LOG_INFO("⚠ First request failed: {}", result1.error().message());
                 }
                 break;
             } else if (result1.value().has_value()) {
-                LogInfo("⚠ First request did not timeout as expected");
+                HTTP_LOG_INFO("⚠ First request did not timeout as expected");
                 break;
             }
-            LogInfo("  First request in progress (loop {})...", loop_count);
+            HTTP_LOG_INFO("  First request in progress (loop {})...", loop_count);
         }
         // 第二次请求：正常完成
-        LogInfo("Second request with sufficient timeout...");
+        HTTP_LOG_INFO("Second request with sufficient timeout...");
         loop_count = 0;
         while (true) {
             loop_count++;
             auto result2 = co_await session.get("/api/data").timeout(5000ms);
 
             if (!result2) {
-                LogInfo("⚠ Second request failed: {}", result2.error().message());
+                HTTP_LOG_INFO("⚠ Second request failed: {}", result2.error().message());
                 break;
             } else if (result2.value().has_value()) {
                 auto& response = result2.value().value();
-                LogInfo("✓ Second request succeeded");
-                LogInfo("  Status: {}", static_cast<int>(response.header().code()));
-                LogInfo("  Total loops: {}", loop_count);
+                HTTP_LOG_INFO("✓ Second request succeeded");
+                HTTP_LOG_INFO("  Status: {}", static_cast<int>(response.header().code()));
+                HTTP_LOG_INFO("  Total loops: {}", loop_count);
                 break;
             }
-            LogInfo("  Second request in progress (loop {})...", loop_count);
+            HTTP_LOG_INFO("  Second request in progress (loop {})...", loop_count);
         }
 
         // 关闭连接
         co_await client.close();
-        LogInfo("✓ Connection closed\n");
+        HTTP_LOG_INFO("✓ Connection closed\n");
 
     } catch (const std::exception& e) {
-        LogError("❌ Exception: {}", e.what());
+        HTTP_LOG_ERROR("❌ Exception: {}", e.what());
     }
     co_return;
 }
@@ -343,14 +343,14 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
  */
 Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
 {
-    LogInfo("=== Test: Normal Request With Timeout ===");
+    HTTP_LOG_INFO("=== Test: Normal Request With Timeout ===");
 
     try {
         // 创建socket并连接
         TcpSocket socket(IPType::IPV4);
         auto nonblock_result = socket.option().handleNonBlock();
         if (!nonblock_result) {
-            LogError("Failed to set non-block");
+            HTTP_LOG_ERROR("Failed to set non-block");
             co_return;
         }
 
@@ -358,16 +358,16 @@ Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
         auto connectResult = co_await socket.connect(host);
 
         if (!connectResult) {
-            LogError("❌ Connect failed: {}", connectResult.error().message());
+            HTTP_LOG_ERROR("❌ Connect failed: {}", connectResult.error().message());
             co_return;
         }
-        LogInfo("✓ Connected to server");
+        HTTP_LOG_INFO("✓ Connected to server");
 
         // 创建 HttpClient
         HttpClient client(std::move(socket), HttpClientBuilder().buildConfig());
 
         // 发送正常请求，设置足够长的超时
-        LogInfo("Sending GET request with 5s timeout...");
+        HTTP_LOG_INFO("Sending GET request with 5s timeout...");
         auto session = client.getSession();
         int loop_count = 0;
         while (true) {
@@ -375,26 +375,26 @@ Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
             auto result = co_await session.get("/api/data").timeout(5000ms);
 
             if (!result) {
-                LogError("❌ Request failed: {}", result.error().message());
+                HTTP_LOG_ERROR("❌ Request failed: {}", result.error().message());
                 break;
             } else if (result.value().has_value()) {
                 auto& response = result.value().value();
-                LogInfo("✓ Request succeeded");
-                LogInfo("  Status: {}", static_cast<int>(response.header().code()));
-                LogInfo("  Body: {}", response.getBodyStr());
-                LogInfo("  Total loops: {}", loop_count);
+                HTTP_LOG_INFO("✓ Request succeeded");
+                HTTP_LOG_INFO("  Status: {}", static_cast<int>(response.header().code()));
+                HTTP_LOG_INFO("  Body: {}", response.getBodyStr());
+                HTTP_LOG_INFO("  Total loops: {}", loop_count);
                 break;
             }
             // std::nullopt，继续循环
-            LogInfo("  Request in progress (loop {})...", loop_count);
+            HTTP_LOG_INFO("  Request in progress (loop {})...", loop_count);
         }
 
         // 关闭连接
         co_await client.close();
-        LogInfo("✓ Connection closed\n");
+        HTTP_LOG_INFO("✓ Connection closed\n");
 
     } catch (const std::exception& e) {
-        LogError("❌ Exception: {}", e.what());
+        HTTP_LOG_ERROR("❌ Exception: {}", e.what());
     }
     co_return;
 }
@@ -404,25 +404,25 @@ Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
  */
 int main()
 {
-    LogInfo("==================================");
-    LogInfo("HttpClient Timeout & Disconnect Tests");
-    LogInfo("==================================\n");
-    LogInfo("Note: These tests require a test server running on {}:{}", TEST_HOST, TEST_PORT);
-    LogInfo("The server should support the following endpoints:");
-    LogInfo("  - /delay/N: Delay N seconds before responding");
-    LogInfo("  - /disconnect: Close connection immediately");
-    LogInfo("  - /partial: Send partial response and stop");
-    LogInfo("  - /api/data: Normal response\n");
+    HTTP_LOG_INFO("==================================");
+    HTTP_LOG_INFO("HttpClient Timeout & Disconnect Tests");
+    HTTP_LOG_INFO("==================================\n");
+    HTTP_LOG_INFO("Note: These tests require a test server running on {}:{}", TEST_HOST, TEST_PORT);
+    HTTP_LOG_INFO("The server should support the following endpoints:");
+    HTTP_LOG_INFO("  - /delay/N: Delay N seconds before responding");
+    HTTP_LOG_INFO("  - /disconnect: Close connection immediately");
+    HTTP_LOG_INFO("  - /partial: Send partial response and stop");
+    HTTP_LOG_INFO("  - /api/data: Normal response\n");
 
     try {
         Runtime runtime;
         runtime.start();
 
-        LogInfo("Runtime started with {} IO schedulers\n", runtime.getIOSchedulerCount());
+        HTTP_LOG_INFO("Runtime started with {} IO schedulers\n", runtime.getIOSchedulerCount());
 
         auto* scheduler = runtime.getNextIOScheduler();
         if (!scheduler) {
-            LogError("No IO scheduler available");
+            HTTP_LOG_ERROR("No IO scheduler available");
             return 1;
         }
 
@@ -447,12 +447,12 @@ int main()
 
         runtime.stop();
 
-        LogInfo("==================================");
-        LogInfo("All Tests Completed");
-        LogInfo("==================================");
+        HTTP_LOG_INFO("==================================");
+        HTTP_LOG_INFO("All Tests Completed");
+        HTTP_LOG_INFO("==================================");
 
     } catch (const std::exception& e) {
-        LogError("Fatal error: {}", e.what());
+        HTTP_LOG_ERROR("Fatal error: {}", e.what());
         return 1;
     }
 

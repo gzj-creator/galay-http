@@ -6,7 +6,7 @@
 #include <iostream>
 #include "galay-http/kernel/http/HttpClient.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/common/Log.h"
+#include "galay-http/kernel/http/HttpLog.h"
 
 using namespace galay::http;
 using namespace galay::kernel;
@@ -17,7 +17,7 @@ using namespace galay::async;
  */
 Coroutine testConnectionFailure(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 1: Connection Failure ===");
+    HTTP_LOG_INFO("=== Test 1: Connection Failure ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -27,12 +27,12 @@ Coroutine testConnectionFailure(IOScheduler* scheduler)
     auto connect_result = co_await socket.connect(host);
 
     if (!connect_result) {
-        LogInfo("✓ Connection failed as expected: {}", connect_result.error().message());
+        HTTP_LOG_INFO("✓ Connection failed as expected: {}", connect_result.error().message());
     } else {
-        LogError("✗ Connection should have failed");
+        HTTP_LOG_ERROR("✗ Connection should have failed");
     }
 
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -41,7 +41,7 @@ Coroutine testConnectionFailure(IOScheduler* scheduler)
  */
 Coroutine testServerCloseConnection(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 2: Server Close Connection ===");
+    HTTP_LOG_INFO("=== Test 2: Server Close Connection ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -49,7 +49,7 @@ Coroutine testServerCloseConnection(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect: {}", connect_result.error().message());
+        HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
         co_return;
     }
 
@@ -62,23 +62,23 @@ Coroutine testServerCloseConnection(IOScheduler* scheduler)
         auto result = co_await session.get("/");
 
         if (!result) {
-            LogInfo("✓ Got error after {} loops: {}", loop_count, result.error().message());
+            HTTP_LOG_INFO("✓ Got error after {} loops: {}", loop_count, result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
-            LogInfo("✓ Request completed after {} loops", loop_count);
+            HTTP_LOG_INFO("✓ Request completed after {} loops", loop_count);
             break;
         }
 
         if (loop_count > 100) {
-            LogError("✗ Too many loops, something is wrong");
+            HTTP_LOG_ERROR("✗ Too many loops, something is wrong");
             break;
         }
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -87,7 +87,7 @@ Coroutine testServerCloseConnection(IOScheduler* scheduler)
  */
 Coroutine testMultipleRequests(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 3: Multiple Sequential Requests ===");
+    HTTP_LOG_INFO("=== Test 3: Multiple Sequential Requests ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -95,7 +95,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect");
+        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -103,7 +103,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
     auto session = client.getSession();
     // 发送3个连续请求
     for (int i = 0; i < 3; i++) {
-        LogInfo("Request #{}", i + 1);
+        HTTP_LOG_INFO("Request #{}", i + 1);
 
         int loop_count = 0;
         while (true) {
@@ -111,20 +111,20 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
             auto result = co_await session.get("/api/info");
 
             if (!result) {
-                LogError("✗ Request #{} failed: {}", i + 1, result.error().message());
+                HTTP_LOG_ERROR("✗ Request #{} failed: {}", i + 1, result.error().message());
                 co_await client.close();
                 co_return;
             }
 
             if (result.value().has_value()) {
                 HttpResponse response = std::move(result.value().value());
-                LogInfo("✓ Request #{} completed after {} loops, status: {}",
+                HTTP_LOG_INFO("✓ Request #{} completed after {} loops, status: {}",
                        i + 1, loop_count, static_cast<int>(response.header().code()));
                 break;
             }
 
             if (loop_count > 100) {
-                LogError("✗ Request #{} too many loops", i + 1);
+                HTTP_LOG_ERROR("✗ Request #{} too many loops", i + 1);
                 co_await client.close();
                 co_return;
             }
@@ -132,7 +132,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -141,7 +141,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
  */
 Coroutine testLargeRequestBody(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 4: Large Request Body ===");
+    HTTP_LOG_INFO("=== Test 4: Large Request Body ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -149,7 +149,7 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect");
+        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -165,25 +165,25 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
         auto result = co_await session.post("/api/data", large_body, "text/plain");
 
         if (!result) {
-            LogInfo("Request failed (expected for large body): {}", result.error().message());
+            HTTP_LOG_INFO("Request failed (expected for large body): {}", result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
             HttpResponse response = std::move(result.value().value());
-            LogInfo("✓ Large request completed after {} loops, status: {}",
+            HTTP_LOG_INFO("✓ Large request completed after {} loops, status: {}",
                    loop_count, static_cast<int>(response.header().code()));
             break;
         }
 
         if (loop_count > 100) {
-            LogError("✗ Too many loops");
+            HTTP_LOG_ERROR("✗ Too many loops");
             break;
         }
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -192,7 +192,7 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
  */
 Coroutine test404NotFound(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 5: 404 Not Found ===");
+    HTTP_LOG_INFO("=== Test 5: 404 Not Found ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -200,7 +200,7 @@ Coroutine test404NotFound(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect");
+        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -212,7 +212,7 @@ Coroutine test404NotFound(IOScheduler* scheduler)
         auto result = co_await session.get("/nonexistent");
 
         if (!result) {
-            LogError("✗ Request failed: {}", result.error().message());
+            HTTP_LOG_ERROR("✗ Request failed: {}", result.error().message());
             break;
         }
 
@@ -220,21 +220,21 @@ Coroutine test404NotFound(IOScheduler* scheduler)
             HttpResponse response = std::move(result.value().value());
             auto status_code = static_cast<int>(response.header().code());
             if (status_code == 404) {
-                LogInfo("✓ Got 404 as expected after {} loops", loop_count);
+                HTTP_LOG_INFO("✓ Got 404 as expected after {} loops", loop_count);
             } else {
-                LogError("✗ Expected 404 but got {}", status_code);
+                HTTP_LOG_ERROR("✗ Expected 404 but got {}", status_code);
             }
             break;
         }
 
         if (loop_count > 100) {
-            LogError("✗ Too many loops");
+            HTTP_LOG_ERROR("✗ Too many loops");
             break;
         }
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -243,7 +243,7 @@ Coroutine test404NotFound(IOScheduler* scheduler)
  */
 Coroutine testEmptyResponse(IOScheduler* scheduler)
 {
-    LogInfo("=== Test 6: Empty Response Body ===");
+    HTTP_LOG_INFO("=== Test 6: Empty Response Body ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -251,7 +251,7 @@ Coroutine testEmptyResponse(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        LogError("Failed to connect");
+        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -263,33 +263,33 @@ Coroutine testEmptyResponse(IOScheduler* scheduler)
         auto result = co_await session.del("/api/resource");
 
         if (!result) {
-            LogInfo("Request failed: {}", result.error().message());
+            HTTP_LOG_INFO("Request failed: {}", result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
             HttpResponse response = std::move(result.value().value());
-            LogInfo("✓ DELETE request completed after {} loops, body size: {}",
+            HTTP_LOG_INFO("✓ DELETE request completed after {} loops, body size: {}",
                    loop_count, response.getBodyStr().size());
             break;
         }
 
         if (loop_count > 100) {
-            LogError("✗ Too many loops");
+            HTTP_LOG_ERROR("✗ Too many loops");
             break;
         }
     }
 
     co_await client.close();
-    LogInfo("");
+    HTTP_LOG_INFO("");
     co_return;
 }
 
 int main()
 {
-    LogInfo("========================================");
-    LogInfo("HttpClientAwaitable Edge Cases Test");
-    LogInfo("========================================\n");
+    HTTP_LOG_INFO("========================================");
+    HTTP_LOG_INFO("HttpClientAwaitable Edge Cases Test");
+    HTTP_LOG_INFO("========================================\n");
 
     try {
         Runtime runtime;
@@ -297,7 +297,7 @@ int main()
 
         auto* scheduler = runtime.getNextIOScheduler();
         if (!scheduler) {
-            LogError("No IO scheduler available");
+            HTTP_LOG_ERROR("No IO scheduler available");
             return 1;
         }
 
@@ -322,12 +322,12 @@ int main()
 
         runtime.stop();
 
-        LogInfo("========================================");
-        LogInfo("All Edge Cases Tests Completed");
-        LogInfo("========================================");
+        HTTP_LOG_INFO("========================================");
+        HTTP_LOG_INFO("All Edge Cases Tests Completed");
+        HTTP_LOG_INFO("========================================");
 
     } catch (const std::exception& e) {
-        LogError("Test error: {}", e.what());
+        HTTP_LOG_ERROR("Test error: {}", e.what());
         return 1;
     }
 
