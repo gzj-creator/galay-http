@@ -1,6 +1,7 @@
 #include "HttpHeader.h"
 #include <cassert>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <string_view>
@@ -15,6 +16,88 @@ namespace galay::http
             return static_cast<char>(ch + ('a' - 'A'));
         }
         return ch;
+    }
+
+    // 快速匹配常见 header（假设 key 已是小写）
+    CommonHeaderIndex matchCommonHeader(const std::string& key) {
+        const size_t len = key.size();
+        if (len < 4 || len > 19) return CommonHeaderIndex::NotCommon;
+
+        switch (key[0]) {
+        case 'h':
+            if (len == 4 && key == "host")
+                return CommonHeaderIndex::Host;
+            break;
+
+        case 'c':
+            if (len == 14 && key == "content-length")
+                return CommonHeaderIndex::ContentLength;
+            if (len == 12 && key == "content-type")
+                return CommonHeaderIndex::ContentType;
+            if (len == 10 && key == "connection")
+                return CommonHeaderIndex::Connection;
+            if (len == 13 && key == "cache-control")
+                return CommonHeaderIndex::CacheControl;
+            if (len == 6 && key == "cookie")
+                return CommonHeaderIndex::Cookie;
+            break;
+
+        case 'u':
+            if (len == 10 && key == "user-agent")
+                return CommonHeaderIndex::UserAgent;
+            break;
+
+        case 'a':
+            if (len == 6 && key == "accept")
+                return CommonHeaderIndex::Accept;
+            if (len == 15) {
+                if (key == "accept-encoding")
+                    return CommonHeaderIndex::AcceptEncoding;
+                if (key == "accept-language")
+                    return CommonHeaderIndex::AcceptLanguage;
+            }
+            if (len == 13 && key == "authorization")
+                return CommonHeaderIndex::Authorization;
+            break;
+
+        case 'i':
+            if (len == 17 && key == "if-modified-since")
+                return CommonHeaderIndex::IfModifiedSince;
+            if (len == 13 && key == "if-none-match")
+                return CommonHeaderIndex::IfNoneMatch;
+            break;
+
+        case 'r':
+            if (len == 7 && key == "referer")
+                return CommonHeaderIndex::Referer;
+            if (len == 5 && key == "range")
+                return CommonHeaderIndex::Range;
+            break;
+        }
+
+        return CommonHeaderIndex::NotCommon;
+    }
+
+    // 获取常见 header 的标准名称（小写）
+    std::string_view getCommonHeaderName(CommonHeaderIndex idx) {
+        static constexpr std::array<std::string_view, 15> names = {
+            "host",
+            "content-length",
+            "content-type",
+            "user-agent",
+            "accept",
+            "accept-encoding",
+            "connection",
+            "cache-control",
+            "cookie",
+            "authorization",
+            "if-modified-since",
+            "if-none-match",
+            "referer",
+            "accept-language",
+            "range"
+        };
+        return names[static_cast<size_t>(idx)];
     }
 
     inline char toUpperAsciiChar(char ch)
