@@ -12,6 +12,26 @@
 
 namespace galay::http {
 
+    // 常见 HTTP Header 索引（用于 fast-path 优化）
+    enum class CommonHeaderIndex : uint8_t {
+        Host = 0,
+        ContentLength,
+        ContentType,
+        UserAgent,
+        Accept,
+        AcceptEncoding,
+        Connection,
+        CacheControl,
+        Cookie,
+        Authorization,
+        IfModifiedSince,
+        IfNoneMatch,
+        Referer,
+        AcceptLanguage,
+        Range,
+        NotCommon = 255
+    };
+
     // 请求头解析状态
     enum class RequestParseState {
         Method,
@@ -64,9 +84,14 @@ namespace galay::http {
         HeaderPair(HeaderPair&& other);
         bool hasKey(const std::string& key) const;
         std::string getValue(const std::string& key) const;
+        const std::string* getValuePtr(const std::string& key) const;
         HttpErrorCode removeHeaderPair(const std::string& key);
         HttpErrorCode addHeaderPairIfNotExist(const std::string& key, const std::string& value);
         HttpErrorCode addHeaderPair(const std::string& key, const std::string& value);
+        // Fast-path for parser: caller guarantees key is already normalized for current mode.
+        HttpErrorCode addNormalizedHeaderPair(std::string key, std::string value);
+        size_t estimatedSerializedSize() const;
+        void appendTo(std::string& out) const;
         std::string toString() const;
         void clear();
         NormalizeMode mode() const { return m_mode; }
@@ -106,6 +131,7 @@ namespace galay::http {
     private:
         // 解析单个字符，返回错误码，kNoError表示继续，kIncomplete表示完成
         HttpErrorCode parseChar(char c);
+        void commitParsedHeaderPair();
         void parseArgs(std::string uri);
         std::string convertFromUri(std::string_view url, bool convert_plus_to_space);
         std::string convertToUri(std::string&& url) const;
@@ -154,6 +180,7 @@ namespace galay::http {
         void reset();
     private:
         HttpErrorCode parseChar(char c);
+        void commitParsedHeaderPair();
     private:
         HttpStatusCode m_code = HttpStatusCode::OK_200;
         HttpVersion m_version = HttpVersion::HttpVersion_1_1;
