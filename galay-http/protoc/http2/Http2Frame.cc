@@ -5,6 +5,31 @@
 namespace galay::http2
 {
 
+namespace {
+
+std::string buildFrameBytes(Http2FrameType type,
+                            uint8_t flags,
+                            uint32_t stream_id,
+                            std::string_view payload)
+{
+    std::string result;
+    result.resize(kHttp2FrameHeaderLength + payload.size());
+
+    Http2FrameHeader header;
+    header.length = static_cast<uint32_t>(payload.size());
+    header.type = type;
+    header.flags = flags;
+    header.stream_id = stream_id;
+    header.serialize(reinterpret_cast<uint8_t*>(result.data()));
+
+    if (!payload.empty()) {
+        std::memcpy(result.data() + kHttp2FrameHeaderLength, payload.data(), payload.size());
+    }
+    return result;
+}
+
+} // namespace
+
 // ==================== Http2FrameHeader ====================
 
 void Http2FrameHeader::serialize(uint8_t* buffer) const
@@ -50,6 +75,76 @@ Http2FrameHeader Http2FrameHeader::deserialize(const uint8_t* buffer)
                         static_cast<uint32_t>(buffer[8])) & 0x7FFFFFFF;
 
     return header;
+}
+
+std::unique_ptr<Http2DataFrame> Http2FrameBuilder::data(uint32_t stream_id,
+                                                        std::string payload,
+                                                        bool end_stream)
+{
+    auto frame = std::make_unique<Http2DataFrame>();
+    frame->header().stream_id = stream_id;
+    frame->setData(std::move(payload));
+    frame->setEndStream(end_stream);
+    return frame;
+}
+
+std::unique_ptr<Http2HeadersFrame> Http2FrameBuilder::headers(uint32_t stream_id,
+                                                              std::string header_block,
+                                                              bool end_stream,
+                                                              bool end_headers)
+{
+    auto frame = std::make_unique<Http2HeadersFrame>();
+    frame->header().stream_id = stream_id;
+    frame->setHeaderBlock(std::move(header_block));
+    frame->setEndStream(end_stream);
+    frame->setEndHeaders(end_headers);
+    return frame;
+}
+
+std::unique_ptr<Http2RstStreamFrame> Http2FrameBuilder::rstStream(uint32_t stream_id, Http2ErrorCode error)
+{
+    auto frame = std::make_unique<Http2RstStreamFrame>();
+    frame->header().stream_id = stream_id;
+    frame->setErrorCode(error);
+    return frame;
+}
+
+std::string Http2FrameBuilder::dataBytes(uint32_t stream_id,
+                                         std::string_view payload,
+                                         bool end_stream)
+{
+    uint8_t flags = 0;
+    if (end_stream) {
+        flags |= Http2FrameFlags::kEndStream;
+    }
+    return buildFrameBytes(Http2FrameType::Data, flags, stream_id, payload);
+}
+
+std::string Http2FrameBuilder::headersBytes(uint32_t stream_id,
+                                            std::string_view header_block,
+                                            bool end_stream,
+                                            bool end_headers)
+{
+    uint8_t flags = 0;
+    if (end_stream) {
+        flags |= Http2FrameFlags::kEndStream;
+    }
+    if (end_headers) {
+        flags |= Http2FrameFlags::kEndHeaders;
+    }
+    return buildFrameBytes(Http2FrameType::Headers, flags, stream_id, header_block);
+}
+
+std::string Http2FrameBuilder::rstStreamBytes(uint32_t stream_id, Http2ErrorCode error)
+{
+    char payload[4];
+    const uint32_t code = static_cast<uint32_t>(error);
+    payload[0] = static_cast<char>((code >> 24) & 0xFF);
+    payload[1] = static_cast<char>((code >> 16) & 0xFF);
+    payload[2] = static_cast<char>((code >> 8) & 0xFF);
+    payload[3] = static_cast<char>(code & 0xFF);
+    return buildFrameBytes(Http2FrameType::RstStream, 0, stream_id,
+                           std::string_view(payload, sizeof(payload)));
 }
 
 // ==================== Http2DataFrame ====================

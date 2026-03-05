@@ -32,9 +32,9 @@ H2OutboundSelection Http2OutboundScheduler::pickSendableFrames(H2OutboundBudget 
                 break;
             }
 
-            auto frame = std::make_unique<Http2DataFrame>();
-            frame->header().stream_id = stream.stream_id;
-            frame->setData(stream.pending_data.substr(0, chunk));
+            auto frame = Http2FrameBuilder::data(stream.stream_id,
+                                                 stream.pending_data.substr(0, chunk),
+                                                 false);
 
             stream.pending_data.erase(0, chunk);
             budget.conn_window -= static_cast<int32_t>(chunk);

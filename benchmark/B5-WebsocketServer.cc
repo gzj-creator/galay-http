@@ -228,14 +228,19 @@ int main(int argc, char* argv[]) {
     }
 
     uint16_t port = 8080;
+    int io_threads = 4;
     if (argc >= 2) {
         port = std::atoi(argv[1]);
+    }
+    if (argc >= 3) {
+        io_threads = std::atoi(argv[2]);
     }
 
     std::cout << "========================================" << std::endl;
     std::cout << "WebSocket Benchmark Server" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Port: " << port << std::endl;
+    std::cout << "IO Threads: " << io_threads << std::endl;
     std::cout << "WebSocket endpoint: ws://localhost:" << port << "/ws" << std::endl;
     std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << "========================================\n" << std::endl;
@@ -248,7 +253,7 @@ int main(int argc, char* argv[]) {
         HttpServer server(HttpServerBuilder()
             .host("0.0.0.0")
             .port(port)
-            .ioSchedulerCount(4)
+            .ioSchedulerCount(static_cast<size_t>(io_threads))
             .computeSchedulerCount(0)
             .build());
 

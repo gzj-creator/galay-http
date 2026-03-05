@@ -5296,6 +5296,8 @@ void HpackDecoder::setMaxHeaderListSize(size_t size)
 std::expected<std::vector<Http2HeaderField>, Http2ErrorCode> HpackDecoder::decode(const uint8_t* data, size_t length)
 {
     std::vector<Http2HeaderField> headers;
+    // 每个 header block 通常包含多个小字段，预留容量减少 push_back 扩容开销。
+    headers.reserve(std::min<size_t>(length / 16 + 4, 64));
     const uint8_t* end = data + length;
     size_t header_list_size = 0;
     

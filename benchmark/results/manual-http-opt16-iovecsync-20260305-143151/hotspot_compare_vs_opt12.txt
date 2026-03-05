@@ -1,0 +1,10 @@
+old_fold=/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/results/manual-http-opt12-20260305-130124/galay_http_opt12.folded
+new_fold=/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/results/manual-http-opt16-iovecsync-20260305-143151/galay_http_opt16.folded
+total_old=45301
+total_new=44789
+writev_any: old=1509 (3.33%) new=1492 (3.33%) delta=+0.00pp
+readv_any: old=1116 (2.46%) new=1096 (2.45%) delta=-0.01pp
+kernel_writev_leaf: old=1509 (3.33%) new=1492 (3.33%) delta=+0.00pp
+kernel_readv_leaf: old=1116 (2.46%) new=1095 (2.44%) delta=-0.02pp
+protocol_writev_handle: old=1537 (3.39%) new=1548 (3.46%) delta=+0.07pp
+handle_readv: old=1123 (2.48%) new=1113 (2.48%) delta=+0.00pp

@@ -1,0 +1,10 @@
+old_fold=/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/results/manual-http-opt12-20260305-130124/galay_http_opt12.folded
+new_fold=/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/results/manual-http-opt13-20260305-133532/galay_http_opt13.folded
+total_old=45301
+total_new=44302
+writev_any: old=1582 (3.49%) new=1554 (3.51%) delta=+0.02pp
+readv_any: old=1125 (2.48%) new=1032 (2.33%) delta=-0.15pp
+kernel_writev_leaf: old=1509 (3.33%) new=1475 (3.33%) delta=-0.00pp
+kernel_readv_leaf: old=1110 (2.45%) new=1009 (2.28%) delta=-0.17pp
+handle_readv: old=1123 (2.48%) new=1032 (2.33%) delta=-0.15pp
+protocol_writev_awaitable: old=1537 (3.39%) new=1512 (3.41%) delta=+0.02pp

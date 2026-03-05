@@ -1,0 +1,6 @@
+writev_any: opt12=3.49% opt13=3.61% opt14=3.56%
+readv_any: opt12=2.48% opt13=2.53% opt14=2.54%
+kernel_writev_leaf: opt12=3.33% opt13=3.43% opt14=3.37%
+kernel_readv_leaf: opt12=2.45% opt13=2.50% opt14=2.51%
+protocol_writev_handle: opt12=3.39% opt13=3.53% opt14=3.44%
+handle_readv: opt12=2.48% opt13=2.53% opt14=2.54%

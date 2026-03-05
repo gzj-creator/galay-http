@@ -1,0 +1,298 @@
+Analysis of sampling B9-HpackBench (pid 14797) every 1 millisecond
+Process:         B9-HpackBench [14797]
+Path:            /Users/USER/Desktop/*/B9-HpackBench
+Load Address:    0x1046c0000
+Identifier:      B9-HpackBench
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  zsh [14412]
+Target Type:     live task
+
+Date/Time:       2026-03-04 23:14:51.945 +0800
+Launch Time:     2026-03-04 23:14:50.907 +0800
+OS Version:      macOS 15.7.3 (24G419)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         2464K
+Physical footprint (peak):  2464K
+Idle exit:                  untracked
+----
+
+Call graph:
+    5160 Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial)
+      5160 start  (in dyld) + 6076  [0x19767ab98]
+        5160 main  (in B9-HpackBench) + 296  [0x1046c335c]
+          4974 runBench(int)  (in B9-HpackBench) + 4388  [0x1046c272c]
+          + 4729 galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&)  (in libgalay-http.1.0.0.dylib) + 204  [0x104844968]
+          + ! 3499 galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 312  [0x104844548]
+          + ! : 2199 galay::http2::HpackDynamicTable::find(std::basic_string<char> const&, std::basic_string<char> const&) const  (in libgalay-http.1.0.0.dylib) + 188,152,...  [0x1048437c4,0x1048437a0,...]
+          + ! : 804 galay::http2::HpackDynamicTable::find(std::basic_string<char> const&, std::basic_string<char> const&) const  (in libgalay-http.1.0.0.dylib) + 232  [0x1048437f0]
+          + ! : | 646 _platform_memcmp  (in libsystem_platform.dylib) + 272,140,...  [0x197a52fa0,0x197a52f1c,...]
+          + ! : | 158 DYLD-STUB$$memcmp  (in libgalay-http.1.0.0.dylib) + 4,0,...  [0x104847b18,0x104847b14,...]
+          + ! : 496 galay::http2::HpackDynamicTable::find(std::basic_string<char> const&, std::basic_string<char> const&) const  (in libgalay-http.1.0.0.dylib) + 288  [0x104843828]
+          + ! :   407 _platform_memcmp  (in libsystem_platform.dylib) + 128,8,...  [0x197a52f10,0x197a52e98,...]
+          + ! :   89 DYLD-STUB$$memcmp  (in libgalay-http.1.0.0.dylib) + 4,8  [0x104847b18,0x104847b1c]
+          + ! 408 galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 80  [0x104844460]
+          + ! : 187 <deduplicated_symbol>  (in libgalay-http.1.0.0.dylib) + 276  [0x1047e48c0]
+          + ! : | 152 _platform_memcmp  (in libsystem_platform.dylib) + 272,260,...  [0x197a52fa0,0x197a52f94,...]
+          + ! : | 35 DYLD-STUB$$memcmp  (in libgalay-http.1.0.0.dylib) + 4,0  [0x104847b18,0x104847b14]
+          + ! : 129 <deduplicated_symbol>  (in libgalay-http.1.0.0.dylib) + 276,228,...  [0x1047e48c0,0x1047e4890,...]
+          + ! : 92 <deduplicated_symbol>  (in libgalay-http.1.0.0.dylib) + 64  [0x1047e47ec]
+          + ! :   92 std::__murmur2_or_cityhash<unsigned long, 64ul>::operator()[abi:ne190102](void const*, unsigned long) const  (in libgalay-http.1.0.0.dylib) + 0,16,...  [0x1047cd9cc,0x1047cd9dc,...]
+          + ! 171 galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 620  [0x10484467c]
+          + ! : 55 std::basic_string<char>::append(char const*, unsigned long)  (in libc++.1.dylib) + 144  [0x197944208]
+          + ! : | 51 _platform_memmove  (in libsystem_platform.dylib) + 428,452,...  [0x197a5546c,0x197a55484,...]
+          + ! : | 4 DYLD-STUB$$memmove  (in libc++.1.dylib) + 12  [0x197993624]
+          + ! : 27 std::basic_string<char>::append(char const*, unsigned long)  (in libc++.1.dylib) + 148,32,...  [0x19794420c,0x197944198,...]
+          + ! : 19 galay::http2::HpackEncoder::encodeString(std::basic_string<char> const&, bool, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 236  [0x104843fdc]
+          + ! : | 15 std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 28,56  [0x1979446d8,0x1979446f4]
+          + ! : | 4 DYLD-STUB$$std::basic_string<char>::push_back(char)  (in libgalay-http.1.0.0.dylib) + 4  [0x1048475c0]
+          + ! : 19 std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 164,168,...  [0x197944760,0x197944764,...]
+          + ! : 16 galay::http2::HpackEncoder::encodeLiteralIndexed(unsigned long, std::basic_string<char> const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 120  [0x104844194]
+          + ! : | 11 std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 56,28  [0x1979446f4,0x1979446d8]
+          + ! : | 5 DYLD-STUB$$std::basic_string<char>::push_back(char)  (in libgalay-http.1.0.0.dylib) + 4  [0x1048475c0]
+          + ! : 10 DYLD-STUB$$std::basic_string<char>::append(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 4  [0x104847578]
+          + ! : 10 galay::http2::HpackEncoder::encodeLiteralIndexed(unsigned long, std::basic_string<char> const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 36,32,...  [0x104844140,0x10484413c,...]
+          + ! : 9 galay::http2::HpackEncoder::encodeString(std::basic_string<char> const&, bool, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 28,12,...  [0x104843f0c,0x104843efc,...]
+          + ! : 6 galay::http2::HpackEncoder::encodeLiteralIndexed(unsigned long, std::basic_string<char> const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 60  [0x104844158]
+          + ! :   4 DYLD-STUB$$std::basic_string<char>::push_back(char)  (in libgalay-http.1.0.0.dylib) + 4,0  [0x1048475c0,0x1048475bc]
+          + ! :   2 std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 28,56  [0x1979446d8,0x1979446f4]
+          + ! 160 galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 56,148,...  [0x104844448,0x1048444a4,...]
+          + ! 122 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 816  [0x10484330c]
+          + ! : 92 std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 128  [0x1047cd640]
+          + ! : | 86 operator new(unsigned long)  (in libc++abi.dylib) + 52  [0x1979d53e0]
+          + ! : | + 44 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 84  [0x19781bbe8]
+          + ! : | + ! 24 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 80,108,...  [0x19781cd04,0x19781cd20,...]
+          + ! : | + ! 12 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 272  [0x19781cdc4]
+          + ! : | + ! : 9 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 1588,76,...  [0x19781db58,0x19781d570,...]
+          + ! : | + ! : 2 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 1372  [0x19781da80]
+          + ! : | + ! : | 2 tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 92,144  [0x197820398,0x1978203cc]
+          + ! : | + ! : 1 _tiny_check_and_zero_inline_meta_from_freelist  (in libsystem_malloc.dylib) + 208  [0x1978536d8]
+          + ! : | + ! 8 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 52  [0x19781cce8]
+          + ! : | + !   8 rack_get_thread_index  (in libsystem_malloc.dylib) + 12,64  [0x197836728,0x19783675c]
+          + ! : | + 21 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 16,28,...  [0x19781bba4,0x19781bbb0,...]
+          + ! : | + 9 malloc_type_malloc  (in libsystem_malloc.dylib) + 28,80,...  [0x197837344,0x197837378,...]
+          + ! : | + 8 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 444,452,...  [0x19781ce70,0x19781ce78,...]
+          + ! : | + 4 DYLD-STUB$$malloc_type_malloc  (in libc++abi.dylib) + 12  [0x1979d574c]
+          + ! : | 4 DYLD-STUB$$operator new(unsigned long)  (in libgalay-http.1.0.0.dylib) + 4  [0x104847938]
+          + ! : | 2 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 364  [0x19781bd00]
+          + ! : 24 std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 144  [0x1047cd650]
+          + ! : | 22 _platform_memmove  (in libsystem_platform.dylib) + 452,428,...  [0x197a55484,0x197a5546c,...]
+          + ! : | 2 DYLD-STUB$$memcpy  (in libgalay-http.1.0.0.dylib) + 4  [0x104847b24]
+          + ! : 5 std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 68,144  [0x1047cd604,0x1047cd650]
+          + ! : 1 operator new(unsigned long)  (in libc++abi.dylib) + 80  [0x1979d53fc]
+          + ! 105 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 452  [0x1048431a0]
+          + ! : 38 free_tiny  (in libsystem_malloc.dylib) + 136  [0x19781f858]
+          + ! : | 36 _platform_memset  (in libsystem_platform.dylib) + 12,180,...  [0x197a54ffc,0x197a550a4,...]
+          + ! : | 2 DYLD-STUB$$_platform_memset  (in libsystem_malloc.dylib) + 12  [0x19785597c]
+          + ! : 28 free_tiny  (in libsystem_malloc.dylib) + 104,36,...  [0x19781f838,0x19781f7f4,...]
+          + ! : 19 _szone_free  (in libsystem_malloc.dylib) + 20,0,...  [0x19783308c,0x197833078,...]
+          + ! : 9 _free  (in libsystem_malloc.dylib) + 0,108,...  [0x19784db68,0x19784dbd4,...]
+          + ! : 5 DYLD-STUB$$free  (in libc++abi.dylib) + 12,0  [0x1979d570c,0x1979d5700]
+          + ! : 4 free_tiny  (in libsystem_malloc.dylib) + 460  [0x19781f99c]
+          + ! : | 2 tiny_free_no_lock  (in libsystem_malloc.dylib) + 332,1656  [0x19781fc68,0x197820194]
+          + ! : | 1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 140  [0x19781fba8]
+          + ! : | + 1 get_tiny_previous_free_msize  (in libsystem_malloc.dylib) + 92  [0x19782bd78]
+          + ! : | 1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 416  [0x19781fcbc]
+          + ! : |   1 tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 92  [0x197820398]
+          + ! : 2 DYLD-STUB$$operator delete(void*)  (in libgalay-http.1.0.0.dylib) + 4  [0x104847920]
+          + ! 60 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 84,1140,...  [0x104843030,0x104843450,...]
+          + ! 55 galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 220  [0x1048444ec]
+          + ! : 38 _platform_memcmp  (in libsystem_platform.dylib) + 272,140,...  [0x197a52fa0,0x197a52f1c,...]
+          + ! : 17 DYLD-STUB$$memcmp  (in libgalay-http.1.0.0.dylib) + 4,0  [0x104847b18,0x104847b14]
+          + ! 38 <deduplicated_symbol>  (in libgalay-http.1.0.0.dylib) + 420  [0x1047e4950]
+          + ! 34 std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 28,60,...  [0x1979446d8,0x1979446f8,...]
+          + ! 30 galay::http2::HpackDynamicTable::find(std::basic_string<char> const&, std::basic_string<char> const&) const  (in libgalay-http.1.0.0.dylib) + 336,328  [0x104843858,0x104843850]
+          + ! 16 DYLD-STUB$$std::basic_string<char>::push_back(char)  (in libgalay-http.1.0.0.dylib) + 4,0  [0x1048475c0,0x1048475bc]
+          + ! 13 std::basic_string<char>::append(char const*, unsigned long)  (in libc++.1.dylib) + 192,188,...  [0x197944238,0x197944234,...]
+          + ! 7 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 596  [0x104843230]
+          + ! : 4 std::vector<galay::http2::Http2HeaderField>::__append(unsigned long)  (in libgalay-http.1.0.0.dylib) + 288  [0x104845cdc]
+          + ! : | 4 _platform_memset  (in libsystem_platform.dylib) + 140  [0x197a5507c]
+          + ! : 2 std::vector<galay::http2::Http2HeaderField>::__append(unsigned long)  (in libgalay-http.1.0.0.dylib) + 172  [0x104845c68]
+          + ! : | 2 operator new(unsigned long)  (in libc++abi.dylib) + 52  [0x1979d53e0]
+          + ! : |   1 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 120  [0x19781bc0c]
+          + ! : |   + 1 small_malloc_should_clear  (in libsystem_malloc.dylib) + 176  [0x19781bdc8]
+          + ! : |   +   1 small_malloc_from_free_list  (in libsystem_malloc.dylib) + 544  [0x19781c610]
+          + ! : |   +     1 small_free_list_add_ptr  (in libsystem_malloc.dylib) + 328  [0x1978208d0]
+          + ! : |   1 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 340  [0x19781bce8]
+          + ! : 1 std::vector<galay::http2::Http2HeaderField>::__append(unsigned long)  (in libgalay-http.1.0.0.dylib) + 52  [0x104845bf0]
+          + ! 3 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 964  [0x1048433a0]
+          + ! : 2 std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 128  [0x1047cd640]
+          + ! : | 2 operator new(unsigned long)  (in libc++abi.dylib) + 52  [0x1979d53e0]
+          + ! : |   2 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 84  [0x19781bbe8]
+          + ! : |     1 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 52  [0x19781cce8]
+          + ! : |     + 1 rack_get_thread_index  (in libsystem_malloc.dylib) + 12  [0x197836728]
+          + ! : |     1 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 272  [0x19781cdc4]
+          + ! : |       1 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 24  [0x19781d53c]
+          + ! : 1 std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 12  [0x1047cd5cc]
+          + ! 3 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 1272  [0x1048434d4]
+          + ! : 1 DYLD-STUB$$free  (in libc++abi.dylib) + 12  [0x1979d570c]
+          + ! : 1 free_small  (in libsystem_malloc.dylib) + 1072  [0x19781e854]
+          + ! : 1 free_tiny  (in libsystem_malloc.dylib) + 460  [0x19781f99c]
+          + ! :   1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 792  [0x19781fe34]
+          + ! :     1 tiny_free_list_remove_ptr  (in libsystem_malloc.dylib) + 64  [0x1978205d0]
+          + ! 3 std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib) + 176,172  [0x1047cd670,0x1047cd66c]
+          + ! 1 _szone_free  (in libsystem_malloc.dylib) + 592  [0x1978332c8]
+          + ! 1 free_tiny  (in libsystem_malloc.dylib) + 512  [0x19781f9d0]
+          + 137 galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&)  (in libgalay-http.1.0.0.dylib) + 68  [0x1048448e0]
+          + ! 100 std::basic_string<char>::reserve(unsigned long)  (in libc++.1.dylib) + 224  [0x1979440b8]
+          + ! : 98 operator new(unsigned long)  (in libc++abi.dylib) + 52  [0x1979d53e0]
+          + ! : | 64 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 84  [0x19781bbe8]
+          + ! : | + 46 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 272  [0x19781cdc4]
+          + ! : | + ! 35 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 1588,308,...  [0x19781db58,0x19781d658,...]
+          + ! : | + ! 7 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 420  [0x19781d6c8]
+          + ! : | + ! : 7 _tiny_check_and_zero_inline_meta_from_freelist  (in libsystem_malloc.dylib) + 24,48,...  [0x197853620,0x197853638,...]
+          + ! : | + ! 2 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 1324  [0x19781da50]
+          + ! : | + ! : 2 _tiny_check_and_zero_inline_meta_from_freelist  (in libsystem_malloc.dylib) + 12  [0x197853614]
+          + ! : | + ! 1 _tiny_check_and_zero_inline_meta_from_freelist  (in libsystem_malloc.dylib) + 208  [0x1978536d8]
+          + ! : | + ! 1 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 1372  [0x19781da80]
+          + ! : | + !   1 tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 56  [0x197820374]
+          + ! : | + 12 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 340,28,...  [0x19781ce08,0x19781ccd0,...]
+          + ! : | + 3 tiny_malloc_from_free_list  (in libsystem_malloc.dylib) + 1876  [0x19781dc78]
+          + ! : | + 3 tiny_malloc_should_clear  (in libsystem_malloc.dylib) + 52  [0x19781cce8]
+          + ! : | +   3 rack_get_thread_index  (in libsystem_malloc.dylib) + 40,20  [0x197836744,0x197836730]
+          + ! : | 24 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 16,40,...  [0x19781bba4,0x19781bbbc,...]
+          + ! : | 5 DYLD-STUB$$malloc_type_malloc  (in libc++abi.dylib) + 12  [0x1979d574c]
+          + ! : | 5 malloc_type_malloc  (in libsystem_malloc.dylib) + 16,28,...  [0x197837338,0x197837344,...]
+          + ! : 2 szone_malloc_should_clear  (in libsystem_malloc.dylib) + 364  [0x19781bd00]
+          + ! 22 std::basic_string<char>::reserve(unsigned long)  (in libc++.1.dylib) + 120,268,...  [0x197944050,0x1979440e4,...]
+          + ! 11 std::basic_string<char>::reserve(unsigned long)  (in libc++.1.dylib) + 288  [0x1979440f8]
+          + ! : 7 _platform_memmove  (in libsystem_platform.dylib) + 0,452,...  [0x197a552c0,0x197a55484,...]
+          + ! : 4 DYLD-STUB$$memmove  (in libc++.1.dylib) + 12  [0x197993624]
+          + ! 2 DYLD-STUB$$std::basic_string<char>::reserve(unsigned long)  (in libgalay-http.1.0.0.dylib) + 4,8  [0x1048475b4,0x1048475b8]
+          + ! 2 operator new(unsigned long)  (in libc++abi.dylib) + 80  [0x1979d53fc]
+          + 56 galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib) + 1360,1372,...  [0x10484352c,0x104843538,...]
+          + 23 std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 168,164,...  [0x197944764,0x197944760,...]
+          + 18 galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib) + 1008,1000,...  [0x104844800,0x1048447f8,...]
+          + 8 galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&)  (in libgalay-http.1.0.0.dylib) + 60,204,...  [0x1048448d8,0x104844968,...]
+          + 2 DYLD-STUB$$galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&)  (in B9-HpackBench) + 4  [0x1046c3e50]
+          + 1 std::basic_string<char>::reserve(unsigned long)  (in libc++.1.dylib) + 360  [0x197944140]
+          145 runBench(int)  (in B9-HpackBench) + 4404  [0x1046c273c]
+          + 47 free_tiny  (in libsystem_malloc.dylib) + 460  [0x19781f99c]
+          + ! 26 tiny_free_no_lock  (in libsystem_malloc.dylib) + 308,472,...  [0x19781fc50,0x19781fcf4,...]
+          + ! 14 tiny_free_no_lock  (in libsystem_malloc.dylib) + 416  [0x19781fcbc]
+          + ! : 14 tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 120,168,...  [0x1978203b4,0x1978203e4,...]
+          + ! 6 tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 568  [0x197820574]
+          + ! 1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 140  [0x19781fba8]
+          + !   1 get_tiny_previous_free_msize  (in libsystem_malloc.dylib) + 56  [0x19782bd54]
+          + 32 _szone_free  (in libsystem_malloc.dylib) + 0,140,...  [0x197833078,0x197833104,...]
+          + 20 free_tiny  (in libsystem_malloc.dylib) + 136  [0x19781f858]
+          + ! 19 _platform_memset  (in libsystem_platform.dylib) + 12,140,...  [0x197a54ffc,0x197a5507c,...]
+          + ! 1 DYLD-STUB$$_platform_memset  (in libsystem_malloc.dylib) + 12  [0x19785597c]
+          + 20 free_tiny  (in libsystem_malloc.dylib) + 36,152,...  [0x19781f7f4,0x19781f868,...]
+          + 19 _free  (in libsystem_malloc.dylib) + 0,44,...  [0x19784db68,0x19784db94,...]
+          + 3 DYLD-STUB$$free  (in libc++abi.dylib) + 12  [0x1979d570c]
+          + 3 tiny_free_no_lock  (in libsystem_malloc.dylib) + 1640,1624  [0x197820184,0x197820174]
+          + 1 DYLD-STUB$$operator delete(void*)  (in B9-HpackBench) + 4  [0x1046c3f28]
+          28 runBench(int)  (in B9-HpackBench) + 4444  [0x1046c2764]
+          + 10 free_tiny  (in libsystem_malloc.dylib) + 460  [0x19781f99c]
+          + ! 7 tiny_free_no_lock  (in libsystem_malloc.dylib) + 308,352,...  [0x19781fc50,0x19781fc7c,...]
+          + ! 1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 140  [0x19781fba8]
+          + ! : 1 get_tiny_previous_free_msize  (in libsystem_malloc.dylib) + 0  [0x19782bd1c]
+          + ! 1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 416  [0x19781fcbc]
+          + ! : 1 tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 92  [0x197820398]
+          + ! 1 tiny_free_no_lock  (in libsystem_malloc.dylib) + 792  [0x19781fe34]
+          + !   1 tiny_free_list_remove_ptr  (in libsystem_malloc.dylib) + 284  [0x1978206ac]
+          + 8 free_tiny  (in libsystem_malloc.dylib) + 136  [0x19781f858]
+          + ! 7 _platform_memset  (in libsystem_platform.dylib) + 12,208  [0x197a54ffc,0x197a550c0]
+          + ! 1 DYLD-STUB$$_platform_memset  (in libsystem_malloc.dylib) + 12  [0x19785597c]
+          + 6 free_tiny  (in libsystem_malloc.dylib) + 320,104,...  [0x19781f910,0x19781f838,...]
+          + 4 _szone_free  (in libsystem_malloc.dylib) + 0,20,...  [0x197833078,0x19783308c,...]
+          4 galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&)  (in libgalay-http.1.0.0.dylib) + 224,228  [0x10484497c,0x104844980]
+          3 _szone_free  (in libsystem_malloc.dylib) + 592  [0x1978332c8]
+          3 free_tiny  (in libsystem_malloc.dylib) + 512  [0x19781f9d0]
+          2 runBench(int)  (in B9-HpackBench) + 4352,4480  [0x1046c2708,0x1046c2788]
+          1 runBench(int)  (in B9-HpackBench) + 4316  [0x1046c26e4]
+            1 _free  (in libsystem_malloc.dylib) + 44  [0x19784db94]
+
+Total number in stack (recursive counted multiple, when >=5):
+        6       std::basic_string<char>::push_back(char)  (in libc++.1.dylib) + 0  [0x1979446bc]
+        6       tiny_free_list_add_ptr  (in libsystem_malloc.dylib) + 0  [0x19782033c]
+        5       _szone_free  (in libsystem_malloc.dylib) + 0  [0x197833078]
+        5       free_tiny  (in libsystem_malloc.dylib) + 0  [0x19781f7d0]
+        5       szone_malloc_should_clear  (in libsystem_malloc.dylib) + 0  [0x19781bb94]
+
+Sort by top of stack, same collapsed (when >= 5):
+        galay::http2::HpackDynamicTable::find(std::basic_string<char> const&, std::basic_string<char> const&) const  (in libgalay-http.1.0.0.dylib)        2229
+        _platform_memcmp  (in libsystem_platform.dylib)        1243
+        DYLD-STUB$$memcmp  (in libgalay-http.1.0.0.dylib)        299
+        galay::http2::HpackEncoder::encodeField(galay::http2::Http2HeaderField const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib)        178
+        <deduplicated_symbol>  (in libgalay-http.1.0.0.dylib)        167
+        galay::http2::HpackDynamicTable::add(galay::http2::Http2HeaderField const&)  (in libgalay-http.1.0.0.dylib)        116
+        std::basic_string<char>::push_back(char)  (in libc++.1.dylib)        104
+        std::__murmur2_or_cityhash<unsigned long, 64ul>::operator()[abi:ne190102](void const*, unsigned long) const  (in libgalay-http.1.0.0.dylib)        92
+        _platform_memmove  (in libsystem_platform.dylib)        80
+        _platform_memset  (in libsystem_platform.dylib)        66
+        _szone_free  (in libsystem_malloc.dylib)        59
+        free_tiny  (in libsystem_malloc.dylib)        58
+        szone_malloc_should_clear  (in libsystem_malloc.dylib)        50
+        tiny_malloc_from_free_list  (in libsystem_malloc.dylib)        48
+        tiny_malloc_should_clear  (in libsystem_malloc.dylib)        44
+        std::basic_string<char>::append(char const*, unsigned long)  (in libc++.1.dylib)        40
+        tiny_free_no_lock  (in libsystem_malloc.dylib)        38
+        DYLD-STUB$$std::basic_string<char>::push_back(char)  (in libgalay-http.1.0.0.dylib)        29
+        _free  (in libsystem_malloc.dylib)        29
+        tiny_free_list_add_ptr  (in libsystem_malloc.dylib)        25
+        std::basic_string<char>::reserve(unsigned long)  (in libc++.1.dylib)        23
+        malloc_type_malloc  (in libsystem_malloc.dylib)        14
+        galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&)  (in libgalay-http.1.0.0.dylib)        12
+        rack_get_thread_index  (in libsystem_malloc.dylib)        12
+        _tiny_check_and_zero_inline_meta_from_freelist  (in libsystem_malloc.dylib)        11
+        DYLD-STUB$$std::basic_string<char>::append(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib)        10
+        galay::http2::HpackEncoder::encodeLiteralIndexed(unsigned long, std::basic_string<char> const&, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib)        10
+        DYLD-STUB$$free  (in libc++abi.dylib)        9
+        DYLD-STUB$$malloc_type_malloc  (in libc++abi.dylib)        9
+        galay::http2::HpackEncoder::encodeString(std::basic_string<char> const&, bool, std::basic_string<char>&)  (in libgalay-http.1.0.0.dylib)        9
+        std::basic_string<char>::__assign_no_alias<true>(char const*, unsigned long)  (in libgalay-http.1.0.0.dylib)        9
+        DYLD-STUB$$memmove  (in libc++.1.dylib)        8
+
+Binary Images:
+       0x1046c0000 -        0x1046c4597 +B9-HpackBench (0) <A83C2084-6B03-3479-A8A6-2FA4E410A443> /Users/*/Desktop/*/B9-HpackBench
+       0x1047c4000 -        0x10485ca2f +libgalay-http.1.0.0.dylib (0) <DE4E0457-72DE-3A25-92DA-E9CB615A93D0> /Users/*/Desktop/*/libgalay-http.1.0.0.dylib
+       0x104a88000 -        0x104ad0a3b +libgalay-kernel.1.0.0.dylib (0) <42752700-3873-4617-BA2E-E3E12228C3D2> /usr/local/lib/libgalay-kernel.1.0.0.dylib
+       0x197620000 -        0x197673893  libobjc.A.dylib (940.4) <E6F30EB4-FACF-3381-AE46-10E556F1FC39> /usr/lib/libobjc.A.dylib
+       0x197674000 -        0x19770f57b  dyld (1.0.0 - 1286.10) <E4E5CD37-5339-3136-B2C5-0C80F0720C26> /usr/lib/dyld
+       0x197710000 -        0x197713168  libsystem_blocks.dylib (96) <EFADF6A6-C85B-37E9-9514-8E7A1EBAC882> /usr/lib/system/libsystem_blocks.dylib
+       0x197714000 -        0x19775e8ff  libxpc.dylib (2894.140.12.700.1) <B7303BD5-2EAD-3A97-8419-5A1454C5E513> /usr/lib/system/libxpc.dylib
+       0x19775f000 -        0x19777a7ff  libsystem_trace.dylib (1643.120.5) <9DBBEE92-6C08-39F7-A05E-5054A79D28F6> /usr/lib/system/libsystem_trace.dylib
+       0x19777b000 -        0x1978193b7  libcorecrypto.dylib (1736.140.2) <00D81A3B-8152-35CF-B1AE-7364B4832072> /usr/lib/system/libcorecrypto.dylib
+       0x19781a000 -        0x19786106f  libsystem_malloc.dylib (715.140.5) <3CE1E59C-91C8-3259-93D8-7DED66842979> /usr/lib/system/libsystem_malloc.dylib
+       0x197862000 -        0x1978a875f  libdispatch.dylib (1521.140.2) <63A54CE1-2AB6-3673-82E4-D8489D811475> /usr/lib/system/libdispatch.dylib
+       0x1978a9000 -        0x1978abd1b  libsystem_featureflags.dylib (97) <9AF1C2C7-1C15-3F0E-9C0F-4524BD4EB4CF> /usr/lib/system/libsystem_featureflags.dylib
+       0x1978ac000 -        0x19792d1f7  libsystem_c.dylib (1698.140.3.700.2) <E098CB59-2C56-395C-ADE1-6EF590E61199> /usr/lib/system/libsystem_c.dylib
+       0x19792e000 -        0x1979baff7  libc++.1.dylib (1900.181) <EB94C9FE-91DA-3E9F-9C45-7B476FEAAEAE> /usr/lib/libc++.1.dylib
+       0x1979bb000 -        0x1979d8fff  libc++abi.dylib (1900.181) <BC670272-BF32-38AC-AE3F-F06EDA80BE30> /usr/lib/libc++abi.dylib
+       0x1979d9000 -        0x197a14663  libsystem_kernel.dylib (11417.140.69.705.2) <1D4FFD44-8926-3746-924E-DEEF5B777588> /usr/lib/system/libsystem_kernel.dylib
+       0x197a15000 -        0x197a21a77  libsystem_pthread.dylib (536.0.0.701.1) <022DC315-CF35-38DA-939E-03800B5BEFF2> /usr/lib/system/libsystem_pthread.dylib
+       0x197a22000 -        0x197a51ba3  libdyld.dylib (1286.10) <E4FE35C9-8AEE-3728-89B9-89A64239ED74> /usr/lib/system/libdyld.dylib
+       0x197a52000 -        0x197a59e0b  libsystem_platform.dylib (349.140.6) <C26E58A4-34A1-3F9C-BDBC-EBC34426633A> /usr/lib/system/libsystem_platform.dylib
+       0x197a5a000 -        0x197a89d83  libsystem_info.dylib (597.0.0.701.2) <3B2CAC89-F7B9-3111-9EB6-84A87EEBBAD7> /usr/lib/system/libsystem_info.dylib
+       0x19b51c000 -        0x19b526397  libsystem_darwin.dylib (1698.140.3.700.2) <62C85958-8310-3625-ADF0-DCD58D08BEB9> /usr/lib/system/libsystem_darwin.dylib
+       0x19b97e000 -        0x19b98ffeb  libsystem_notify.dylib (342) <CA2AAD14-C438-30E8-9699-5A947E2DF021> /usr/lib/system/libsystem_notify.dylib
+       0x19d981000 -        0x19d99be8f  libsystem_networkextension.dylib (2063.140.6) <5C0C1505-266B-3544-B970-BE347DAF2AAF> /usr/lib/system/libsystem_networkextension.dylib
+       0x19da18000 -        0x19da2ffdb  libsystem_asl.dylib (402) <0574F75C-FB20-3114-8C16-E17D821FFCBD> /usr/lib/system/libsystem_asl.dylib
+       0x19f575000 -        0x19f57d3a7  libsystem_symptoms.dylib (2022.140.4) <FDBF294D-E745-3E89-B474-DADA17135BEE> /usr/lib/system/libsystem_symptoms.dylib
+       0x1a2dc4000 -        0x1a2df447b  libsystem_containermanager.dylib (689.100.6.700.1) <33FB585C-7D34-3F5D-97A0-501C5FAC3F11> /usr/lib/system/libsystem_containermanager.dylib
+       0x1a402e000 -        0x1a40325df  libsystem_configuration.dylib (1351.140.5.700.1) <17DACC61-AB01-3605-B2C8-618E4781B649> /usr/lib/system/libsystem_configuration.dylib
+       0x1a4033000 -        0x1a40394ef  libsystem_sandbox.dylib (2401.140.15.700.3) <CDEA0D5C-056D-308C-8544-C36BA2B389B1> /usr/lib/system/libsystem_sandbox.dylib
+       0x1a503e000 -        0x1a5040fe3  libquarantine.dylib (181.120.2) <B274436C-379E-3E0F-B8E2-A7AA69E46E73> /usr/lib/system/libquarantine.dylib
+       0x1a5754000 -        0x1a575aee7  libsystem_coreservices.dylib (178.6.6) <985B59F1-7321-37D0-8182-27B82BD7D1B1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1a5bd2000 -        0x1a5c0f2b7  libsystem_m.dylib (3291.100.4) <5F5F2F2E-557D-3441-8566-8B2009538753> /usr/lib/system/libsystem_m.dylib
+       0x1a5c11000 -        0x1a5c144e7  libmacho.dylib (1024.3) <CD255FF9-4E35-347A-B7E9-304517D3A871> /usr/lib/system/libmacho.dylib
+       0x1a5c2e000 -        0x1a5c3b5ef  libcommonCrypto.dylib (600035) <65A3AFCF-9611-35C1-9697-8CF5409F0C83> /usr/lib/system/libcommonCrypto.dylib
+       0x1a5c3c000 -        0x1a5c45ad7  libunwind.dylib (1900.125) <FA046DDB-1518-353B-A9B6-CD622328B746> /usr/lib/system/libunwind.dylib
+       0x1a5c4e000 -        0x1a5c5869f  libcopyfile.dylib (224) <459F7A49-1FEF-329E-8FC0-0A5FF6FBD902> /usr/lib/system/libcopyfile.dylib
+       0x1a5c59000 -        0x1a5c5c98f  libcompiler_rt.dylib (103.3) <7720A496-7B7A-33C1-B7F3-9E8B7DEA0622> /usr/lib/system/libcompiler_rt.dylib
+       0x1a5c5d000 -        0x1a5c61a1b  libsystem_collections.dylib (1698.140.3.700.2) <04F3AE1A-0F6D-3F68-84E0-EAFFBC0CE0A5> /usr/lib/system/libsystem_collections.dylib
+       0x1a5c62000 -        0x1a5c652c7  libsystem_secinit.dylib (153.140.2) <63965812-869C-3C3C-A950-FA563CE8EB1E> /usr/lib/system/libsystem_secinit.dylib
+       0x1a5c66000 -        0x1a5c68b6f  libremovefile.dylib (81) <E34EF2FA-1C55-3222-B1A2-CEEEC4B02F3D> /usr/lib/system/libremovefile.dylib
+       0x1a5c69000 -        0x1a5c69f27  libkeymgr.dylib (31) <EE1B8708-02B1-385D-B648-E87B4D25391B> /usr/lib/system/libkeymgr.dylib
+       0x1a5c6a000 -        0x1a5c72d57  libsystem_dnssd.dylib (2600.140.3) <EE79FBDA-E408-3D4C-A0EE-C56BE107CC06> /usr/lib/system/libsystem_dnssd.dylib
+       0x1a5c73000 -        0x1a5c780b3  libcache.dylib (95) <4242CCFB-F060-3493-B555-C26217B4F080> /usr/lib/system/libcache.dylib
+       0x1a5c79000 -        0x1a5c7aca3  libSystem.B.dylib (1351) <068263F7-CF15-3E1C-A305-5DF8F9C51AD5> /usr/lib/libSystem.B.dylib
+       0x27f07a000 -        0x27f081109  libRosetta.dylib (349) <CD13AF03-27E5-387A-8DF1-7016C957167A> /usr/lib/libRosetta.dylib
+       0x2804a5000 -        0x2804a8deb  libsystem_darwindirectory.dylib (122) <8627B2A8-CE68-3F9A-B3E8-2F4E4E35CF66> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x2804a9000 -        0x2804b0523  libsystem_eligibility.dylib (181.140.5) <B76C1C04-8001-3113-BE6E-FDDEA1118104> /usr/lib/system/libsystem_eligibility.dylib
+       0x2804b1000 -        0x2804b66c5  libsystem_sanitizers.dylib (19) <6143DE0A-A328-3649-AF7D-8FC8781B86E7> /usr/lib/system/libsystem_sanitizers.dylib

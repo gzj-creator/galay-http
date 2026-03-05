@@ -5,6 +5,7 @@
 #include "Http2Stream.h"
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/kernel/Coroutine.h"
@@ -164,6 +165,8 @@ public:
         if (m_next_local_stream_id == 0) {
             m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
         }
+        m_conn.reserveStreams(
+            static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
 
         // spawn writer 协程（后台运行），保存句柄用于等待结束
         Coroutine writer = writerLoop();
@@ -200,6 +203,11 @@ public:
     void enqueueSendFrame(Http2Frame::uptr frame,
                           const Http2OutgoingFrame::WaiterPtr& waiter = nullptr) {
         m_send_channel.send(Http2OutgoingFrame{std::move(frame), waiter});
+    }
+
+    void enqueueSendBytes(std::string bytes,
+                          const Http2OutgoingFrame::WaiterPtr& waiter = nullptr) {
+        m_send_channel.send(Http2OutgoingFrame{std::move(bytes), waiter});
     }
 
     template<typename FrameType>
@@ -246,6 +254,8 @@ public:
         if (m_next_local_stream_id == 0) {
             m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
         }
+        m_conn.reserveStreams(
+            static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
 
         scheduler->spawn(writerLoop());
         scheduler->spawn(monitorLoop());
@@ -545,12 +555,11 @@ private:
             frame_buffers.clear();
             iovecs.clear();
             waiters.clear();
-            size_t total_bytes = 0;
 
             // 先批量序列化，再构建 iovec，避免 vector 扩容导致 data() 指针失效。
             bool has_shutdown = false;
             auto collect_item = [&](Http2OutgoingFrame&& item) {
-                if (!item.frame) {
+                if (!item.frame && item.serialized.empty()) {
                     // 收到关闭信号，先发送已有数据再退出
                     HTTP_LOG_DEBUG("[stream-mgr] [writer] [shutdown]");
                     has_shutdown = true;
@@ -559,7 +568,11 @@ private:
                 if (item.waiter) {
                     waiters.push_back(std::move(item.waiter));
                 }
-                frame_buffers.push_back(item.frame->serialize());
+                if (!item.serialized.empty()) {
+                    frame_buffers.push_back(std::move(item.serialized));
+                } else {
+                    frame_buffers.push_back(item.frame->serialize());
+                }
             };
 
             collect_item(std::move(item_result.value()));
@@ -575,7 +588,6 @@ private:
             if (!frame_buffers.empty()) {
                 iovecs.reserve(frame_buffers.size());
                 for (auto& buffer : frame_buffers) {
-                    total_bytes += buffer.size();
                     iovecs.push_back({
                         .iov_base = buffer.data(),
                         .iov_len = buffer.size()
@@ -586,10 +598,13 @@ private:
             if (!iovecs.empty()) {
                 if constexpr (requires(SocketType& socket, std::vector<iovec>& vec) { socket.writev(vec); }) {
                     // 支持 writev 的 socket（如 TcpSocket）：一次批量发送
-                    size_t sent = 0;
-                    size_t iov_index = 0;
-                    while (sent < total_bytes) {
-                        auto result = co_await m_conn.socket().writev(iovecs);
+                    IoVecCursor write_cursor(iovecs);
+                    std::vector<iovec> submit_iovecs;
+                    submit_iovecs.reserve(iovecs.size());
+
+                    while (!write_cursor.empty()) {
+                        write_cursor.exportWindow(submit_iovecs);
+                        auto result = co_await m_conn.socket().writev(submit_iovecs);
                         if (!result) {
                             if (m_conn.isClosing() || m_conn.isPeerClosed() ||
                                 m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
@@ -604,7 +619,8 @@ private:
                             }
                             co_return;
                         }
-                        if (result.value() == 0) {
+                        const size_t written = result.value();
+                        if (written == 0) {
                             HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-zero]");
                             for (auto& waiter : waiters) {
                                 if (waiter) {
@@ -614,28 +630,14 @@ private:
                             co_return;
                         }
 
-                        size_t written = result.value();
-                        sent += written;
-                        if (sent >= total_bytes) {
-                            break;
-                        }
-
-                        while (written > 0 && iov_index < iovecs.size()) {
-                            if (iovecs[iov_index].iov_len == 0) {
-                                ++iov_index;
-                                continue;
+                        if (write_cursor.advance(written) != written) {
+                            HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-advance-mismatch]");
+                            for (auto& waiter : waiters) {
+                                if (waiter) {
+                                    waiter->notify();
+                                }
                             }
-
-                            if (written < iovecs[iov_index].iov_len) {
-                                iovecs[iov_index].iov_base =
-                                    static_cast<char*>(iovecs[iov_index].iov_base) + written;
-                                iovecs[iov_index].iov_len -= written;
-                                written = 0;
-                            } else {
-                                written -= iovecs[iov_index].iov_len;
-                                iovecs[iov_index].iov_len = 0;
-                                ++iov_index;
-                            }
+                            co_return;
                         }
                     }
                 } else {
@@ -847,6 +849,7 @@ private:
                 m_conn.setExpectingContinuation(true, stream_id);
             }
             stream->pushFrame(std::move(frame));
+            tryRetireClientStream(stream);
             return;
         }
 
@@ -934,6 +937,7 @@ private:
             }
 
             stream->pushFrame(std::move(frame));
+            tryRetireClientStream(stream);
             return;
         }
 
@@ -964,6 +968,7 @@ private:
                 stream->markRequestCompleted();
                 stream->markResponseCompleted();
                 stream->closeFrameQueue();
+                tryRetireClientStream(stream);
             }
             return;
         }
@@ -1021,14 +1026,12 @@ private:
                     break;
                 }
                 case PendingAction::Type::SendRstStream: {
-                    Http2RstStreamFrame frame;
-                    frame.header().stream_id = action.stream_id;
-                    frame.setErrorCode(action.error_code);
+                    auto bytes = Http2FrameBuilder::rstStreamBytes(action.stream_id, action.error_code);
                     auto stream = m_conn.getStream(action.stream_id);
                     if (stream) {
                         stream->onRstStreamSent();
                     }
-                    enqueueSendFrame(std::move(frame));
+                    enqueueSendBytes(std::move(bytes));
                     break;
                 }
                 case PendingAction::Type::SendWindowUpdate: {
@@ -1067,6 +1070,19 @@ private:
         m_pending_spawns.push(stream);
     }
 
+    void tryRetireClientStream(const Http2Stream::ptr& stream) {
+        if (!stream || !m_conn.isClient()) {
+            return;
+        }
+        if (!stream->isResponseCompleted()) {
+            return;
+        }
+        if (stream->state() != Http2StreamState::Closed) {
+            return;
+        }
+        m_conn.removeStream(stream->streamId());
+    }
+
     Http2Stream::ptr createStreamInternal(uint32_t stream_id) {
         auto stream = m_conn.createStream(stream_id);
         attachStreamIO(stream);
@@ -1075,7 +1091,15 @@ private:
 
     void attachStreamIO(const Http2Stream::ptr& stream) {
         if (!stream) return;
-        stream->attachIO(&m_send_channel, &m_conn.encoder(), &m_conn.decoder());
+        auto* encoder = &m_conn.encoder();
+        auto* decoder = &m_conn.decoder();
+        if (stream->m_io_attached &&
+            stream->m_send_channel == &m_send_channel &&
+            stream->m_encoder == encoder &&
+            stream->m_decoder == decoder) {
+            return;
+        }
+        stream->attachIO(&m_send_channel, encoder, decoder);
     }
 
     Http2ConnImpl<SocketType>& m_conn;

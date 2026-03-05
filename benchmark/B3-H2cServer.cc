@@ -24,26 +24,23 @@ void signalHandler(int) {
 Coroutine handleStream(Http2Stream::ptr stream) {
     std::string body;
 
-    // 消费所有帧直到 END_STREAM
     bool end_stream = false;
     while (!end_stream) {
-        auto batch_result = co_await stream->getFrames(16);
-        if (!batch_result) break;
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result) {
+            break;
+        }
 
-        auto frames = std::move(batch_result.value());
-        for (auto& frame : frames) {
-            if (!frame) {
-                end_stream = true;
-                break;
-            }
-            if (frame->isData()) {
-                auto* data = frame->asData();
-                body.append(data->data());
-            }
-            if (frame->isEndStream()) {
-                end_stream = true;
-                break;
-            }
+        auto frame = std::move(frame_result.value());
+        if (!frame) {
+            end_stream = true;
+            break;
+        }
+        if (frame->isData()) {
+            body.append(frame->asData()->data());
+        }
+        if (frame->isEndStream()) {
+            end_stream = true;
         }
     }
 

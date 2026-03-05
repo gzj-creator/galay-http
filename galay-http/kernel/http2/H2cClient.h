@@ -4,6 +4,7 @@
 #include "Http2Conn.h"
 #include "Http2Stream.h"
 #include "Http2StreamManager.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/kernel/http/HttpLog.h"
@@ -19,6 +20,7 @@
 #include <string>
 #include <cstring>
 #include <optional>
+#include <span>
 
 namespace galay::http2
 {
@@ -81,18 +83,28 @@ class H2cUpgradeAwaitable
     , public TimeoutSupport<H2cUpgradeAwaitable>
 {
 public:
-    class ProtocolSendAwaitable : public SendAwaitable
+    class ProtocolSendAwaitable : public WritevIOContext
     {
     public:
         ProtocolSendAwaitable(H2cUpgradeAwaitable* owner,
                               const std::string* payload,
                               bool finish_upgrade)
-            : SendAwaitable(owner->m_socket->controller(),
-                            payload ? payload->data() : nullptr,
-                            payload ? payload->size() : 0)
+            : WritevIOContext(std::span<const struct iovec>())
             , m_owner(owner), m_payload(payload), m_finish_upgrade(finish_upgrade)
-            , m_offset(0), m_completed(!payload || payload->empty())
-        {}
+            , m_completed(true)
+        {
+            if (m_payload != nullptr && !m_payload->empty()) {
+                std::vector<iovec> segments;
+                segments.reserve(1);
+                segments.push_back({
+                    .iov_base = const_cast<char*>(m_payload->data()),
+                    .iov_len = m_payload->size()
+                });
+                m_cursor.reset(std::move(segments));
+                m_completed = false;
+            }
+            syncSendWindow();
+        }
 
 #ifdef USE_IOURING
         bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
@@ -101,21 +113,26 @@ public:
                 if (m_finish_upgrade) return m_owner->finishUpgrade();
                 return true;
             }
-            if (cqe == nullptr) { syncSendWindow(); return m_length == 0; }
+            if (cqe == nullptr) {
+                syncSendWindow();
+                return pendingIovCount() == 0;
+            }
 
-            auto result = galay::kernel::io::handleSend(cqe);
+            auto result = galay::kernel::io::handleWritev(cqe);
             if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
             if (!result) { m_owner->setSendError(result.error()); return true; }
 
-            size_t sent = result.value();
+            const size_t sent = result.value();
             if (sent == 0) return false;
-            m_offset += sent;
-            if (m_offset >= m_payload->size()) {
+            if (!advanceAfterWrite(sent)) {
+                m_owner->setSendError(IOError(kSendFailed, 0));
+                return true;
+            }
+            if (pendingIovCount() == 0) {
                 m_completed = true;
                 if (m_finish_upgrade) return m_owner->finishUpgrade();
                 return true;
             }
-            syncSendWindow();
             return false;
         }
 #else
@@ -127,14 +144,24 @@ public:
                     return true;
                 }
                 syncSendWindow();
-                auto result = galay::kernel::io::handleSend(handle, m_buffer, m_length);
+                const int iov_count = pendingIovCount();
+                if (iov_count == 0) {
+                    m_completed = true;
+                    if (m_finish_upgrade) return m_owner->finishUpgrade();
+                    return true;
+                }
+
+                auto result = galay::kernel::io::handleWritev(handle, m_iovecs.data(), iov_count);
                 if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
                 if (!result) { m_owner->setSendError(result.error()); return true; }
 
-                size_t sent = result.value();
+                const size_t sent = result.value();
                 if (sent == 0) return false;
-                m_offset += sent;
-                if (m_offset >= m_payload->size()) {
+                if (!advanceAfterWrite(sent)) {
+                    m_owner->setSendError(IOError(kSendFailed, 0));
+                    return true;
+                }
+                if (pendingIovCount() == 0) {
                     m_completed = true;
                     if (m_finish_upgrade) return m_owner->finishUpgrade();
                     return true;
@@ -145,22 +172,33 @@ public:
 
     private:
         void syncSendWindow() {
-            m_buffer = m_payload->data() + m_offset;
-            m_length = m_payload->size() - m_offset;
+            m_cursor.exportWindow(m_iovecs);
+        }
+
+        int pendingIovCount() {
+            return static_cast<int>(m_cursor.count());
+        }
+
+        bool advanceAfterWrite(size_t sent_bytes) {
+            const size_t advanced = m_cursor.advance(sent_bytes);
+            syncSendWindow();
+            return advanced == sent_bytes;
         }
         H2cUpgradeAwaitable* m_owner;
         const std::string* m_payload;
         bool m_finish_upgrade;
-        size_t m_offset;
         bool m_completed;
+        IoVecCursor m_cursor;
     };
 
-    class UpgradeRecvAwaitable : public RecvAwaitable
+    class UpgradeRecvAwaitable : public ReadvIOContext
     {
     public:
         explicit UpgradeRecvAwaitable(H2cUpgradeAwaitable* owner)
-            : RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
-            , m_owner(owner) {}
+            : ReadvIOContext(std::span<const struct iovec>())
+            , m_owner(owner) {
+            m_iovecs.reserve(2);
+        }
 
 #ifdef USE_IOURING
         bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
@@ -170,10 +208,10 @@ public:
                 if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting 101"); return true; }
                 return false;
             }
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            auto result = galay::kernel::io::handleReadv(cqe);
             if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
             if (!result) { m_owner->setRecvError(result.error()); return true; }
-            size_t n = result.value().size();
+            const size_t n = result.value();
             if (n == 0) { m_owner->setProtocolError("peer closed while waiting 101"); return true; }
             m_owner->m_ring_buffer->produce(n);
             if (m_owner->parseUpgradeResponse()) return true;
@@ -186,10 +224,12 @@ public:
             if (m_owner->parseUpgradeResponse()) return true;
             while (true) {
                 if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting 101"); return true; }
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                auto result = galay::kernel::io::handleReadv(handle,
+                                                             m_iovecs.data(),
+                                                             static_cast<int>(m_iovecs.size()));
                 if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
                 if (!result) { m_owner->setRecvError(result.error()); return true; }
-                size_t n = result.value().size();
+                const size_t n = result.value();
                 if (n == 0) { m_owner->setProtocolError("peer closed while waiting 101"); return true; }
                 m_owner->m_ring_buffer->produce(n);
                 if (m_owner->parseUpgradeResponse()) return true;
@@ -198,21 +238,23 @@ public:
 #endif
     private:
         bool prepareRecvWindow() {
-            auto wv = m_owner->m_ring_buffer->getWriteIovecs();
-            if (wv.empty()) return false;
-            m_buffer = static_cast<char*>(wv[0].iov_base);
-            m_length = wv[0].iov_len;
-            return m_length > 0;
+            struct iovec wv[2];
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(wv, 2);
+            if (iov_count == 0) return false;
+
+            return IoVecWindow::buildWindow(wv, iov_count, m_iovecs) > 0;
         }
         H2cUpgradeAwaitable* m_owner;
     };
 
-    class SettingsRecvAwaitable : public RecvAwaitable
+    class SettingsRecvAwaitable : public ReadvIOContext
     {
     public:
         explicit SettingsRecvAwaitable(H2cUpgradeAwaitable* owner)
-            : RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
-            , m_owner(owner) {}
+            : ReadvIOContext(std::span<const struct iovec>())
+            , m_owner(owner) {
+            m_iovecs.reserve(2);
+        }
 
 #ifdef USE_IOURING
         bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
@@ -222,10 +264,10 @@ public:
                 if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting SETTINGS"); return true; }
                 return false;
             }
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            auto result = galay::kernel::io::handleReadv(cqe);
             if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
             if (!result) { m_owner->setRecvError(result.error()); return true; }
-            size_t n = result.value().size();
+            const size_t n = result.value();
             if (n == 0) { m_owner->setProtocolError("peer closed while waiting SETTINGS"); return true; }
             m_owner->m_ring_buffer->produce(n);
             if (m_owner->tryConsumeSettingsFrame()) return true;
@@ -238,10 +280,12 @@ public:
             if (m_owner->tryConsumeSettingsFrame()) return true;
             while (true) {
                 if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting SETTINGS"); return true; }
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                auto result = galay::kernel::io::handleReadv(handle,
+                                                             m_iovecs.data(),
+                                                             static_cast<int>(m_iovecs.size()));
                 if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
                 if (!result) { m_owner->setRecvError(result.error()); return true; }
-                size_t n = result.value().size();
+                const size_t n = result.value();
                 if (n == 0) { m_owner->setProtocolError("peer closed while waiting SETTINGS"); return true; }
                 m_owner->m_ring_buffer->produce(n);
                 if (m_owner->tryConsumeSettingsFrame()) return true;
@@ -250,11 +294,11 @@ public:
 #endif
     private:
         bool prepareRecvWindow() {
-            auto wv = m_owner->m_ring_buffer->getWriteIovecs();
-            if (wv.empty()) return false;
-            m_buffer = static_cast<char*>(wv[0].iov_base);
-            m_length = wv[0].iov_len;
-            return m_length > 0;
+            struct iovec wv[2];
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(wv, 2);
+            if (iov_count == 0) return false;
+
+            return IoVecWindow::buildWindow(wv, iov_count, m_iovecs) > 0;
         }
         H2cUpgradeAwaitable* m_owner;
     };
@@ -429,8 +473,8 @@ public:
     ~H2cClient() = default;
     H2cClient(const H2cClient&) = delete;
     H2cClient& operator=(const H2cClient&) = delete;
-    H2cClient(H2cClient&&) = delete;
-    H2cClient& operator=(H2cClient&&) = delete;
+    H2cClient(H2cClient&&) noexcept = default;
+    H2cClient& operator=(H2cClient&&) noexcept = default;
 
     auto connect(const std::string& host, uint16_t port) {
         m_host = host;
@@ -534,11 +578,11 @@ inline H2cUpgradeAwaitable::H2cUpgradeAwaitable(H2cClient& client, const std::st
     m_preface_send = ProtocolSendAwaitable(this, &m_preface_settings_buf, false);
     m_ack_send = ProtocolSendAwaitable(this, &m_ack_buf, true);
 
-    addTask(IOEventType::SEND, &m_upgrade_send);
-    addTask(IOEventType::RECV, &m_upgrade_recv);
-    addTask(IOEventType::SEND, &m_preface_send);
-    addTask(IOEventType::RECV, &m_settings_recv);
-    addTask(IOEventType::SEND, &m_ack_send);
+    addTask(IOEventType::WRITEV, &m_upgrade_send);
+    addTask(IOEventType::READV, &m_upgrade_recv);
+    addTask(IOEventType::WRITEV, &m_preface_send);
+    addTask(IOEventType::READV, &m_settings_recv);
+    addTask(IOEventType::WRITEV, &m_ack_send);
 
     HTTP_LOG_INFO("[h2c] [upgrade] [begin] [path={}]", path);
 }

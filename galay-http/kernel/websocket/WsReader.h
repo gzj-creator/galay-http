@@ -2,6 +2,7 @@
 #define GALAY_WS_READER_H
 
 #include "WsReaderSetting.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/websocket/WebSocketError.h"
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-kernel/common/Buffer.h"
@@ -11,6 +12,7 @@
 #include <expected>
 #include <coroutine>
 #include <functional>
+#include <array>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
@@ -144,14 +146,9 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
-            if (write_iovecs.empty()) {
-                return false;
-            }
-
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
+            std::array<iovec, 2> write_iovecs{};
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(write_iovecs.data(), write_iovecs.size());
+            return IoVecWindow::bindFirstNonEmpty(write_iovecs, iov_count, m_buffer, m_length);
         }
 
         GetFrameAwaitableImpl* m_owner;
@@ -211,12 +208,13 @@ public:
 
 private:
     bool parseFromBuffer() {
-        auto iovecs = m_ring_buffer->getReadIovecs();
-        if (iovecs.empty()) {
+        std::array<iovec, 2> read_iovecs{};
+        const size_t iov_count = m_ring_buffer->getReadIovecs(read_iovecs.data(), read_iovecs.size());
+        if (iov_count == 0) {
             return false;
         }
 
-        auto parse_result = WsFrameParser::fromIOVec(iovecs, *m_frame, m_is_server);
+        auto parse_result = WsFrameParser::fromIOVec(read_iovecs.data(), iov_count, *m_frame, m_is_server);
         if (!parse_result.has_value()) {
             WsError error = parse_result.error();
             if (error.code() == kWsIncomplete) {
@@ -377,13 +375,9 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
-            if (write_iovecs.empty()) {
-                return false;
-            }
-            this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-            this->m_plainLength = write_iovecs[0].iov_len;
-            return this->m_plainLength > 0;
+            std::array<iovec, 2> write_iovecs{};
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(write_iovecs.data(), write_iovecs.size());
+            return IoVecWindow::bindFirstNonEmpty(write_iovecs, iov_count, this->m_plainBuffer, this->m_plainLength);
         }
 
         GetFrameAwaitableImpl* m_owner;
@@ -443,12 +437,13 @@ public:
 
 private:
     bool parseFromBuffer() {
-        auto iovecs = m_ring_buffer->getReadIovecs();
-        if (iovecs.empty()) {
+        std::array<iovec, 2> read_iovecs{};
+        const size_t iov_count = m_ring_buffer->getReadIovecs(read_iovecs.data(), read_iovecs.size());
+        if (iov_count == 0) {
             return false;
         }
 
-        auto parse_result = WsFrameParser::fromIOVec(iovecs, *m_frame, m_is_server);
+        auto parse_result = WsFrameParser::fromIOVec(read_iovecs.data(), iov_count, *m_frame, m_is_server);
         if (!parse_result.has_value()) {
             WsError error = parse_result.error();
             if (error.code() == kWsIncomplete) {
@@ -614,14 +609,9 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
-            if (write_iovecs.empty()) {
-                return false;
-            }
-
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
+            std::array<iovec, 2> write_iovecs{};
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(write_iovecs.data(), write_iovecs.size());
+            return IoVecWindow::bindFirstNonEmpty(write_iovecs, iov_count, m_buffer, m_length);
         }
 
         GetMessageAwaitableImpl* m_owner;
@@ -689,13 +679,14 @@ public:
 private:
     bool parseFromBuffer() {
         while (true) {
-            auto iovecs = m_ring_buffer->getReadIovecs();
-            if (iovecs.empty()) {
+            std::array<iovec, 2> read_iovecs{};
+            const size_t iov_count = m_ring_buffer->getReadIovecs(read_iovecs.data(), read_iovecs.size());
+            if (iov_count == 0) {
                 return false;
             }
 
             WsFrame frame;
-            auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, m_is_server);
+            auto parse_result = WsFrameParser::fromIOVec(read_iovecs.data(), iov_count, frame, m_is_server);
 
             if (!parse_result.has_value()) {
                 WsError error = parse_result.error();
@@ -754,7 +745,7 @@ private:
                 return true;
             }
 
-            if (m_ring_buffer->getReadIovecs().empty()) {
+            if (m_ring_buffer->readable() == 0) {
                 return false;
             }
         }
@@ -899,13 +890,9 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
-            if (write_iovecs.empty()) {
-                return false;
-            }
-            this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-            this->m_plainLength = write_iovecs[0].iov_len;
-            return this->m_plainLength > 0;
+            std::array<iovec, 2> write_iovecs{};
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(write_iovecs.data(), write_iovecs.size());
+            return IoVecWindow::bindFirstNonEmpty(write_iovecs, iov_count, this->m_plainBuffer, this->m_plainLength);
         }
 
         GetMessageAwaitableImpl* m_owner;
@@ -973,13 +960,14 @@ public:
 private:
     bool parseFromBuffer() {
         while (true) {
-            auto iovecs = m_ring_buffer->getReadIovecs();
-            if (iovecs.empty()) {
+            std::array<iovec, 2> read_iovecs{};
+            const size_t iov_count = m_ring_buffer->getReadIovecs(read_iovecs.data(), read_iovecs.size());
+            if (iov_count == 0) {
                 return false;
             }
 
             WsFrame frame;
-            auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, m_is_server);
+            auto parse_result = WsFrameParser::fromIOVec(read_iovecs.data(), iov_count, frame, m_is_server);
 
             if (!parse_result.has_value()) {
                 WsError error = parse_result.error();
@@ -1038,7 +1026,7 @@ private:
                 return true;
             }
 
-            if (m_ring_buffer->getReadIovecs().empty()) {
+            if (m_ring_buffer->readable() == 0) {
                 return false;
             }
         }

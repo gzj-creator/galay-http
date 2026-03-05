@@ -8,6 +8,7 @@
 #include "galay-kernel/concurrency/AsyncWaiter.h"
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include <string>
+#include <string_view>
 #include <vector>
 #include <charconv>
 #include <memory>
@@ -28,11 +29,18 @@ struct Http2OutgoingFrame {
     using WaiterPtr = std::shared_ptr<Waiter>;
 
     Http2Frame::uptr frame;
+    std::string serialized;
     WaiterPtr waiter;
 
     Http2OutgoingFrame() = default;
     Http2OutgoingFrame(Http2Frame::uptr f, WaiterPtr w = nullptr)
         : frame(std::move(f))
+        , waiter(std::move(w))
+    {
+    }
+
+    Http2OutgoingFrame(std::string bytes, WaiterPtr w = nullptr)
+        : serialized(std::move(bytes))
         , waiter(std::move(w))
     {
     }
@@ -306,6 +314,9 @@ public:
     }
 
     void consumeDecodedHeadersAsRequest() {
+        if (!m_decoded_headers.empty()) {
+            m_request.headers.reserve(m_request.headers.size() + m_decoded_headers.size());
+        }
         for (const auto& f : decodedHeaders()) {
             if (f.name == ":method") m_request.method = f.value;
             else if (f.name == ":scheme") m_request.scheme = f.value;
@@ -317,6 +328,9 @@ public:
     }
 
     void consumeDecodedHeadersAsResponse() {
+        if (!m_decoded_headers.empty()) {
+            m_response.headers.reserve(m_response.headers.size() + m_decoded_headers.size());
+        }
         for (const auto& f : decodedHeaders()) {
             if (f.name == ":status") {
                 int status = 0;
@@ -396,27 +410,7 @@ public:
      * @brief 批量发送 DATA 帧（最后一帧可带 END_STREAM）
      */
     void sendDataBatch(const std::vector<std::string>& chunks, bool end_stream = false) {
-        std::vector<Http2Frame::uptr> frames;
-        frames.reserve(chunks.size() + (chunks.empty() && end_stream ? 1 : 0));
-
-        if (chunks.empty()) {
-            if (end_stream) {
-                auto frame = std::make_unique<Http2DataFrame>();
-                frame->setData("");
-                frame->setEndStream(true);
-                frames.push_back(std::move(frame));
-            }
-            sendFrameBatchInternal(std::move(frames), nullptr);
-            return;
-        }
-
-        for (size_t i = 0; i < chunks.size(); ++i) {
-            auto frame = std::make_unique<Http2DataFrame>();
-            frame->setData(chunks[i]);
-            frame->setEndStream(end_stream && (i + 1 == chunks.size()));
-            frames.push_back(std::move(frame));
-        }
-        sendFrameBatchInternal(std::move(frames), nullptr);
+        sendDataBatchInternal(chunks, end_stream, nullptr);
     }
 
     /**
@@ -463,27 +457,7 @@ public:
     ReplyAndWaitAwaitable replyDataBatch(const std::vector<std::string>& chunks,
                                          bool end_stream = false) {
         auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
-        std::vector<Http2Frame::uptr> frames;
-        frames.reserve(chunks.size() + (chunks.empty() && end_stream ? 1 : 0));
-
-        if (chunks.empty()) {
-            if (end_stream) {
-                auto frame = std::make_unique<Http2DataFrame>();
-                frame->setData("");
-                frame->setEndStream(true);
-                frames.push_back(std::move(frame));
-            }
-            sendFrameBatchInternal(std::move(frames), waiter);
-            return ReplyAndWaitAwaitable(std::move(waiter));
-        }
-
-        for (size_t i = 0; i < chunks.size(); ++i) {
-            auto frame = std::make_unique<Http2DataFrame>();
-            frame->setData(chunks[i]);
-            frame->setEndStream(end_stream && (i + 1 == chunks.size()));
-            frames.push_back(std::move(frame));
-        }
-        sendFrameBatchInternal(std::move(frames), waiter);
+        sendDataBatchInternal(chunks, end_stream, waiter);
         return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
@@ -598,18 +572,16 @@ private:
         if ((!m_send_queue && !m_send_channel) || !m_encoder) return;
 
         std::string header_block = m_encoder->encode(headers);
-
-        auto frame = std::make_unique<Http2HeadersFrame>();
-        frame->header().stream_id = m_stream_id;
-        frame->setHeaderBlock(std::move(header_block));
-        frame->setEndStream(end_stream);
-        frame->setEndHeaders(end_headers);
+        auto bytes = Http2FrameBuilder::headersBytes(m_stream_id,
+                                                     header_block,
+                                                     end_stream,
+                                                     end_headers);
 
         onHeadersSent(end_stream);
         if (m_send_channel) {
-            m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+            m_send_channel->send(Http2OutgoingFrame{std::move(bytes), waiter});
         } else {
-            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(bytes), waiter});
         }
     }
 
@@ -619,19 +591,16 @@ private:
         if (!m_send_queue && !m_send_channel) return;
         if (m_send_window < static_cast<int32_t>(data.size())) return;
 
-        auto frame = std::make_unique<Http2DataFrame>();
-        frame->header().stream_id = m_stream_id;
-        frame->setData(data);
-        frame->setEndStream(end_stream);
+        auto bytes = Http2FrameBuilder::dataBytes(m_stream_id, data, end_stream);
 
         m_send_window -= static_cast<int32_t>(data.size());
         if (end_stream) {
             onDataSent(true);
         }
         if (m_send_channel) {
-            m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+            m_send_channel->send(Http2OutgoingFrame{std::move(bytes), waiter});
         } else {
-            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(bytes), waiter});
         }
     }
 
@@ -639,15 +608,66 @@ private:
                                const Http2OutgoingFrame::WaiterPtr& waiter) {
         if (!m_send_queue && !m_send_channel) return;
 
-        auto frame = std::make_unique<Http2RstStreamFrame>();
-        frame->header().stream_id = m_stream_id;
-        frame->setErrorCode(error);
+        auto bytes = Http2FrameBuilder::rstStreamBytes(m_stream_id, error);
 
         onRstStreamSent();
         if (m_send_channel) {
-            m_send_channel->send(Http2OutgoingFrame{std::move(frame), waiter});
+            m_send_channel->send(Http2OutgoingFrame{std::move(bytes), waiter});
         } else {
-            m_send_queue->push_back(Http2OutgoingFrame{std::move(frame), waiter});
+            m_send_queue->push_back(Http2OutgoingFrame{std::move(bytes), waiter});
+        }
+    }
+
+    void sendDataBatchInternal(const std::vector<std::string>& chunks,
+                               bool end_stream,
+                               const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        std::vector<Http2OutgoingFrame> outgoing;
+        outgoing.reserve(chunks.size() + (chunks.empty() && end_stream ? 1 : 0));
+
+        if (chunks.empty()) {
+            if (end_stream) {
+                onDataSent(true);
+                outgoing.emplace_back(Http2FrameBuilder::dataBytes(m_stream_id, std::string_view{}, true));
+            }
+        } else {
+            for (size_t i = 0; i < chunks.size(); ++i) {
+                const auto& chunk = chunks[i];
+                if (m_send_window < static_cast<int32_t>(chunk.size())) {
+                    continue;
+                }
+                const bool last = end_stream && (i + 1 == chunks.size());
+                m_send_window -= static_cast<int32_t>(chunk.size());
+                if (last) {
+                    onDataSent(true);
+                }
+                outgoing.emplace_back(Http2FrameBuilder::dataBytes(m_stream_id, chunk, last));
+            }
+        }
+
+        if (outgoing.empty()) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        if (waiter) {
+            outgoing.back().waiter = waiter;
+        }
+
+        if (m_send_channel) {
+            m_send_channel->sendBatch(std::move(outgoing));
+        } else {
+            m_send_queue->insert(m_send_queue->end(),
+                                 std::make_move_iterator(outgoing.begin()),
+                                 std::make_move_iterator(outgoing.end()));
         }
     }
 

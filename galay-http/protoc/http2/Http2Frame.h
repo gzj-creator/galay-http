@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 #include <expected>
@@ -48,6 +49,29 @@ class Http2PingFrame;
 class Http2GoAwayFrame;
 class Http2WindowUpdateFrame;
 class Http2ContinuationFrame;
+
+/**
+ * @brief HTTP/2 帧构建器
+ * @details 统一 DATA/HEADERS/RST_STREAM 的构建入口，减少散落的手工拼装逻辑
+ */
+class Http2FrameBuilder
+{
+public:
+    static std::unique_ptr<Http2DataFrame> data(uint32_t stream_id, std::string payload, bool end_stream = false);
+    static std::unique_ptr<Http2HeadersFrame> headers(uint32_t stream_id,
+                                                      std::string header_block,
+                                                      bool end_stream = false,
+                                                      bool end_headers = true);
+    static std::unique_ptr<Http2RstStreamFrame> rstStream(uint32_t stream_id, Http2ErrorCode error);
+
+    // 直接构建序列化字节，避免热路径 frame 对象分配与二次拷贝
+    static std::string dataBytes(uint32_t stream_id, std::string_view payload, bool end_stream = false);
+    static std::string headersBytes(uint32_t stream_id,
+                                    std::string_view header_block,
+                                    bool end_stream = false,
+                                    bool end_headers = true);
+    static std::string rstStreamBytes(uint32_t stream_id, Http2ErrorCode error);
+};
 
 /**
  * @brief HTTP/2 帧基类

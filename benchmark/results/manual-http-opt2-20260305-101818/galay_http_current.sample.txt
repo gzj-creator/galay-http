@@ -1,0 +1,562 @@
+Analysis of sampling B1-HttpServer (pid 90942) every 1 millisecond
+Process:         B1-HttpServer [90942]
+Path:            /Users/USER/Desktop/*/B1-HttpServer
+Load Address:    0x102538000
+Identifier:      B1-HttpServer
+Version:         0
+Code Type:       ARM64
+Platform:        macOS
+Parent Process:  bash [90938]
+Target Type:     live task
+
+Date/Time:       2026-03-05 10:24:48.535 +0800
+Launch Time:     2026-03-05 10:24:48.486 +0800
+OS Version:      macOS 15.7.3 (24G419)
+Report Version:  7
+Analysis Tool:   /usr/bin/sample
+
+Physical footprint:         5008K
+Physical footprint (peak):  5008K
+Idle exit:                  untracked
+----
+
+Call graph:
+    4290 Thread_714824   DispatchQueue_1: com.apple.main-thread  (serial)
+    + 4290 start  (in dyld) + 6076  [0x19767ab98]
+    +   4290 main  (in B1-HttpServer) + 872  [0x10253af54]
+    +     4199 std::this_thread::sleep_for(std::chrono::duration<long long, std::ratio<1l, 1000000000l>> const&)  (in libc++.1.dylib) + 84  [0x19794df38]
+    +     ! 4199 nanosleep  (in libsystem_c.dylib) + 220  [0x1978b96f4]
+    +     !   4199 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x1979dd1c8]
+    +     91 std::this_thread::sleep_for(std::chrono::duration<long long, std::ratio<1l, 1000000000l>> const&)  (in libc++.1.dylib) + 0  [0x19794dee4]
+    4290 Thread_714831
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, spdlog::details::thread_pool::thread_pool(unsigned long, unsigned long, std::function<void ()>, std::function<void ()>)::'lambda'()>>(void*)  (in libgalay-http.1.0.0.dylib) + 76  [0x10278d078]
+    +       4290 spdlog::details::thread_pool::process_next_msg_()  (in libgalay-http.1.0.0.dylib) + 120  [0x10278d29c]
+    +         4290 spdlog::details::mpmc_blocking_queue<spdlog::details::async_msg>::dequeue(spdlog::details::async_msg&)  (in libgalay-http.1.0.0.dylib) + 64  [0x10278d3a8]
+    +           4290 std::condition_variable::wait(std::unique_lock<std::mutex>&)  (in libc++.1.dylib) + 32  [0x19794c268]
+    +             4290 _pthread_cond_wait  (in libsystem_pthread.dylib) + 984  [0x197a1c09c]
+    +               4290 __psynch_cvwait  (in libsystem_kernel.dylib) + 8  [0x1979dd3cc]
+    4290 Thread_714832
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::TimerScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x102851a7c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::TimerScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::TimerScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102851d6c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::TimerScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::TimerScheduler::start()::$_0>(galay::kernel::TimerScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102851d90]  invoke.h:149
+    +           4290 galay::kernel::TimerScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102851de0]  TimerScheduler.cc:32
+    +             4249 galay::kernel::TimerScheduler::timerLoop()  (in libgalay-kernel.1.0.0.dylib) + 148  [0x10284ae14]  TimerScheduler.cc:81
+    +             ! 4245 std::this_thread::sleep_for[abi:ne190102]<long long, std::ratio<1l, 1000l>>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 256  [0x10284b1b4]  this_thread.h:48
+    +             ! : 4244 std::this_thread::sleep_for(std::chrono::duration<long long, std::ratio<1l, 1000000000l>> const&)  (in libc++.1.dylib) + 84  [0x19794df38]
+    +             ! : | 4210 nanosleep  (in libsystem_c.dylib) + 220  [0x1978b96f4]
+    +             ! : | + 4209 __semwait_signal  (in libsystem_kernel.dylib) + 8  [0x1979dd1c8]
+    +             ! : | + 1 __semwait_signal  (in libsystem_kernel.dylib) + 28  [0x1979dd1dc]
+    +             ! : | +   1 cerror  (in libsystem_kernel.dylib) + 44  [0x1979db4c0]
+    +             ! : | +     1 _pthread_exit_if_canceled  (in libsystem_pthread.dylib) + 0  [0x197a15908]
+    +             ! : | 30 nanosleep  (in libsystem_c.dylib) + 116  [0x1978b968c]
+    +             ! : | + 30 clock_get_time  (in libsystem_kernel.dylib) + 116  [0x1979df348]
+    +             ! : | +   28 mach_msg2_internal  (in libsystem_kernel.dylib) + 76  [0x1979ec3a0]
+    +             ! : | +   ! 28 mach_msg2_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9c34]
+    +             ! : | +   2 mach_msg2_internal  (in libsystem_kernel.dylib) + 0  [0x1979ec354]
+    +             ! : | 4 nanosleep  (in libsystem_c.dylib) + 228  [0x1978b96fc]
+    +             ! : |   2 DYLD-STUB$$__error  (in libsystem_c.dylib) + 0  [0x19792539c]
+    +             ! : |   2 __error  (in libsystem_kernel.dylib) + 0,4  [0x1979da5fc,0x1979da600]
+    +             ! : 1 std::this_thread::sleep_for(std::chrono::duration<long long, std::ratio<1l, 1000000000l>> const&)  (in libc++.1.dylib) + 84  [0x19794df38]
+    +             ! 2 std::this_thread::sleep_for[abi:ne190102]<long long, std::ratio<1l, 1000l>>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x10284b120]  this_thread.h:42
+    +             ! : 2 std::chrono::operator<=>[abi:ne190102]<long long, std::ratio<1l, 1000l>, long double, std::ratio<1l, 1l>>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&, long long<long double, std::ratio<1l, 1l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 36  [0x1028521b4]  duration.h:385
+    +             ! :   2 std::chrono::duration<long double, std::ratio<1l, 1000l>>::duration[abi:ne190102]<long long, std::ratio<1l, 1000l>, 0>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 36  [0x1028523f0]  duration.h:220
+    +             ! :     1 std::chrono::duration<long double, std::ratio<1l, 1000l>>::duration[abi:ne190102]<long long, std::ratio<1l, 1000l>, 0>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 36  [0x102852470]  duration.h:220
+    +             ! :     | 1 std::chrono::duration_cast[abi:ne190102]<std::chrono::duration<long double, std::ratio<1l, 1000l>>, long long, std::ratio<1l, 1000l>, 0>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x1028524ac]  duration.h:107
+    +             ! :     |   1 std::chrono::__duration_cast<std::chrono::duration<long long, std::ratio<1l, 1000l>>, std::chrono::duration<long double, std::ratio<1l, 1000l>>, std::ratio<1l, 1l>, true, true>::operator()[abi:ne190102](std::chrono::duration<long long, std::ratio<1l, 1000l>> const&) const  (in libgalay-kernel.1.0.0.dylib) + 48  [0x1028524f0]  duration.h:74
+    +             ! :     1 std::chrono::duration<long double, std::ratio<1l, 1000l>>::duration[abi:ne190102]<long long, std::ratio<1l, 1000l>, 0>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x10285247c]  duration.h:220
+    +             ! :       1 std::chrono::duration<long double, std::ratio<1l, 1000l>>::count[abi:ne190102]() const  (in libgalay-kernel.1.0.0.dylib) + 12  [0x10285240c]  duration.h:224
+    +             ! 1 std::this_thread::sleep_for[abi:ne190102]<long long, std::ratio<1l, 1000l>>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 176  [0x10284b164]  this_thread.h:44
+    +             ! : 1 std::chrono::operator<=>[abi:ne190102]<long long, std::ratio<1l, 1000000000l>, long long, std::ratio<1l, 1000l>>(std::chrono::duration<long long, std::ratio<1l, 1000000000l>> const&, long long<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 4  [0x102852268]  duration.h:383
+    +             ! 1 std::this_thread::sleep_for[abi:ne190102]<long long, std::ratio<1l, 1000l>>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 256  [0x10284b1b4]  this_thread.h:49
+    +             37 galay::kernel::TimerScheduler::timerLoop()  (in libgalay-kernel.1.0.0.dylib) + 140  [0x10284ae0c]  TimerScheduler.cc:78
+    +             ! 35 galay::kernel::ThreadSafeTimerManager::tick()  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10284aec4]  ThreadSafeTimerManager.hpp:190
+    +             ! : 11 galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib) + 88  [0x10285006c]  ThreadSafeTimerManager.hpp:246
+    +             ! : | 6 std::shared_ptr<galay::kernel::Timer>::shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102850484]  shared_ptr.h:438
+    +             ! : | + 6 std::shared_ptr<galay::kernel::Timer>::shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 0,16,...  [0x102850808,0x102850818,...]  shared_ptr.h:438
+    +             ! : | 5 std::shared_ptr<galay::kernel::Timer>::shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 4,28,...  [0x10285046c,0x102850484,...]  shared_ptr.h:438
+    +             ! : 10 galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib) + 364  [0x102850180]  ThreadSafeTimerManager.hpp:257
+    +             ! : | 9 std::shared_ptr<galay::kernel::Timer>::~shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102829a9c]  shared_ptr.h:668
+    +             ! : | + 5 std::shared_ptr<galay::kernel::Timer>::~shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 4,28  [0x102829b94,0x102829bac]  shared_ptr.h:668
+    +             ! : | + 3 std::shared_ptr<galay::kernel::Timer>::~shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 60,64  [0x102829bcc,0x102829bd0]  shared_ptr.h:671
+    +             ! : | + 1 std::shared_ptr<galay::kernel::Timer>::~shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102829bb0]  shared_ptr.h:669
+    +             ! : | 1 std::shared_ptr<galay::kernel::Timer>::~shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib) + 16  [0x102829a90]  shared_ptr.h:668
+    +             ! : 5 galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib) + 348,76  [0x102850170,0x102850060]  ThreadSafeTimerManager.hpp:0
+    +             ! : 3 galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib) + 88,108,...  [0x10285006c,0x102850080,...]  ThreadSafeTimerManager.hpp:246
+    +             ! : 3 galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib) + 144  [0x1028500a4]  ThreadSafeTimerManager.hpp:250
+    +             ! : | 3 moodycamel::ConcurrentQueue<std::shared_ptr<galay::kernel::Timer>, moodycamel::ConcurrentQueueDefaultTraits>::try_dequeue_bulk<std::shared_ptr<galay::kernel::Timer>*>(std::shared_ptr<galay::kernel::Timer>*, unsigned long)  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028504bc]  concurrentqueue.h:1234
+    +             ! : |   2 std::__atomic_base<moodycamel::ConcurrentQueue<std::shared_ptr<galay::kernel::Timer>, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase*, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 0  [0x10284bf78]  atomic_base.h:58
+    +             ! : |   1 std::__atomic_base<moodycamel::ConcurrentQueue<std::shared_ptr<galay::kernel::Timer>, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase*, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x10284bf98]  atomic_base.h:59
+    +             ! : |     1 moodycamel::ConcurrentQueue<std::shared_ptr<galay::kernel::Timer>, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase* std::__cxx_atomic_load[abi:ne190102]<moodycamel::ConcurrentQueue<std::shared_ptr<galay::kernel::Timer>, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase*>(std::__cxx_atomic_base_impl<moodycamel::ConcurrentQueue<std::shared_ptr<galay::kernel::Timer>, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase*> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x10284c1e0]  cxx_atomic_impl.h:317
+    +             ! : 3 galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib) + 376,364  [0x10285018c,0x102850180]  ThreadSafeTimerManager.hpp:257
+    +             ! 1 galay::kernel::ThreadSafeTimerManager::tick()  (in libgalay-kernel.1.0.0.dylib) + 0  [0x10284aea8]  ThreadSafeTimerManager.hpp:188
+    +             ! 1 galay::kernel::ThreadSafeTimerManager::tick()  (in libgalay-kernel.1.0.0.dylib) + 44  [0x10284aed4]  ThreadSafeTimerManager.hpp:193
+    +             !   1 std::__atomic_base<unsigned long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x10282f408]  atomic_base.h:59
+    +             !     1 std::__cxx_atomic_load[abi:ne190102]<unsigned long>(std::__cxx_atomic_base_impl<unsigned long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x10282f56c]  cxx_atomic_impl.h:315
+    +             2 galay::kernel::TimerScheduler::timerLoop()  (in libgalay-kernel.1.0.0.dylib) + 148  [0x10284ae14]  TimerScheduler.cc:76
+    +             1 galay::kernel::TimerScheduler::timerLoop()  (in libgalay-kernel.1.0.0.dylib) + 104  [0x10284ade8]  TimerScheduler.cc:0
+    +             1 galay::kernel::TimerScheduler::timerLoop()  (in libgalay-kernel.1.0.0.dylib) + 120  [0x10284adf8]  TimerScheduler.cc:76
+    +               1 std::__atomic_base<bool, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102829874]  atomic_base.h:59
+    +                 1 std::__cxx_atomic_load[abi:ne190102]<bool>(std::__cxx_atomic_base_impl<bool> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028298fc]  cxx_atomic_impl.h:315
+    4290 Thread_714833
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10283fe88]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102840178]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::KqueueScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::KqueueScheduler::start()::$_0>(galay::kernel::KqueueScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10284019c]  invoke.h:149
+    +           4290 galay::kernel::KqueueScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x102840210]  KqueueScheduler.cc:84
+    +             4289 galay::kernel::KqueueScheduler::eventLoop()  (in libgalay-kernel.1.0.0.dylib) + 212  [0x10283776c]  KqueueScheduler.cc:330
+    +             ! 4289 kevent  (in libsystem_kernel.dylib) + 8  [0x1979dfd04]
+    +             1 galay::kernel::KqueueScheduler::eventLoop()  (in libgalay-kernel.1.0.0.dylib) + 148  [0x10283772c]  KqueueScheduler.cc:328
+    +               1 galay::kernel::KqueueScheduler::processPendingCoroutines()  (in libgalay-kernel.1.0.0.dylib) + 68  [0x102837540]  KqueueScheduler.cc:303
+    +                 1 moodycamel::ConcurrentQueue<galay::kernel::Coroutine, moodycamel::ConcurrentQueueDefaultTraits>::try_dequeue_bulk<galay::kernel::Coroutine*>(galay::kernel::Coroutine*, unsigned long)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x102837604]  concurrentqueue.h:1235
+    +                   1 moodycamel::ConcurrentQueue<galay::kernel::Coroutine, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase::dequeue_bulk<galay::kernel::Coroutine*>(galay::kernel::Coroutine*&, unsigned long)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x102843d94]  concurrentqueue.h:1731
+    +                     1 moodycamel::ConcurrentQueue<galay::kernel::Coroutine, moodycamel::ConcurrentQueueDefaultTraits>::ImplicitProducer::dequeue_bulk<galay::kernel::Coroutine*>(galay::kernel::Coroutine*&, unsigned long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x10284417c]  concurrentqueue.h:2782
+    +                       1 std::__atomic_base<unsigned long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x10282f408]  atomic_base.h:59
+    +                         1 std::__cxx_atomic_load[abi:ne190102]<unsigned long>(std::__cxx_atomic_base_impl<unsigned long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x10282f56c]  cxx_atomic_impl.h:315
+    4290 Thread_714834
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10283fe88]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102840178]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::KqueueScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::KqueueScheduler::start()::$_0>(galay::kernel::KqueueScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10284019c]  invoke.h:149
+    +           4290 galay::kernel::KqueueScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x102840210]  KqueueScheduler.cc:84
+    +             4290 galay::kernel::KqueueScheduler::eventLoop()  (in libgalay-kernel.1.0.0.dylib) + 212  [0x10283776c]  KqueueScheduler.cc:330
+    +               4290 kevent  (in libsystem_kernel.dylib) + 8  [0x1979dfd04]
+    4290 Thread_714835
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10283fe88]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102840178]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::KqueueScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::KqueueScheduler::start()::$_0>(galay::kernel::KqueueScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10284019c]  invoke.h:149
+    +           4290 galay::kernel::KqueueScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x102840210]  KqueueScheduler.cc:84
+    +             4290 galay::kernel::KqueueScheduler::eventLoop()  (in libgalay-kernel.1.0.0.dylib) + 212  [0x10283776c]  KqueueScheduler.cc:330
+    +               4290 kevent  (in libsystem_kernel.dylib) + 8  [0x1979dfd04]
+    4290 Thread_714836
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10283fe88]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::KqueueScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102840178]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::KqueueScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::KqueueScheduler::start()::$_0>(galay::kernel::KqueueScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10284019c]  invoke.h:149
+    +           4290 galay::kernel::KqueueScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x102840210]  KqueueScheduler.cc:84
+    +             4289 galay::kernel::KqueueScheduler::eventLoop()  (in libgalay-kernel.1.0.0.dylib) + 212  [0x10283776c]  KqueueScheduler.cc:330
+    +             ! 4289 kevent  (in libsystem_kernel.dylib) + 8  [0x1979dfd04]
+    +             1 galay::kernel::KqueueScheduler::eventLoop()  (in libgalay-kernel.1.0.0.dylib) + 148  [0x10283772c]  KqueueScheduler.cc:328
+    +               1 galay::kernel::KqueueScheduler::processPendingCoroutines()  (in libgalay-kernel.1.0.0.dylib) + 68  [0x102837540]  KqueueScheduler.cc:303
+    +                 1 moodycamel::ConcurrentQueue<galay::kernel::Coroutine, moodycamel::ConcurrentQueueDefaultTraits>::try_dequeue_bulk<galay::kernel::Coroutine*>(galay::kernel::Coroutine*, unsigned long)  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028375d8]  concurrentqueue.h:1234
+    +                   1 std::__atomic_base<moodycamel::ConcurrentQueue<galay::kernel::Coroutine, moodycamel::ConcurrentQueueDefaultTraits>::ProducerBase*, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x10283f87c]  atomic_base.h:59
+    4290 Thread_714837
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4289 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                   ! 4154 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                   ! : 4154 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                   ! :   4154 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                   ! 83 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                   ! : 72 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                   ! : | 57 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                   ! : | 9 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                   ! : | 5 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                   ! : | 1 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                   ! : 11 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 24,32  [0x102832190,0x102832198]  atomic_base.h:59
+    +                   ! 39 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                   ! : 30 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                   ! : | 17 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                   ! : | 7 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                   ! : | 6 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                   ! : 9 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 16,24  [0x1028328d8,0x1028328e0]  fence.h:24
+    +                   ! 10 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                   ! 2 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 348  [0x1028320e4]  lightweightsemaphore.h:306
+    +                   ! : 2 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                   ! :   2 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                   ! 1 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    +                   1 DYLD-STUB$$moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028533b0]
+    4290 Thread_714838
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4290 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                     4125 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                     ! 4125 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                     !   4125 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                     117 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                     ! 112 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                     ! : 74 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                     ! : 20 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                     ! : 12 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                     ! : 6 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                     ! 5 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+    +                     35 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                     ! 30 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                     ! : 16 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                     ! : 9 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                     ! : 5 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                     ! 5 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                     11 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831fb8]  lightweightsemaphore.h:282
+    +                     2 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    4290 Thread_714839
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4290 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                     4135 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                     ! 4134 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                     ! : 4134 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                     ! 1 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                     94 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                     ! 85 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                     ! : 65 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                     ! : 8 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                     ! : 6 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                     ! : 6 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                     ! 9 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+    +                     41 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                     ! 24 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                     ! : 11 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                     ! : 7 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                     ! : 6 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                     ! 17 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24,16  [0x1028328e0,0x1028328d8]  fence.h:24
+    +                     16 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                     3 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    +                     1 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    4290 Thread_714840
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4289 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                   ! 4142 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                   ! : 4142 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                   ! :   4142 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                   ! 93 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                   ! : 87 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                   ! : | 68 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                   ! : | 7 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                   ! : | 6 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                   ! : | 6 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                   ! : 6 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+    +                   ! 33 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                   ! : 27 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                   ! : | 14 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                   ! : | 7 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                   ! : | 6 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                   ! : 6 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                   ! 15 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                   ! 3 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    +                   ! 2 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 348  [0x1028320e4]  lightweightsemaphore.h:306
+    +                   ! : 2 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                   ! :   2 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                   ! 1 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                   1 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102831d04]  lightweightsemaphore.h:375
+    +                     1 moodycamel::LightweightSemaphore::tryWait()  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102831f0c]  lightweightsemaphore.h:359
+    +                       1 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                         1 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    4290 Thread_714841
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4289 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +               ! 4288 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +               ! : 4288 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +               ! :   4143 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +               ! :   | 4143 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +               ! :   |   4143 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +               ! :   96 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +               ! :   | 91 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +               ! :   | + 60 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +               ! :   | + 17 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +               ! :   | + 10 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +               ! :   | + 4 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +               ! :   | 5 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+    +               ! :   36 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +               ! :   | 30 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +               ! :   | + 14 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +               ! :   | + 12 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +               ! :   | + 4 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +               ! :   | 6 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24,16  [0x1028328e0,0x1028328d8]  fence.h:24
+    +               ! :   9 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +               ! :   3 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    +               ! :   1 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 348  [0x1028320e4]  lightweightsemaphore.h:306
+    +               ! :     1 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +               ! :       1 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +               ! 1 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +               1 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102828c18]  blockingconcurrentqueue.h:394
+    4290 Thread_714842
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4290 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                     4163 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                     ! 4163 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                     !   4163 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                     75 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                     ! 66 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                     ! : 45 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                     ! : 8 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                     ! : 7 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                     ! : 6 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                     ! 9 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 24,32  [0x102832190,0x102832198]  atomic_base.h:59
+    +                     35 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                     ! 22 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                     ! : 11 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                     ! : 7 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                     ! : 4 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                     ! 13 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24,16  [0x1028328e0,0x1028328d8]  fence.h:24
+    +                     13 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                     4 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    4290 Thread_714843
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4289 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                 ! 4289 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                 !   4150 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                 !   : 4149 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                 !   : | 4149 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                 !   : 1 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                 !   82 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                 !   : 69 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                 !   : | 47 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                 !   : | 12 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                 !   : | 7 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                 !   : | 3 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                 !   : 13 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+    +                 !   32 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                 !   : 22 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                 !   : | 10 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                 !   : | 6 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                 !   : | 6 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                 !   : 10 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 16,24  [0x1028328d8,0x1028328e0]  fence.h:24
+    +                 !   23 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                 !   1 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                 !   1 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    +                 1 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    4290 Thread_714844
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4290 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                     4136 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                     ! 4136 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                     !   4136 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                     97 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                     ! 90 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                     ! : 70 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                     ! : 11 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                     ! : 5 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                     ! : 4 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                     ! 7 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+    +                     30 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                     ! 21 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                     ! : 11 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                     ! : 7 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                     ! : 3 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                     ! 9 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 16,24  [0x1028328d8,0x1028328e0]  fence.h:24
+    +                     20 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                     5 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    +                     2 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    4290 Thread_714845
+    + 4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+    +   4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+    +     4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+    +       4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+    +         4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+    +           4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+    +             4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+    +               4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+    +                 4290 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+    +                   4290 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+    +                     4164 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+    +                     ! 4164 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+    +                     !   4164 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+    +                     83 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+    +                     ! 74 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+    +                     ! : 57 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+    +                     ! : 7 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x102832200]  cxx_atomic_impl.h:318
+    +                     ! : 5 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+    +                     ! : 5 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+    +                     ! 9 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 24,32  [0x102832190,0x102832198]  atomic_base.h:59
+    +                     31 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+    +                     ! 25 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+    +                     ! : 11 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+    +                     ! : 9 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+    +                     ! : 5 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+    +                     ! 6 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 16,24  [0x1028328d8,0x1028328e0]  fence.h:24
+    +                     10 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+    +                     2 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+    4290 Thread_714846
+      4290 thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+        4290 _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+          4290 std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+            4290 std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+              4290 decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+                4290 galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+                  4290 galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+                    4289 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+                    ! 4289 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+                    !   4289 moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+                    !     4156 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+                    !     : 4156 moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+                    !     :   4156 semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 8  [0x1979d9bc8]
+                    !     80 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+                    !     : 71 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+                    !     : | 62 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 108  [0x102832254]  cxx_atomic_impl.h:317
+                    !     : | 5 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+                    !     : | 4 std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 44  [0x102832214]  cxx_atomic_impl.h:0
+                    !     : 9 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32,24  [0x102832198,0x102832190]  atomic_base.h:59
+                    !     34 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+                    !     : 23 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+                    !     : | 10 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 12  [0x102833020]  cxx_atomic_impl.h:284
+                    !     : | 8 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 96  [0x102833074]  cxx_atomic_impl.h:285
+                    !     : | 5 std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+                    !     : 11 std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24,16  [0x1028328e0,0x1028328d8]  fence.h:24
+                    !     18 moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 48,40  [0x102831fb8,0x102831fb0]  lightweightsemaphore.h:282
+                    !     1 std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 40  [0x1028321a0]  atomic_base.h:59
+                    1 moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102828c48]  blockingconcurrentqueue.h:395
+                      1 std::chrono::duration_cast[abi:ne190102]<std::chrono::duration<long long, std::ratio<1l, 1000000l>>, long long, std::ratio<1l, 1000l>, 0>(std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x102831cb8]  duration.h:107
+                        1 std::chrono::__duration_cast<std::chrono::duration<long long, std::ratio<1l, 1000l>>, std::chrono::duration<long long, std::ratio<1l, 1000000l>>, std::ratio<1000l, 1l>, false, true>::operator()[abi:ne190102](std::chrono::duration<long long, std::ratio<1l, 1000l>> const&) const  (in libgalay-kernel.1.0.0.dylib) + 52  [0x10283384c]  duration.h:91
+
+Total number in stack (recursive counted multiple, when >=5):
+        20       std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102832178]  atomic_base.h:59
+        16       _pthread_start  (in libsystem_pthread.dylib) + 136  [0x197a1bbc8]
+        16       thread_start  (in libsystem_pthread.dylib) + 8  [0x197a16b80]
+        14       std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib) + 32  [0x102832198]  atomic_base.h:59
+        14       std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:317
+        10       decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x10282c490]  invoke.h:149
+        10       galay::kernel::ComputeScheduler::start()::$_0::operator()() const  (in libgalay-kernel.1.0.0.dylib) + 64  [0x10282c504]  ComputeScheduler.cc:25
+        10       galay::kernel::ComputeScheduler::workerLoop()  (in libgalay-kernel.1.0.0.dylib) + 92  [0x102828b30]  ComputeScheduler.cc:75
+        10       moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask, long long, std::ratio<1l, 1000l>>(galay::kernel::ComputeTask&, std::chrono::duration<long long, std::ratio<1l, 1000l>> const&)  (in libgalay-kernel.1.0.0.dylib) + 80  [0x102828c68]  blockingconcurrentqueue.h:395
+        10       moodycamel::BlockingConcurrentQueue<galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits>::wait_dequeue_timed<galay::kernel::ComputeTask>(galay::kernel::ComputeTask&, long long)  (in libgalay-kernel.1.0.0.dylib) + 48  [0x102831c3c]  blockingconcurrentqueue.h:379
+        10       moodycamel::LightweightSemaphore::wait(long long)  (in libgalay-kernel.1.0.0.dylib) + 60  [0x102831d20]  lightweightsemaphore.h:375
+        10       moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102831f88]  lightweightsemaphore.h:282
+        10       moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 156  [0x102832024]  lightweightsemaphore.h:287
+        10       moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 304  [0x1028320b8]  lightweightsemaphore.h:297
+        10       moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib) + 72  [0x102831fd0]  lightweightsemaphore.h:284
+        10       moodycamel::details::Semaphore::timed_wait(unsigned long long)  (in libgalay-kernel.1.0.0.dylib) + 92  [0x1028329ac]  lightweightsemaphore.h:153
+        10       semaphore_timedwait_trap  (in libsystem_kernel.dylib) + 0  [0x1979d9bc0]
+        10       std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:0
+        10       std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:315
+        10       std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:283
+        10       std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:284
+        10       std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x102833014]  cxx_atomic_impl.h:285
+        10       std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>)  (in libgalay-kernel.1.0.0.dylib) + 28  [0x10282c42c]  thread.h:198
+        10       std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*)  (in libgalay-kernel.1.0.0.dylib) + 84  [0x10282bd8c]  thread.h:207
+        10       std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028328c8]  fence.h:24
+        10       std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 24  [0x1028328e0]  fence.h:24
+        9       std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib) + 0  [0x1028321e8]  cxx_atomic_impl.h:318
+
+Sort by top of stack, same collapsed (when >= 5):
+        semaphore_timedwait_trap  (in libsystem_kernel.dylib)        41466
+        kevent  (in libsystem_kernel.dylib)        17158
+        __semwait_signal  (in libsystem_kernel.dylib)        8408
+        __psynch_cvwait  (in libsystem_kernel.dylib)        4290
+        std::__cxx_atomic_load[abi:ne190102]<long>(std::__cxx_atomic_base_impl<long> const*, std::memory_order)  (in libgalay-kernel.1.0.0.dylib)        823
+        std::__cxx_atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib)        254
+        moodycamel::LightweightSemaphore::waitWithPartialSpinning(long long)  (in libgalay-kernel.1.0.0.dylib)        150
+        std::__atomic_base<long, false>::load[abi:ne190102](std::memory_order) const  (in libgalay-kernel.1.0.0.dylib)        108
+        std::atomic_signal_fence[abi:ne190102](std::memory_order)  (in libgalay-kernel.1.0.0.dylib)        92
+        std::this_thread::sleep_for(std::chrono::duration<long long, std::ratio<1l, 1000000000l>> const&)  (in libc++.1.dylib)        92
+        mach_msg2_trap  (in libsystem_kernel.dylib)        28
+        galay::kernel::ThreadSafeTimerManager::processPendingTimers()  (in libgalay-kernel.1.0.0.dylib)        11
+        std::shared_ptr<galay::kernel::Timer>::shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib)        11
+        std::shared_ptr<galay::kernel::Timer>::~shared_ptr[abi:ne190102]()  (in libgalay-kernel.1.0.0.dylib)        10
+
+Binary Images:
+       0x102538000 -        0x10254033b +B1-HttpServer (0) <A9A34627-EBC5-396B-8970-57B56B5145C2> /Users/*/Desktop/*/B1-HttpServer
+       0x102574000 -        0x10257dfe3 +libgalay-ssl.1.0.0.dylib (0) <ACA5FCDA-37CF-30C9-B798-B073E6E41EB6> /usr/local/lib/libgalay-ssl.1.0.0.dylib
+       0x102728000 -        0x1027b74bf +libgalay-http.1.0.0.dylib (0) <055AA7F7-8C53-3949-91DC-663E1E86982A> /Users/*/Desktop/*/libgalay-http.1.0.0.dylib
+       0x102810000 -        0x102858a3b +libgalay-kernel.1.0.0.dylib (0) <42752700-3873-4617-BA2E-E3E12228C3D2> /usr/local/lib/libgalay-kernel.1.0.0.dylib
+       0x102910000 -        0x10299f3db +libssl.3.dylib (0) <75C023DD-F3C8-3787-9419-D1BFE1D4E69D> /opt/homebrew/*/libssl.3.dylib
+       0x102e6c000 -        0x103188e27 +libcrypto.3.dylib (0) <054BA906-EFE8-3158-B3FD-5A1A38A10F88> /opt/homebrew/*/libcrypto.3.dylib
+       0x197620000 -        0x197673893  libobjc.A.dylib (940.4) <E6F30EB4-FACF-3381-AE46-10E556F1FC39> /usr/lib/libobjc.A.dylib
+       0x197674000 -        0x19770f57b  dyld (1.0.0 - 1286.10) <E4E5CD37-5339-3136-B2C5-0C80F0720C26> /usr/lib/dyld
+       0x197710000 -        0x197713168  libsystem_blocks.dylib (96) <EFADF6A6-C85B-37E9-9514-8E7A1EBAC882> /usr/lib/system/libsystem_blocks.dylib
+       0x197714000 -        0x19775e8ff  libxpc.dylib (2894.140.12.700.1) <B7303BD5-2EAD-3A97-8419-5A1454C5E513> /usr/lib/system/libxpc.dylib
+       0x19775f000 -        0x19777a7ff  libsystem_trace.dylib (1643.120.5) <9DBBEE92-6C08-39F7-A05E-5054A79D28F6> /usr/lib/system/libsystem_trace.dylib
+       0x19777b000 -        0x1978193b7  libcorecrypto.dylib (1736.140.2) <00D81A3B-8152-35CF-B1AE-7364B4832072> /usr/lib/system/libcorecrypto.dylib
+       0x19781a000 -        0x19786106f  libsystem_malloc.dylib (715.140.5) <3CE1E59C-91C8-3259-93D8-7DED66842979> /usr/lib/system/libsystem_malloc.dylib
+       0x197862000 -        0x1978a875f  libdispatch.dylib (1521.140.2) <63A54CE1-2AB6-3673-82E4-D8489D811475> /usr/lib/system/libdispatch.dylib
+       0x1978a9000 -        0x1978abd1b  libsystem_featureflags.dylib (97) <9AF1C2C7-1C15-3F0E-9C0F-4524BD4EB4CF> /usr/lib/system/libsystem_featureflags.dylib
+       0x1978ac000 -        0x19792d1f7  libsystem_c.dylib (1698.140.3.700.2) <E098CB59-2C56-395C-ADE1-6EF590E61199> /usr/lib/system/libsystem_c.dylib
+       0x19792e000 -        0x1979baff7  libc++.1.dylib (1900.181) <EB94C9FE-91DA-3E9F-9C45-7B476FEAAEAE> /usr/lib/libc++.1.dylib
+       0x1979bb000 -        0x1979d8fff  libc++abi.dylib (1900.181) <BC670272-BF32-38AC-AE3F-F06EDA80BE30> /usr/lib/libc++abi.dylib
+       0x1979d9000 -        0x197a14663  libsystem_kernel.dylib (11417.140.69.705.2) <1D4FFD44-8926-3746-924E-DEEF5B777588> /usr/lib/system/libsystem_kernel.dylib
+       0x197a15000 -        0x197a21a77  libsystem_pthread.dylib (536.0.0.701.1) <022DC315-CF35-38DA-939E-03800B5BEFF2> /usr/lib/system/libsystem_pthread.dylib
+       0x197a22000 -        0x197a51ba3  libdyld.dylib (1286.10) <E4FE35C9-8AEE-3728-89B9-89A64239ED74> /usr/lib/system/libdyld.dylib
+       0x197a52000 -        0x197a59e0b  libsystem_platform.dylib (349.140.6) <C26E58A4-34A1-3F9C-BDBC-EBC34426633A> /usr/lib/system/libsystem_platform.dylib
+       0x197a5a000 -        0x197a89d83  libsystem_info.dylib (597.0.0.701.2) <3B2CAC89-F7B9-3111-9EB6-84A87EEBBAD7> /usr/lib/system/libsystem_info.dylib
+       0x19b51c000 -        0x19b526397  libsystem_darwin.dylib (1698.140.3.700.2) <62C85958-8310-3625-ADF0-DCD58D08BEB9> /usr/lib/system/libsystem_darwin.dylib
+       0x19b97e000 -        0x19b98ffeb  libsystem_notify.dylib (342) <CA2AAD14-C438-30E8-9699-5A947E2DF021> /usr/lib/system/libsystem_notify.dylib
+       0x19d981000 -        0x19d99be8f  libsystem_networkextension.dylib (2063.140.6) <5C0C1505-266B-3544-B970-BE347DAF2AAF> /usr/lib/system/libsystem_networkextension.dylib
+       0x19da18000 -        0x19da2ffdb  libsystem_asl.dylib (402) <0574F75C-FB20-3114-8C16-E17D821FFCBD> /usr/lib/system/libsystem_asl.dylib
+       0x19f575000 -        0x19f57d3a7  libsystem_symptoms.dylib (2022.140.4) <FDBF294D-E745-3E89-B474-DADA17135BEE> /usr/lib/system/libsystem_symptoms.dylib
+       0x1a2dc4000 -        0x1a2df447b  libsystem_containermanager.dylib (689.100.6.700.1) <33FB585C-7D34-3F5D-97A0-501C5FAC3F11> /usr/lib/system/libsystem_containermanager.dylib
+       0x1a402e000 -        0x1a40325df  libsystem_configuration.dylib (1351.140.5.700.1) <17DACC61-AB01-3605-B2C8-618E4781B649> /usr/lib/system/libsystem_configuration.dylib
+       0x1a4033000 -        0x1a40394ef  libsystem_sandbox.dylib (2401.140.15.700.3) <CDEA0D5C-056D-308C-8544-C36BA2B389B1> /usr/lib/system/libsystem_sandbox.dylib
+       0x1a503e000 -        0x1a5040fe3  libquarantine.dylib (181.120.2) <B274436C-379E-3E0F-B8E2-A7AA69E46E73> /usr/lib/system/libquarantine.dylib
+       0x1a5754000 -        0x1a575aee7  libsystem_coreservices.dylib (178.6.6) <985B59F1-7321-37D0-8182-27B82BD7D1B1> /usr/lib/system/libsystem_coreservices.dylib
+       0x1a5bd2000 -        0x1a5c0f2b7  libsystem_m.dylib (3291.100.4) <5F5F2F2E-557D-3441-8566-8B2009538753> /usr/lib/system/libsystem_m.dylib
+       0x1a5c11000 -        0x1a5c144e7  libmacho.dylib (1024.3) <CD255FF9-4E35-347A-B7E9-304517D3A871> /usr/lib/system/libmacho.dylib
+       0x1a5c2e000 -        0x1a5c3b5ef  libcommonCrypto.dylib (600035) <65A3AFCF-9611-35C1-9697-8CF5409F0C83> /usr/lib/system/libcommonCrypto.dylib
+       0x1a5c3c000 -        0x1a5c45ad7  libunwind.dylib (1900.125) <FA046DDB-1518-353B-A9B6-CD622328B746> /usr/lib/system/libunwind.dylib
+       0x1a5c4e000 -        0x1a5c5869f  libcopyfile.dylib (224) <459F7A49-1FEF-329E-8FC0-0A5FF6FBD902> /usr/lib/system/libcopyfile.dylib
+       0x1a5c59000 -        0x1a5c5c98f  libcompiler_rt.dylib (103.3) <7720A496-7B7A-33C1-B7F3-9E8B7DEA0622> /usr/lib/system/libcompiler_rt.dylib
+       0x1a5c5d000 -        0x1a5c61a1b  libsystem_collections.dylib (1698.140.3.700.2) <04F3AE1A-0F6D-3F68-84E0-EAFFBC0CE0A5> /usr/lib/system/libsystem_collections.dylib
+       0x1a5c62000 -        0x1a5c652c7  libsystem_secinit.dylib (153.140.2) <63965812-869C-3C3C-A950-FA563CE8EB1E> /usr/lib/system/libsystem_secinit.dylib
+       0x1a5c66000 -        0x1a5c68b6f  libremovefile.dylib (81) <E34EF2FA-1C55-3222-B1A2-CEEEC4B02F3D> /usr/lib/system/libremovefile.dylib
+       0x1a5c69000 -        0x1a5c69f27  libkeymgr.dylib (31) <EE1B8708-02B1-385D-B648-E87B4D25391B> /usr/lib/system/libkeymgr.dylib
+       0x1a5c6a000 -        0x1a5c72d57  libsystem_dnssd.dylib (2600.140.3) <EE79FBDA-E408-3D4C-A0EE-C56BE107CC06> /usr/lib/system/libsystem_dnssd.dylib
+       0x1a5c73000 -        0x1a5c780b3  libcache.dylib (95) <4242CCFB-F060-3493-B555-C26217B4F080> /usr/lib/system/libcache.dylib
+       0x1a5c79000 -        0x1a5c7aca3  libSystem.B.dylib (1351) <068263F7-CF15-3E1C-A305-5DF8F9C51AD5> /usr/lib/libSystem.B.dylib
+       0x27f07a000 -        0x27f081109  libRosetta.dylib (349) <CD13AF03-27E5-387A-8DF1-7016C957167A> /usr/lib/libRosetta.dylib
+       0x2804a5000 -        0x2804a8deb  libsystem_darwindirectory.dylib (122) <8627B2A8-CE68-3F9A-B3E8-2F4E4E35CF66> /usr/lib/system/libsystem_darwindirectory.dylib
+       0x2804a9000 -        0x2804b0523  libsystem_eligibility.dylib (181.140.5) <B76C1C04-8001-3113-BE6E-FDDEA1118104> /usr/lib/system/libsystem_eligibility.dylib
+       0x2804b1000 -        0x2804b66c5  libsystem_sanitizers.dylib (19) <6143DE0A-A328-3649-AF7D-8FC8781B86E7> /usr/lib/system/libsystem_sanitizers.dylib

@@ -2,6 +2,7 @@
 #define GALAY_WS_WRITER_H
 
 #include "WsWriterSetting.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/websocket/WebSocketError.h"
 #include "galay-kernel/kernel/Awaitable.h"
@@ -100,15 +101,16 @@ public:
 #else
         bool handleComplete(GHandle handle) override {
             while (m_owner->m_writer->getRemainingBytes() > 0) {
-                const auto& iovecs = m_owner->m_writer->getIovecsRef();
-                if (iovecs.empty()) {
+                const auto* iov_data = m_owner->m_writer->getIovecsData();
+                const auto iov_count = m_owner->m_writer->getIovecsCount();
+                if (iov_data == nullptr || iov_count == 0) {
                     m_owner->setSendError(WsError(kWsSendError, "No remaining iovec to write"));
                     return true;
                 }
 
                 auto result = galay::kernel::io::handleWritev(handle,
-                                                              const_cast<iovec*>(iovecs.data()),
-                                                              static_cast<int>(iovecs.size()));
+                                                              const_cast<iovec*>(iov_data),
+                                                              static_cast<int>(iov_count));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -132,10 +134,11 @@ public:
     private:
 #ifdef USE_IOURING
         void syncIovecs() {
-            const auto& src = m_owner->m_writer->getIovecsRef();
-            m_iovecs.resize(src.size());
-            if (!src.empty()) {
-                std::memcpy(m_iovecs.data(), src.data(), src.size() * sizeof(iovec));
+            const auto* src = m_owner->m_writer->getIovecsData();
+            const auto src_count = m_owner->m_writer->getIovecsCount();
+            m_iovecs.resize(src_count);
+            if (src != nullptr && src_count > 0) {
+                std::memcpy(m_iovecs.data(), src, src_count * sizeof(iovec));
             }
         }
 #endif
@@ -249,9 +252,7 @@ public:
         : m_setting(setting)
         , m_socket(&socket)
         , m_remaining_bytes(0)
-        , m_writev_offset(0)
     {
-        m_iovecs.reserve(2);
     }
 
     auto sendText(const std::string& text, bool fin = true) {
@@ -264,7 +265,7 @@ public:
 
     auto sendText(std::string&& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
-            WsFrame frame(WsOpcode::Text, std::move(text), fin);
+            WsFrame frame = WsFrameBuilder().text(std::move(text), fin).buildMove();
             prepareSendFrame(std::move(frame));
         }
         return makeSendAwaitable();
@@ -280,7 +281,7 @@ public:
 
     auto sendBinary(std::string&& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
-            WsFrame frame(WsOpcode::Binary, std::move(data), fin);
+            WsFrame frame = WsFrameBuilder().binary(std::move(data), fin).buildMove();
             prepareSendFrame(std::move(frame));
         }
         return makeSendAwaitable();
@@ -370,14 +371,15 @@ private:
             WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
         }
 
-        m_iovecs.clear();
-        m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+        std::vector<iovec> iovecs;
+        iovecs.reserve(2);
+        iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
         if (!m_payload_buffer.empty()) {
-            m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
+            iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
         }
 
-        m_remaining_bytes = m_buffer.size() + m_payload_buffer.size();
-        m_writev_offset = 0;
+        m_writev_cursor.reset(std::move(iovecs));
+        m_remaining_bytes = m_writev_cursor.remainingBytes();
     }
 
 public:
@@ -392,44 +394,28 @@ public:
     }
 
     void updateRemainingWritev(size_t bytes_sent) {
-        if (bytes_sent >= m_remaining_bytes) {
+        const size_t advanced = m_writev_cursor.advance(bytes_sent);
+        if (advanced >= m_remaining_bytes) {
             m_remaining_bytes = 0;
             m_buffer.clear();
             m_payload_buffer.clear();
-            m_iovecs.clear();
-            m_writev_offset = 0;
+            m_writev_cursor.reset(std::vector<iovec>{});
             return;
         }
 
-        m_remaining_bytes -= bytes_sent;
-        m_writev_offset += bytes_sent;
-
-        // 更新 iovec 数组，跳过已发送的部分
-        size_t offset = m_writev_offset;
-        m_iovecs.clear();
-
-        // 检查 header 是否已完全发送
-        if (offset < m_buffer.size()) {
-            // header 还有剩余
-            m_iovecs.push_back({const_cast<char*>(m_buffer.data()) + offset, m_buffer.size() - offset});
-            if (!m_payload_buffer.empty()) {
-                m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
-            }
-        } else {
-            // header 已完全发送，只剩 payload
-            size_t payload_offset = offset - m_buffer.size();
-            if (payload_offset < m_payload_buffer.size()) {
-                m_iovecs.push_back({const_cast<char*>(m_payload_buffer.data()) + payload_offset, m_payload_buffer.size() - payload_offset});
-            }
-        }
+        m_remaining_bytes -= advanced;
     }
 
     size_t getRemainingBytes() const {
         return m_remaining_bytes;
     }
 
-    const std::vector<iovec>& getIovecsRef() const {
-        return m_iovecs;
+    const iovec* getIovecsData() const {
+        return m_writev_cursor.data();
+    }
+
+    size_t getIovecsCount() const {
+        return m_writev_cursor.count();
     }
 
 private:
@@ -437,9 +423,8 @@ private:
     SocketType* m_socket;
     std::string m_buffer;           // 存储 header
     std::string m_payload_buffer;   // 存储 payload（用于 writev）
-    std::vector<iovec> m_iovecs;    // iovec 数组（用于 writev）
+    IoVecCursor m_writev_cursor;    // iovec 游标（用于 writev）
     size_t m_remaining_bytes;
-    size_t m_writev_offset;         // writev 偏移量
     uint8_t m_masking_key[4];       // 掩码密钥
 };
 

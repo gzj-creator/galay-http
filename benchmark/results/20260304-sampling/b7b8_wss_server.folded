@@ -1,0 +1,18 @@
+Thread_69161   DispatchQueue_1: com.apple.main-thread  (serial) 4876
+Thread_69163 4876
+Thread_69164 4876
+Thread_69165 4876
+Thread_69166 4876
+Thread_69167 4876
+Thread_69168 4876
+Thread_69169 4876
+Thread_69170 4876
+Thread_69171 4876
+Thread_69172 4876
+Thread_69173 4876
+Thread_69174 4876
+Thread_69175 4876
+Thread_69176 4876
+Thread_69177 4876
+Thread_69178;thread_start;_pthread_start;std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*);std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>);decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&);galay::kernel::ComputeScheduler::start()::$_0::operator()() const;galay::kernel::ComputeScheduler::workerLoop() 4875
+Thread_69178;thread_start;_pthread_start;std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*);std::__thread_execute[abi:ne190102]<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>(std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>&, std::__tuple_indices<>);decltype(std::declval<galay::kernel::ComputeScheduler::start()::$_0>()()) std::__invoke[abi:ne190102]<galay::kernel::ComputeScheduler::start()::$_0>(galay::kernel::ComputeScheduler::start()::$_0&&);galay::kernel::ComputeScheduler::start()::$_0::operator()() const;galay::kernel::ComputeScheduler::workerLoop() 1

@@ -20,8 +20,9 @@ namespace {
 
 class IovecCursor {
 public:
-    IovecCursor(const std::vector<iovec>& iovecs, size_t total_length)
+    IovecCursor(const iovec* iovecs, size_t iovec_count, size_t total_length)
         : m_iovecs(iovecs)
+        , m_iov_count(iovec_count)
         , m_total_length(total_length)
         , m_iov_index(0)
         , m_iov_offset(0)
@@ -46,7 +47,7 @@ public:
         size_t need = len;
 
         while (need > 0) {
-            if (m_iov_index >= m_iovecs.size()) {
+            if (m_iovecs == nullptr || m_iov_index >= m_iov_count) {
                 return false;
             }
 
@@ -79,7 +80,8 @@ public:
     }
 
 private:
-    const std::vector<iovec>& m_iovecs;
+    const iovec* m_iovecs;
+    size_t m_iov_count;
     size_t m_total_length;
     size_t m_iov_index;
     size_t m_iov_offset;
@@ -91,12 +93,18 @@ private:
 std::expected<size_t, WsError>
 WsFrameParser::fromIOVec(const std::vector<iovec>& iovecs, WsFrame& frame, bool is_server)
 {
-    const size_t total_length = getTotalLength(iovecs);
+    return fromIOVec(iovecs.data(), iovecs.size(), frame, is_server);
+}
+
+std::expected<size_t, WsError>
+WsFrameParser::fromIOVec(const struct iovec* iovecs, size_t iovec_count, WsFrame& frame, bool is_server)
+{
+    const size_t total_length = getTotalLength(iovecs, iovec_count);
     if (total_length < 2) {
         return std::unexpected(WsError(kWsIncomplete));
     }
 
-    IovecCursor cursor(iovecs, total_length);
+    IovecCursor cursor(iovecs, iovec_count, total_length);
     uint8_t byte1 = 0;
     uint8_t byte2 = 0;
 
@@ -344,14 +352,7 @@ std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, ui
 
 WsFrame WsFrameParser::createCloseFrame(WsCloseCode code, const std::string& reason)
 {
-    std::string payload;
-    // 关闭码（大端序）
-    payload.push_back((static_cast<uint16_t>(code) >> 8) & 0xFF);
-    payload.push_back(static_cast<uint16_t>(code) & 0xFF);
-    // 关闭原因
-    payload += reason;
-
-    return WsFrame(WsOpcode::Close, payload, true);
+    return WsFrameBuilder().close(code, reason).buildMove();
 }
 
 void WsFrameParser::applyMask(std::string& data, const uint8_t masking_key[4])
@@ -523,19 +524,24 @@ bool WsFrameParser::isValidUtf8(const std::string& data)
 
 size_t WsFrameParser::getTotalLength(const std::vector<iovec>& iovecs)
 {
-    if (iovecs.empty()) {
+    return getTotalLength(iovecs.data(), iovecs.size());
+}
+
+size_t WsFrameParser::getTotalLength(const struct iovec* iovecs, size_t iovec_count)
+{
+    if (iovecs == nullptr || iovec_count == 0) {
         return 0;
     }
-    if (iovecs.size() == 1) {
+    if (iovec_count == 1) {
         return iovecs[0].iov_len;
     }
-    if (iovecs.size() == 2) {
+    if (iovec_count == 2) {
         return iovecs[0].iov_len + iovecs[1].iov_len;
     }
 
     size_t total = 0;
-    for (const auto& iov : iovecs) {
-        total += iov.iov_len;
+    for (size_t i = 0; i < iovec_count; ++i) {
+        total += iovecs[i].iov_len;
     }
     return total;
 }

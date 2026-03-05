@@ -1,0 +1,18 @@
+Thread_74143   DispatchQueue_1: com.apple.main-thread  (serial) 4891
+Thread_74145 4891
+Thread_74146 4891
+Thread_74147 4891
+Thread_74148 4891
+Thread_74149 4891
+Thread_74150 4891
+Thread_74151 4891
+Thread_74152 4891
+Thread_74153 4891
+Thread_74154 4891
+Thread_74155 4891
+Thread_74156 4891
+Thread_74157 4891
+Thread_74158 4891
+Thread_74159 4891
+Thread_74160;thread_start;_pthread_start;std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*);galay::kernel::ComputeScheduler::workerLoop() 4884
+Thread_74160;thread_start;_pthread_start;std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, galay::kernel::ComputeScheduler::start()::$_0>>(void*);galay::kernel::ComputeScheduler::workerLoop() 7

@@ -1,0 +1,491 @@
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg version="1.1" width="1200" height="310" onload="init(evt)" viewBox="0 0 1200 310" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:fg="http://github.com/jonhoo/inferno"><!--Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples.--><!--NOTES: --><defs><linearGradient id="background" y1="0" y2="1" x1="0" x2="0"><stop stop-color="#eeeeee" offset="5%"/><stop stop-color="#eeeeb0" offset="95%"/></linearGradient></defs><style type="text/css">
+text { font-family:monospace; font-size:12px }
+#title { text-anchor:middle; font-size:17px; }
+#matched { text-anchor:end; }
+#search { text-anchor:end; opacity:0.1; cursor:pointer; }
+#search:hover, #search.show { opacity:1; }
+#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+#unzoom { cursor:pointer; }
+#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+.hide { display:none; }
+.parent { opacity:0.5; }
+</style><script type="text/ecmascript"><![CDATA[
+        var nametype = 'Function:';
+        var fontsize = 12;
+        var fontwidth = 0.59;
+        var xpad = 10;
+        var inverted = false;
+        var searchcolor = 'rgb(230,0,230)';
+        var fluiddrawing = true;
+        var truncate_text_right = false;
+    ]]><![CDATA["use strict";
+var details, searchbtn, unzoombtn, matchedtxt, svg, searching, frames, known_font_width;
+function init(evt) {
+    details = document.getElementById("details").firstChild;
+    searchbtn = document.getElementById("search");
+    unzoombtn = document.getElementById("unzoom");
+    matchedtxt = document.getElementById("matched");
+    svg = document.getElementsByTagName("svg")[0];
+    frames = document.getElementById("frames");
+    known_font_width = get_monospace_width(frames);
+    total_samples = parseInt(frames.attributes.total_samples.value);
+    searching = 0;
+
+    // Use GET parameters to restore a flamegraph's state.
+    var restore_state = function() {
+        var params = get_params();
+        if (params.x && params.y)
+            zoom(find_group(document.querySelector('[*|x="' + params.x + '"][y="' + params.y + '"]')));
+        if (params.s)
+            search(params.s);
+    };
+
+    if (fluiddrawing) {
+        // Make width dynamic so the SVG fits its parent's width.
+        svg.removeAttribute("width");
+        // Edge requires us to have a viewBox that gets updated with size changes.
+        var isEdge = /Edge\/\d./i.test(navigator.userAgent);
+        if (!isEdge) {
+            svg.removeAttribute("viewBox");
+        }
+        var update_for_width_change = function() {
+            if (isEdge) {
+                svg.attributes.viewBox.value = "0 0 " + svg.width.baseVal.value + " " + svg.height.baseVal.value;
+            }
+
+            // Keep consistent padding on left and right of frames container.
+            frames.attributes.width.value = svg.width.baseVal.value - xpad * 2;
+
+            // Text truncation needs to be adjusted for the current width.
+            update_text_for_elements(frames.children);
+
+            // Keep search elements at a fixed distance from right edge.
+            var svgWidth = svg.width.baseVal.value;
+            searchbtn.attributes.x.value = svgWidth - xpad;
+            matchedtxt.attributes.x.value = svgWidth - xpad;
+        };
+        window.addEventListener('resize', function() {
+            update_for_width_change();
+        });
+        // This needs to be done asynchronously for Safari to work.
+        setTimeout(function() {
+            unzoom();
+            update_for_width_change();
+            restore_state();
+        }, 0);
+    } else {
+        restore_state();
+    }
+}
+// event listeners
+window.addEventListener("click", function(e) {
+    var target = find_group(e.target);
+    if (target) {
+        if (target.nodeName == "a") {
+            if (e.ctrlKey === false) return;
+            e.preventDefault();
+        }
+        if (target.classList.contains("parent")) unzoom();
+        zoom(target);
+
+        // set parameters for zoom state
+        var el = target.querySelector("rect");
+        if (el && el.attributes && el.attributes.y && el.attributes["fg:x"]) {
+            var params = get_params()
+            params.x = el.attributes["fg:x"].value;
+            params.y = el.attributes.y.value;
+            history.replaceState(null, null, parse_params(params));
+        }
+    }
+    else if (e.target.id == "unzoom") {
+        unzoom();
+
+        // remove zoom state
+        var params = get_params();
+        if (params.x) delete params.x;
+        if (params.y) delete params.y;
+        history.replaceState(null, null, parse_params(params));
+    }
+    else if (e.target.id == "search") search_prompt();
+}, false)
+// mouse-over for info
+// show
+window.addEventListener("mouseover", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = nametype + " " + g_to_text(target);
+}, false)
+// clear
+window.addEventListener("mouseout", function(e) {
+    var target = find_group(e.target);
+    if (target) details.nodeValue = ' ';
+}, false)
+// ctrl-F for search
+window.addEventListener("keydown",function (e) {
+    if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+        e.preventDefault();
+        search_prompt();
+    }
+}, false)
+// functions
+function get_params() {
+    var params = {};
+    var paramsarr = window.location.search.substr(1).split('&');
+    for (var i = 0; i < paramsarr.length; ++i) {
+        var tmp = paramsarr[i].split("=");
+        if (!tmp[0] || !tmp[1]) continue;
+        params[tmp[0]]  = decodeURIComponent(tmp[1]);
+    }
+    return params;
+}
+function parse_params(params) {
+    var uri = "?";
+    for (var key in params) {
+        uri += key + '=' + encodeURIComponent(params[key]) + '&';
+    }
+    if (uri.slice(-1) == "&")
+        uri = uri.substring(0, uri.length - 1);
+    if (uri == '?')
+        uri = window.location.href.split('?')[0];
+    return uri;
+}
+function find_child(node, selector) {
+    var children = node.querySelectorAll(selector);
+    if (children.length) return children[0];
+    return;
+}
+function find_group(node) {
+    var parent = node.parentElement;
+    if (!parent) return;
+    if (parent.id == "frames") return node;
+    return find_group(parent);
+}
+function orig_save(e, attr, val) {
+    if (e.attributes["fg:orig_" + attr] != undefined) return;
+    if (e.attributes[attr] == undefined) return;
+    if (val == undefined) val = e.attributes[attr].value;
+    e.setAttribute("fg:orig_" + attr, val);
+}
+function orig_load(e, attr) {
+    if (e.attributes["fg:orig_"+attr] == undefined) return;
+    e.attributes[attr].value = e.attributes["fg:orig_" + attr].value;
+    e.removeAttribute("fg:orig_" + attr);
+}
+function g_to_text(e) {
+    var text = find_child(e, "title").firstChild.nodeValue;
+    return (text)
+}
+function g_to_func(e) {
+    var func = g_to_text(e);
+    // if there's any manipulation we want to do to the function
+    // name before it's searched, do it here before returning.
+    return (func);
+}
+function get_monospace_width(frames) {
+    // Given the id="frames" element, return the width of text characters if
+    // this is a monospace font, otherwise return 0.
+    text = find_child(frames.children[0], "text");
+    originalContent = text.textContent;
+    text.textContent = "!";
+    bangWidth = text.getComputedTextLength();
+    text.textContent = "W";
+    wWidth = text.getComputedTextLength();
+    text.textContent = originalContent;
+    if (bangWidth === wWidth) {
+        return bangWidth;
+    } else {
+        return 0;
+    }
+}
+function update_text_for_elements(elements) {
+    // In order to render quickly in the browser, you want to do one pass of
+    // reading attributes, and one pass of mutating attributes. See
+    // https://web.dev/avoid-large-complex-layouts-and-layout-thrashing/ for details.
+
+    // Fall back to inefficient calculation, if we're variable-width font.
+    // TODO This should be optimized somehow too.
+    if (known_font_width === 0) {
+        for (var i = 0; i < elements.length; i++) {
+            update_text(elements[i]);
+        }
+        return;
+    }
+
+    var textElemNewAttributes = [];
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var r = find_child(e, "rect");
+        var t = find_child(e, "text");
+        var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+        var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+        var newX = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+        // Smaller than this size won't fit anything
+        if (w < 2 * known_font_width) {
+            textElemNewAttributes.push([newX, ""]);
+            continue;
+        }
+
+        // Fit in full text width
+        if (txt.length * known_font_width < w) {
+            textElemNewAttributes.push([newX, txt]);
+            continue;
+        }
+
+        var substringLength = Math.floor(w / known_font_width) - 2;
+        if (truncate_text_right) {
+            // Truncate the right side of the text.
+            textElemNewAttributes.push([newX, txt.substring(0, substringLength) + ".."]);
+            continue;
+        } else {
+            // Truncate the left side of the text.
+            textElemNewAttributes.push([newX, ".." + txt.substring(txt.length - substringLength, txt.length)]);
+            continue;
+        }
+    }
+
+    console.assert(textElemNewAttributes.length === elements.length, "Resize failed, please file a bug at https://github.com/jonhoo/inferno/");
+
+    // Now that we know new textContent, set it all in one go so we don't refresh a bazillion times.
+    for (var i = 0; i < elements.length; i++) {
+        var e = elements[i];
+        var values = textElemNewAttributes[i];
+        var t = find_child(e, "text");
+        t.attributes.x.value = values[0];
+        t.textContent = values[1];
+    }
+}
+
+function update_text(e) {
+    var r = find_child(e, "rect");
+    var t = find_child(e, "text");
+    var w = parseFloat(r.attributes.width.value) * frames.attributes.width.value / 100 - 3;
+    var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+    t.attributes.x.value = format_percent((parseFloat(r.attributes.x.value) + (100 * 3 / frames.attributes.width.value)));
+
+    // Smaller than this size won't fit anything
+    if (w < 2 * fontsize * fontwidth) {
+        t.textContent = "";
+        return;
+    }
+    t.textContent = txt;
+    // Fit in full text width
+    if (t.getComputedTextLength() < w)
+        return;
+    if (truncate_text_right) {
+        // Truncate the right side of the text.
+        for (var x = txt.length - 2; x > 0; x--) {
+            if (t.getSubStringLength(0, x + 2) <= w) {
+                t.textContent = txt.substring(0, x) + "..";
+                return;
+            }
+        }
+    } else {
+        // Truncate the left side of the text.
+        for (var x = 2; x < txt.length; x++) {
+            if (t.getSubStringLength(x - 2, txt.length) <= w) {
+                t.textContent = ".." + txt.substring(x, txt.length);
+                return;
+            }
+        }
+    }
+    t.textContent = "";
+}
+// zoom
+function zoom_reset(e) {
+    if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * parseInt(e.attributes["fg:x"].value) / total_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / total_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_reset(c[i]);
+    }
+}
+function zoom_child(e, x, zoomed_width_samples) {
+    if (e.tagName == "text") {
+        var parent_x = parseFloat(find_child(e.parentNode, "rect[x]").attributes.x.value);
+        e.attributes.x.value = format_percent(parent_x + (100 * 3 / frames.attributes.width.value));
+    } else if (e.tagName == "rect") {
+        e.attributes.x.value = format_percent(100 * (parseInt(e.attributes["fg:x"].value) - x) / zoomed_width_samples);
+        e.attributes.width.value = format_percent(100 * parseInt(e.attributes["fg:w"].value) / zoomed_width_samples);
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_child(c[i], x, zoomed_width_samples);
+    }
+}
+function zoom_parent(e) {
+    if (e.attributes) {
+        if (e.attributes.x != undefined) {
+            e.attributes.x.value = "0.0%";
+        }
+        if (e.attributes.width != undefined) {
+            e.attributes.width.value = "100.0%";
+        }
+    }
+    if (e.childNodes == undefined) return;
+    for(var i = 0, c = e.childNodes; i < c.length; i++) {
+        zoom_parent(c[i]);
+    }
+}
+function zoom(node) {
+    var attr = find_child(node, "rect").attributes;
+    var width = parseInt(attr["fg:w"].value);
+    var xmin = parseInt(attr["fg:x"].value);
+    var xmax = xmin + width;
+    var ymin = parseFloat(attr.y.value);
+    unzoombtn.classList.remove("hide");
+    var el = frames.children;
+    var to_update_text = [];
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        var a = find_child(e, "rect").attributes;
+        var ex = parseInt(a["fg:x"].value);
+        var ew = parseInt(a["fg:w"].value);
+        // Is it an ancestor
+        if (!inverted) {
+            var upstack = parseFloat(a.y.value) > ymin;
+        } else {
+            var upstack = parseFloat(a.y.value) < ymin;
+        }
+        if (upstack) {
+            // Direct ancestor
+            if (ex <= xmin && (ex+ew) >= xmax) {
+                e.classList.add("parent");
+                zoom_parent(e);
+                to_update_text.push(e);
+            }
+            // not in current path
+            else
+                e.classList.add("hide");
+        }
+        // Children maybe
+        else {
+            // no common path
+            if (ex < xmin || ex >= xmax) {
+                e.classList.add("hide");
+            }
+            else {
+                zoom_child(e, xmin, width);
+                to_update_text.push(e);
+            }
+        }
+    }
+    update_text_for_elements(to_update_text);
+}
+function unzoom() {
+    unzoombtn.classList.add("hide");
+    var el = frames.children;
+    for(var i = 0; i < el.length; i++) {
+        el[i].classList.remove("parent");
+        el[i].classList.remove("hide");
+        zoom_reset(el[i]);
+    }
+    update_text_for_elements(el);
+}
+// search
+function reset_search() {
+    var el = document.querySelectorAll("#frames rect");
+    for (var i = 0; i < el.length; i++) {
+        orig_load(el[i], "fill")
+    }
+    var params = get_params();
+    delete params.s;
+    history.replaceState(null, null, parse_params(params));
+}
+function search_prompt() {
+    if (!searching) {
+        var term = prompt("Enter a search term (regexp " +
+            "allowed, eg: ^ext4_)", "");
+        if (term != null) {
+            search(term)
+        }
+    } else {
+        reset_search();
+        searching = 0;
+        searchbtn.classList.remove("show");
+        searchbtn.firstChild.nodeValue = "Search"
+        matchedtxt.classList.add("hide");
+        matchedtxt.firstChild.nodeValue = ""
+    }
+}
+function search(term) {
+    var re = new RegExp(term);
+    var el = frames.children;
+    var matches = new Object();
+    var maxwidth = 0;
+    for (var i = 0; i < el.length; i++) {
+        var e = el[i];
+        // Skip over frames which are either not visible, or below the zoomed-to frame
+        if (e.classList.contains("hide") || e.classList.contains("parent")) {
+            continue;
+        }
+        var func = g_to_func(e);
+        var rect = find_child(e, "rect");
+        if (func == null || rect == null)
+            continue;
+        // Save max width. Only works as we have a root frame
+        var w = parseInt(rect.attributes["fg:w"].value);
+        if (w > maxwidth)
+            maxwidth = w;
+        if (func.match(re)) {
+            // highlight
+            var x = parseInt(rect.attributes["fg:x"].value);
+            orig_save(rect, "fill");
+            rect.attributes.fill.value = searchcolor;
+            // remember matches
+            if (matches[x] == undefined) {
+                matches[x] = w;
+            } else {
+                if (w > matches[x]) {
+                    // overwrite with parent
+                    matches[x] = w;
+                }
+            }
+            searching = 1;
+        }
+    }
+    if (!searching)
+        return;
+    var params = get_params();
+    params.s = term;
+    history.replaceState(null, null, parse_params(params));
+
+    searchbtn.classList.add("show");
+    searchbtn.firstChild.nodeValue = "Reset Search";
+    // calculate percent matched, excluding vertical overlap
+    var count = 0;
+    var lastx = -1;
+    var lastw = 0;
+    var keys = Array();
+    for (k in matches) {
+        if (matches.hasOwnProperty(k))
+            keys.push(k);
+    }
+    // sort the matched frames by their x location
+    // ascending, then width descending
+    keys.sort(function(a, b){
+        return a - b;
+    });
+    // Step through frames saving only the biggest bottom-up frames
+    // thanks to the sort order. This relies on the tree property
+    // where children are always smaller than their parents.
+    for (var k in keys) {
+        var x = parseInt(keys[k]);
+        var w = matches[keys[k]];
+        if (x >= lastx + lastw) {
+            count += w;
+            lastx = x;
+            lastw = w;
+        }
+    }
+    // display matched percent
+    matchedtxt.classList.remove("hide");
+    var pct = 100 * count / maxwidth;
+    if (pct != 100) pct = pct.toFixed(1);
+    matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+}
+function format_percent(n) {
+    return n.toFixed(4) + "%";
+}
+]]></script><rect x="0" y="0" width="100%" height="310" fill="url(#background)"/><text id="title" fill="rgb(0,0,0)" x="50.0000%" y="24.00">Flame Graph</text><text id="details" fill="rgb(0,0,0)" x="10" y="293.00"> </text><text id="unzoom" class="hide" fill="rgb(0,0,0)" x="10" y="24.00">Reset Zoom</text><text id="search" fill="rgb(0,0,0)" x="1190" y="24.00">Search</text><text id="matched" fill="rgb(0,0,0)" x="1190" y="293.00"> </text><svg id="frames" x="10" width="1180" total_samples="41245"><g><title>libgalay-kernel.1.0.0`galay::kernel::ThreadSafeTimerManager::tick (11 samples, 0.03%)</title><rect x="0.0000%" y="117" width="0.0267%" height="15" fill="rgb(227,0,7)" fg:x="0" fg:w="11"/><text x="0.2500%" y="127.50"></text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ThreadSafeTimerManager::processPendingTimers (11 samples, 0.03%)</title><rect x="0.0000%" y="101" width="0.0267%" height="15" fill="rgb(217,0,24)" fg:x="0" fg:w="11"/><text x="0.2500%" y="111.50"></text></g><g><title>libc++.1`std::this_thread::sleep_for (46 samples, 0.11%)</title><rect x="0.0315%" y="101" width="0.1115%" height="15" fill="rgb(221,193,54)" fg:x="13" fg:w="46"/><text x="0.2815%" y="111.50"></text></g><g><title>libsystem_c`nanosleep (44 samples, 0.11%)</title><rect x="0.0364%" y="85" width="0.1067%" height="15" fill="rgb(248,212,6)" fg:x="15" fg:w="44"/><text x="0.2864%" y="95.50"></text></g><g><title>libsystem_kernel`clock_get_time (39 samples, 0.09%)</title><rect x="0.0485%" y="69" width="0.0946%" height="15" fill="rgb(208,68,35)" fg:x="20" fg:w="39"/><text x="0.2985%" y="79.50"></text></g><g><title>libsystem_kernel`mach_msg2_internal (37 samples, 0.09%)</title><rect x="0.0533%" y="53" width="0.0897%" height="15" fill="rgb(232,128,0)" fg:x="22" fg:w="37"/><text x="0.3033%" y="63.50"></text></g><g><title>libsystem_kernel`mach_msg2_trap (37 samples, 0.09%)</title><rect x="0.0533%" y="37" width="0.0897%" height="15" fill="rgb(207,160,47)" fg:x="22" fg:w="37"/><text x="0.3033%" y="47.50"></text></g><g><title>Thread_144740 (61 samples, 0.15%)</title><rect x="0.0000%" y="245" width="0.1479%" height="15" fill="rgb(228,23,34)" fg:x="0" fg:w="61"/><text x="0.2500%" y="255.50"></text></g><g><title>libsystem_pthread`thread_start (61 samples, 0.15%)</title><rect x="0.0000%" y="229" width="0.1479%" height="15" fill="rgb(218,30,26)" fg:x="0" fg:w="61"/><text x="0.2500%" y="239.50"></text></g><g><title>libsystem_pthread`_pthread_start (61 samples, 0.15%)</title><rect x="0.0000%" y="213" width="0.1479%" height="15" fill="rgb(220,122,19)" fg:x="0" fg:w="61"/><text x="0.2500%" y="223.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::TimerScheduler::start (61 samples, 0.15%)</title><rect x="0.0000%" y="197" width="0.1479%" height="15" fill="rgb(250,228,42)" fg:x="0" fg:w="61"/><text x="0.2500%" y="207.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::TimerScheduler::start (61 samples, 0.15%)</title><rect x="0.0000%" y="181" width="0.1479%" height="15" fill="rgb(240,193,28)" fg:x="0" fg:w="61"/><text x="0.2500%" y="191.50"></text></g><g><title>libgalay-kernel.1.0.0`decltype (61 samples, 0.15%)</title><rect x="0.0000%" y="165" width="0.1479%" height="15" fill="rgb(216,20,37)" fg:x="0" fg:w="61"/><text x="0.2500%" y="175.50"></text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::TimerScheduler::start (61 samples, 0.15%)</title><rect x="0.0000%" y="149" width="0.1479%" height="15" fill="rgb(206,188,39)" fg:x="0" fg:w="61"/><text x="0.2500%" y="159.50"></text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::TimerScheduler::timerLoop (61 samples, 0.15%)</title><rect x="0.0000%" y="133" width="0.1479%" height="15" fill="rgb(217,207,13)" fg:x="0" fg:w="61"/><text x="0.2500%" y="143.50"></text></g><g><title>libgalay-kernel.1.0.0`std::this_thread::sleep_for[abi:ne190102]&lt;long long, std::ratio&lt;1l, 1000l&gt;&gt; (49 samples, 0.12%)</title><rect x="0.0291%" y="117" width="0.1188%" height="15" fill="rgb(231,73,38)" fg:x="12" fg:w="49"/><text x="0.2791%" y="127.50"></text></g><g><title>Thread_144741 (44 samples, 0.11%)</title><rect x="0.1479%" y="245" width="0.1067%" height="15" fill="rgb(225,20,46)" fg:x="61" fg:w="44"/><text x="0.3979%" y="255.50"></text></g><g><title>libsystem_pthread`thread_start (44 samples, 0.11%)</title><rect x="0.1479%" y="229" width="0.1067%" height="15" fill="rgb(210,31,41)" fg:x="61" fg:w="44"/><text x="0.3979%" y="239.50"></text></g><g><title>libsystem_pthread`_pthread_start (44 samples, 0.11%)</title><rect x="0.1479%" y="213" width="0.1067%" height="15" fill="rgb(221,200,47)" fg:x="61" fg:w="44"/><text x="0.3979%" y="223.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::KqueueScheduler::start (44 samples, 0.11%)</title><rect x="0.1479%" y="197" width="0.1067%" height="15" fill="rgb(226,26,5)" fg:x="61" fg:w="44"/><text x="0.3979%" y="207.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::KqueueScheduler::start (44 samples, 0.11%)</title><rect x="0.1479%" y="181" width="0.1067%" height="15" fill="rgb(249,33,26)" fg:x="61" fg:w="44"/><text x="0.3979%" y="191.50"></text></g><g><title>libgalay-kernel.1.0.0`decltype (44 samples, 0.11%)</title><rect x="0.1479%" y="165" width="0.1067%" height="15" fill="rgb(235,183,28)" fg:x="61" fg:w="44"/><text x="0.3979%" y="175.50"></text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::KqueueScheduler::start (44 samples, 0.11%)</title><rect x="0.1479%" y="149" width="0.1067%" height="15" fill="rgb(221,5,38)" fg:x="61" fg:w="44"/><text x="0.3979%" y="159.50"></text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::KqueueScheduler::eventLoop (44 samples, 0.11%)</title><rect x="0.1479%" y="133" width="0.1067%" height="15" fill="rgb(247,18,42)" fg:x="61" fg:w="44"/><text x="0.3979%" y="143.50"></text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::KqueueScheduler::processPendingCoroutines (44 samples, 0.11%)</title><rect x="0.1479%" y="117" width="0.1067%" height="15" fill="rgb(241,131,45)" fg:x="61" fg:w="44"/><text x="0.3979%" y="127.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,088 samples, 9.91%)</title><rect x="0.2909%" y="53" width="9.9115%" height="15" fill="rgb(249,31,29)" fg:x="120" fg:w="4088"/><text x="0.5409%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,088 samples, 9.91%)</title><rect x="0.2909%" y="37" width="9.9115%" height="15" fill="rgb(225,111,53)" fg:x="120" fg:w="4088"/><text x="0.5409%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (11 samples, 0.03%)</title><rect x="10.2024%" y="53" width="0.0267%" height="15" fill="rgb(238,160,17)" fg:x="4208" fg:w="11"/><text x="10.4524%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,124 samples, 10.00%)</title><rect x="0.2643%" y="69" width="9.9988%" height="15" fill="rgb(214,148,48)" fg:x="109" fg:w="4124"/><text x="0.5143%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (13 samples, 0.03%)</title><rect x="10.2315%" y="53" width="0.0315%" height="15" fill="rgb(232,36,49)" fg:x="4220" fg:w="13"/><text x="10.4815%" y="63.50"></text></g><g><title>Thread_144745 (4,127 samples, 10.01%)</title><rect x="0.2594%" y="245" width="10.0061%" height="15" fill="rgb(209,103,24)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="255.50">Thread_144745</text></g><g><title>libsystem_pthread`thread_start (4,127 samples, 10.01%)</title><rect x="0.2594%" y="229" width="10.0061%" height="15" fill="rgb(229,88,8)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,127 samples, 10.01%)</title><rect x="0.2594%" y="213" width="10.0061%" height="15" fill="rgb(213,181,19)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,127 samples, 10.01%)</title><rect x="0.2594%" y="197" width="10.0061%" height="15" fill="rgb(254,191,54)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,127 samples, 10.01%)</title><rect x="0.2594%" y="181" width="10.0061%" height="15" fill="rgb(241,83,37)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,127 samples, 10.01%)</title><rect x="0.2594%" y="165" width="10.0061%" height="15" fill="rgb(233,36,39)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,127 samples, 10.01%)</title><rect x="0.2594%" y="149" width="10.0061%" height="15" fill="rgb(226,3,54)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,127 samples, 10.01%)</title><rect x="0.2594%" y="133" width="10.0061%" height="15" fill="rgb(245,192,40)" fg:x="107" fg:w="4127"/><text x="0.5094%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,126 samples, 10.00%)</title><rect x="0.2618%" y="117" width="10.0036%" height="15" fill="rgb(238,167,29)" fg:x="108" fg:w="4126"/><text x="0.5118%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,126 samples, 10.00%)</title><rect x="0.2618%" y="101" width="10.0036%" height="15" fill="rgb(232,182,51)" fg:x="108" fg:w="4126"/><text x="0.5118%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,125 samples, 10.00%)</title><rect x="0.2643%" y="85" width="10.0012%" height="15" fill="rgb(231,60,39)" fg:x="109" fg:w="4125"/><text x="0.5143%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,058 samples, 9.84%)</title><rect x="10.3164%" y="53" width="9.8388%" height="15" fill="rgb(208,69,12)" fg:x="4255" fg:w="4058"/><text x="10.5664%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,058 samples, 9.84%)</title><rect x="10.3164%" y="37" width="9.8388%" height="15" fill="rgb(235,93,37)" fg:x="4255" fg:w="4058"/><text x="10.5664%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (15 samples, 0.04%)</title><rect x="20.1552%" y="53" width="0.0364%" height="15" fill="rgb(213,116,39)" fg:x="8313" fg:w="15"/><text x="20.4052%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,108 samples, 9.96%)</title><rect x="10.2679%" y="69" width="9.9600%" height="15" fill="rgb(222,207,29)" fg:x="4235" fg:w="4108"/><text x="10.5179%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (15 samples, 0.04%)</title><rect x="20.1915%" y="53" width="0.0364%" height="15" fill="rgb(206,96,30)" fg:x="8328" fg:w="15"/><text x="20.4415%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_signal_fence[abi:ne190102] (5 samples, 0.01%)</title><rect x="20.2158%" y="37" width="0.0121%" height="15" fill="rgb(218,138,4)" fg:x="8338" fg:w="5"/><text x="20.4658%" y="47.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,109 samples, 9.96%)</title><rect x="10.2679%" y="117" width="9.9624%" height="15" fill="rgb(250,191,14)" fg:x="4235" fg:w="4109"/><text x="10.5179%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,109 samples, 9.96%)</title><rect x="10.2679%" y="101" width="9.9624%" height="15" fill="rgb(239,60,40)" fg:x="4235" fg:w="4109"/><text x="10.5179%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,109 samples, 9.96%)</title><rect x="10.2679%" y="85" width="9.9624%" height="15" fill="rgb(206,27,48)" fg:x="4235" fg:w="4109"/><text x="10.5179%" y="95.50">libgalay-kerne..</text></g><g><title>Thread_144746 (4,111 samples, 9.97%)</title><rect x="10.2655%" y="245" width="9.9673%" height="15" fill="rgb(225,35,8)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="255.50">Thread_144746</text></g><g><title>libsystem_pthread`thread_start (4,111 samples, 9.97%)</title><rect x="10.2655%" y="229" width="9.9673%" height="15" fill="rgb(250,213,24)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,111 samples, 9.97%)</title><rect x="10.2655%" y="213" width="9.9673%" height="15" fill="rgb(247,123,22)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,111 samples, 9.97%)</title><rect x="10.2655%" y="197" width="9.9673%" height="15" fill="rgb(231,138,38)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,111 samples, 9.97%)</title><rect x="10.2655%" y="181" width="9.9673%" height="15" fill="rgb(231,145,46)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,111 samples, 9.97%)</title><rect x="10.2655%" y="165" width="9.9673%" height="15" fill="rgb(251,118,11)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,111 samples, 9.97%)</title><rect x="10.2655%" y="149" width="9.9673%" height="15" fill="rgb(217,147,25)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,111 samples, 9.97%)</title><rect x="10.2655%" y="133" width="9.9673%" height="15" fill="rgb(247,81,37)" fg:x="4234" fg:w="4111"/><text x="10.5155%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,086 samples, 9.91%)</title><rect x="20.2715%" y="53" width="9.9067%" height="15" fill="rgb(209,12,38)" fg:x="8361" fg:w="4086"/><text x="20.5215%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,086 samples, 9.91%)</title><rect x="20.2715%" y="37" width="9.9067%" height="15" fill="rgb(227,1,9)" fg:x="8361" fg:w="4086"/><text x="20.5215%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (7 samples, 0.02%)</title><rect x="30.1782%" y="53" width="0.0170%" height="15" fill="rgb(248,47,43)" fg:x="12447" fg:w="7"/><text x="30.4282%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,120 samples, 9.99%)</title><rect x="20.2352%" y="85" width="9.9891%" height="15" fill="rgb(221,10,30)" fg:x="8346" fg:w="4120"/><text x="20.4852%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,120 samples, 9.99%)</title><rect x="20.2352%" y="69" width="9.9891%" height="15" fill="rgb(210,229,1)" fg:x="8346" fg:w="4120"/><text x="20.4852%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (12 samples, 0.03%)</title><rect x="30.1952%" y="53" width="0.0291%" height="15" fill="rgb(222,148,37)" fg:x="12454" fg:w="12"/><text x="30.4452%" y="63.50"></text></g><g><title>Thread_144747 (4,122 samples, 9.99%)</title><rect x="20.2328%" y="245" width="9.9939%" height="15" fill="rgb(234,67,33)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="255.50">Thread_144747</text></g><g><title>libsystem_pthread`thread_start (4,122 samples, 9.99%)</title><rect x="20.2328%" y="229" width="9.9939%" height="15" fill="rgb(247,98,35)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,122 samples, 9.99%)</title><rect x="20.2328%" y="213" width="9.9939%" height="15" fill="rgb(247,138,52)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,122 samples, 9.99%)</title><rect x="20.2328%" y="197" width="9.9939%" height="15" fill="rgb(213,79,30)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,122 samples, 9.99%)</title><rect x="20.2328%" y="181" width="9.9939%" height="15" fill="rgb(246,177,23)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,122 samples, 9.99%)</title><rect x="20.2328%" y="165" width="9.9939%" height="15" fill="rgb(230,62,27)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,122 samples, 9.99%)</title><rect x="20.2328%" y="149" width="9.9939%" height="15" fill="rgb(216,154,8)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,122 samples, 9.99%)</title><rect x="20.2328%" y="133" width="9.9939%" height="15" fill="rgb(244,35,45)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,122 samples, 9.99%)</title><rect x="20.2328%" y="117" width="9.9939%" height="15" fill="rgb(251,115,12)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,122 samples, 9.99%)</title><rect x="20.2328%" y="101" width="9.9939%" height="15" fill="rgb(240,54,50)" fg:x="8345" fg:w="4122"/><text x="20.4828%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,081 samples, 9.89%)</title><rect x="30.2340%" y="53" width="9.8945%" height="15" fill="rgb(233,84,52)" fg:x="12470" fg:w="4081"/><text x="30.4840%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,081 samples, 9.89%)</title><rect x="30.2340%" y="37" width="9.8945%" height="15" fill="rgb(207,117,47)" fg:x="12470" fg:w="4081"/><text x="30.4840%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (8 samples, 0.02%)</title><rect x="40.1285%" y="53" width="0.0194%" height="15" fill="rgb(249,43,39)" fg:x="16551" fg:w="8"/><text x="40.3785%" y="63.50"></text></g><g><title>Thread_144748 (4,113 samples, 9.97%)</title><rect x="30.2267%" y="245" width="9.9721%" height="15" fill="rgb(209,38,44)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="255.50">Thread_144748</text></g><g><title>libsystem_pthread`thread_start (4,113 samples, 9.97%)</title><rect x="30.2267%" y="229" width="9.9721%" height="15" fill="rgb(236,212,23)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,113 samples, 9.97%)</title><rect x="30.2267%" y="213" width="9.9721%" height="15" fill="rgb(242,79,21)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,113 samples, 9.97%)</title><rect x="30.2267%" y="197" width="9.9721%" height="15" fill="rgb(211,96,35)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,113 samples, 9.97%)</title><rect x="30.2267%" y="181" width="9.9721%" height="15" fill="rgb(253,215,40)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,113 samples, 9.97%)</title><rect x="30.2267%" y="165" width="9.9721%" height="15" fill="rgb(211,81,21)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,113 samples, 9.97%)</title><rect x="30.2267%" y="149" width="9.9721%" height="15" fill="rgb(208,190,38)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,113 samples, 9.97%)</title><rect x="30.2267%" y="133" width="9.9721%" height="15" fill="rgb(235,213,38)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,113 samples, 9.97%)</title><rect x="30.2267%" y="117" width="9.9721%" height="15" fill="rgb(237,122,38)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,113 samples, 9.97%)</title><rect x="30.2267%" y="101" width="9.9721%" height="15" fill="rgb(244,218,35)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,113 samples, 9.97%)</title><rect x="30.2267%" y="85" width="9.9721%" height="15" fill="rgb(240,68,47)" fg:x="12467" fg:w="4113"/><text x="30.4767%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,111 samples, 9.97%)</title><rect x="30.2315%" y="69" width="9.9673%" height="15" fill="rgb(210,16,53)" fg:x="12469" fg:w="4111"/><text x="30.4815%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (21 samples, 0.05%)</title><rect x="40.1479%" y="53" width="0.0509%" height="15" fill="rgb(235,124,12)" fg:x="16559" fg:w="21"/><text x="40.3979%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_signal_fence[abi:ne190102] (7 samples, 0.02%)</title><rect x="40.1818%" y="37" width="0.0170%" height="15" fill="rgb(224,169,11)" fg:x="16573" fg:w="7"/><text x="40.4318%" y="47.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,069 samples, 9.87%)</title><rect x="40.2037%" y="53" width="9.8654%" height="15" fill="rgb(250,166,2)" fg:x="16582" fg:w="4069"/><text x="40.4537%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,069 samples, 9.87%)</title><rect x="40.2037%" y="37" width="9.8654%" height="15" fill="rgb(242,216,29)" fg:x="16582" fg:w="4069"/><text x="40.4537%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (6 samples, 0.01%)</title><rect x="50.0691%" y="53" width="0.0145%" height="15" fill="rgb(230,116,27)" fg:x="20651" fg:w="6"/><text x="50.3191%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,091 samples, 9.92%)</title><rect x="40.2012%" y="69" width="9.9188%" height="15" fill="rgb(228,99,48)" fg:x="16581" fg:w="4091"/><text x="40.4512%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (15 samples, 0.04%)</title><rect x="50.0836%" y="53" width="0.0364%" height="15" fill="rgb(253,11,6)" fg:x="20657" fg:w="15"/><text x="50.3336%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_signal_fence[abi:ne190102] (7 samples, 0.02%)</title><rect x="50.1030%" y="37" width="0.0170%" height="15" fill="rgb(247,143,39)" fg:x="20665" fg:w="7"/><text x="50.3530%" y="47.50"></text></g><g><title>Thread_144749 (4,093 samples, 9.92%)</title><rect x="40.1988%" y="245" width="9.9236%" height="15" fill="rgb(236,97,10)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="255.50">Thread_144749</text></g><g><title>libsystem_pthread`thread_start (4,093 samples, 9.92%)</title><rect x="40.1988%" y="229" width="9.9236%" height="15" fill="rgb(233,208,19)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,093 samples, 9.92%)</title><rect x="40.1988%" y="213" width="9.9236%" height="15" fill="rgb(216,164,2)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,093 samples, 9.92%)</title><rect x="40.1988%" y="197" width="9.9236%" height="15" fill="rgb(220,129,5)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,093 samples, 9.92%)</title><rect x="40.1988%" y="181" width="9.9236%" height="15" fill="rgb(242,17,10)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,093 samples, 9.92%)</title><rect x="40.1988%" y="165" width="9.9236%" height="15" fill="rgb(242,107,0)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,093 samples, 9.92%)</title><rect x="40.1988%" y="149" width="9.9236%" height="15" fill="rgb(251,28,31)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,093 samples, 9.92%)</title><rect x="40.1988%" y="133" width="9.9236%" height="15" fill="rgb(233,223,10)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,093 samples, 9.92%)</title><rect x="40.1988%" y="117" width="9.9236%" height="15" fill="rgb(215,21,27)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,093 samples, 9.92%)</title><rect x="40.1988%" y="101" width="9.9236%" height="15" fill="rgb(232,23,21)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,093 samples, 9.92%)</title><rect x="40.1988%" y="85" width="9.9236%" height="15" fill="rgb(244,5,23)" fg:x="16580" fg:w="4093"/><text x="40.4488%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,090 samples, 9.92%)</title><rect x="50.1249%" y="53" width="9.9164%" height="15" fill="rgb(226,81,46)" fg:x="20674" fg:w="4090"/><text x="50.3749%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,090 samples, 9.92%)</title><rect x="50.1249%" y="37" width="9.9164%" height="15" fill="rgb(247,70,30)" fg:x="20674" fg:w="4090"/><text x="50.3749%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (8 samples, 0.02%)</title><rect x="60.0412%" y="53" width="0.0194%" height="15" fill="rgb(212,68,19)" fg:x="24764" fg:w="8"/><text x="60.2912%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,110 samples, 9.96%)</title><rect x="50.1224%" y="69" width="9.9648%" height="15" fill="rgb(240,187,13)" fg:x="20673" fg:w="4110"/><text x="50.3724%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (11 samples, 0.03%)</title><rect x="60.0606%" y="53" width="0.0267%" height="15" fill="rgb(223,113,26)" fg:x="24772" fg:w="11"/><text x="60.3106%" y="63.50"></text></g><g><title>Thread_144750 (4,113 samples, 9.97%)</title><rect x="50.1224%" y="245" width="9.9721%" height="15" fill="rgb(206,192,2)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="255.50">Thread_144750</text></g><g><title>libsystem_pthread`thread_start (4,113 samples, 9.97%)</title><rect x="50.1224%" y="229" width="9.9721%" height="15" fill="rgb(241,108,4)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,113 samples, 9.97%)</title><rect x="50.1224%" y="213" width="9.9721%" height="15" fill="rgb(247,173,49)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,113 samples, 9.97%)</title><rect x="50.1224%" y="197" width="9.9721%" height="15" fill="rgb(224,114,35)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,113 samples, 9.97%)</title><rect x="50.1224%" y="181" width="9.9721%" height="15" fill="rgb(245,159,27)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,113 samples, 9.97%)</title><rect x="50.1224%" y="165" width="9.9721%" height="15" fill="rgb(245,172,44)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,113 samples, 9.97%)</title><rect x="50.1224%" y="149" width="9.9721%" height="15" fill="rgb(236,23,11)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,113 samples, 9.97%)</title><rect x="50.1224%" y="133" width="9.9721%" height="15" fill="rgb(205,117,38)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,113 samples, 9.97%)</title><rect x="50.1224%" y="117" width="9.9721%" height="15" fill="rgb(237,72,25)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,113 samples, 9.97%)</title><rect x="50.1224%" y="101" width="9.9721%" height="15" fill="rgb(244,70,9)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,113 samples, 9.97%)</title><rect x="50.1224%" y="85" width="9.9721%" height="15" fill="rgb(217,125,39)" fg:x="20673" fg:w="4113"/><text x="50.3724%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,056 samples, 9.83%)</title><rect x="60.0994%" y="53" width="9.8339%" height="15" fill="rgb(235,36,10)" fg:x="24788" fg:w="4056"/><text x="60.3494%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,056 samples, 9.83%)</title><rect x="60.0994%" y="37" width="9.8339%" height="15" fill="rgb(251,123,47)" fg:x="24788" fg:w="4056"/><text x="60.3494%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (18 samples, 0.04%)</title><rect x="69.9333%" y="53" width="0.0436%" height="15" fill="rgb(221,13,13)" fg:x="28844" fg:w="18"/><text x="70.1833%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_load[abi:ne190102]&lt;long&gt; (6 samples, 0.01%)</title><rect x="69.9624%" y="37" width="0.0145%" height="15" fill="rgb(238,131,9)" fg:x="28856" fg:w="6"/><text x="70.2124%" y="47.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,091 samples, 9.92%)</title><rect x="60.0970%" y="69" width="9.9188%" height="15" fill="rgb(211,50,8)" fg:x="24787" fg:w="4091"/><text x="60.3470%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (16 samples, 0.04%)</title><rect x="69.9770%" y="53" width="0.0388%" height="15" fill="rgb(245,182,24)" fg:x="28862" fg:w="16"/><text x="70.2270%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_signal_fence[abi:ne190102] (6 samples, 0.01%)</title><rect x="70.0012%" y="37" width="0.0145%" height="15" fill="rgb(242,14,37)" fg:x="28872" fg:w="6"/><text x="70.2512%" y="47.50"></text></g><g><title>Thread_144751 (4,094 samples, 9.93%)</title><rect x="60.0946%" y="245" width="9.9261%" height="15" fill="rgb(246,228,12)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="255.50">Thread_144751</text></g><g><title>libsystem_pthread`thread_start (4,094 samples, 9.93%)</title><rect x="60.0946%" y="229" width="9.9261%" height="15" fill="rgb(213,55,15)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,094 samples, 9.93%)</title><rect x="60.0946%" y="213" width="9.9261%" height="15" fill="rgb(209,9,3)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,094 samples, 9.93%)</title><rect x="60.0946%" y="197" width="9.9261%" height="15" fill="rgb(230,59,30)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,094 samples, 9.93%)</title><rect x="60.0946%" y="181" width="9.9261%" height="15" fill="rgb(209,121,21)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,094 samples, 9.93%)</title><rect x="60.0946%" y="165" width="9.9261%" height="15" fill="rgb(220,109,13)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,094 samples, 9.93%)</title><rect x="60.0946%" y="149" width="9.9261%" height="15" fill="rgb(232,18,1)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,094 samples, 9.93%)</title><rect x="60.0946%" y="133" width="9.9261%" height="15" fill="rgb(215,41,42)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,094 samples, 9.93%)</title><rect x="60.0946%" y="117" width="9.9261%" height="15" fill="rgb(224,123,36)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,094 samples, 9.93%)</title><rect x="60.0946%" y="101" width="9.9261%" height="15" fill="rgb(240,125,3)" fg:x="24786" fg:w="4094"/><text x="60.3446%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,093 samples, 9.92%)</title><rect x="60.0970%" y="85" width="9.9236%" height="15" fill="rgb(205,98,50)" fg:x="24787" fg:w="4093"/><text x="60.3470%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,058 samples, 9.84%)</title><rect x="70.0594%" y="53" width="9.8388%" height="15" fill="rgb(205,185,37)" fg:x="28896" fg:w="4058"/><text x="70.3094%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,058 samples, 9.84%)</title><rect x="70.0594%" y="37" width="9.8388%" height="15" fill="rgb(238,207,15)" fg:x="28896" fg:w="4058"/><text x="70.3094%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (17 samples, 0.04%)</title><rect x="79.8982%" y="53" width="0.0412%" height="15" fill="rgb(213,199,42)" fg:x="32954" fg:w="17"/><text x="80.1482%" y="63.50"></text></g><g><title>Thread_144752 (4,108 samples, 9.96%)</title><rect x="70.0206%" y="245" width="9.9600%" height="15" fill="rgb(235,201,11)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="255.50">Thread_144752</text></g><g><title>libsystem_pthread`thread_start (4,108 samples, 9.96%)</title><rect x="70.0206%" y="229" width="9.9600%" height="15" fill="rgb(207,46,11)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,108 samples, 9.96%)</title><rect x="70.0206%" y="213" width="9.9600%" height="15" fill="rgb(241,35,35)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,108 samples, 9.96%)</title><rect x="70.0206%" y="197" width="9.9600%" height="15" fill="rgb(243,32,47)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,108 samples, 9.96%)</title><rect x="70.0206%" y="181" width="9.9600%" height="15" fill="rgb(247,202,23)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,108 samples, 9.96%)</title><rect x="70.0206%" y="165" width="9.9600%" height="15" fill="rgb(219,102,11)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,108 samples, 9.96%)</title><rect x="70.0206%" y="149" width="9.9600%" height="15" fill="rgb(243,110,44)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,108 samples, 9.96%)</title><rect x="70.0206%" y="133" width="9.9600%" height="15" fill="rgb(222,74,54)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,108 samples, 9.96%)</title><rect x="70.0206%" y="117" width="9.9600%" height="15" fill="rgb(216,99,12)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,108 samples, 9.96%)</title><rect x="70.0206%" y="101" width="9.9600%" height="15" fill="rgb(226,22,26)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,108 samples, 9.96%)</title><rect x="70.0206%" y="85" width="9.9600%" height="15" fill="rgb(217,163,10)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,108 samples, 9.96%)</title><rect x="70.0206%" y="69" width="9.9600%" height="15" fill="rgb(213,25,53)" fg:x="28880" fg:w="4108"/><text x="70.2706%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (17 samples, 0.04%)</title><rect x="79.9394%" y="53" width="0.0412%" height="15" fill="rgb(252,105,26)" fg:x="32971" fg:w="17"/><text x="80.1894%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_signal_fence[abi:ne190102] (5 samples, 0.01%)</title><rect x="79.9685%" y="37" width="0.0121%" height="15" fill="rgb(220,39,43)" fg:x="32983" fg:w="5"/><text x="80.2185%" y="47.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,085 samples, 9.90%)</title><rect x="80.0218%" y="53" width="9.9042%" height="15" fill="rgb(229,68,48)" fg:x="33005" fg:w="4085"/><text x="80.2718%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,085 samples, 9.90%)</title><rect x="80.0218%" y="37" width="9.9042%" height="15" fill="rgb(252,8,32)" fg:x="33005" fg:w="4085"/><text x="80.2718%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`std::__atomic_base&lt;long, false&gt;::load[abi:ne190102] (15 samples, 0.04%)</title><rect x="89.9285%" y="53" width="0.0364%" height="15" fill="rgb(223,20,43)" fg:x="37091" fg:w="15"/><text x="90.1785%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`std::__cxx_atomic_load[abi:ne190102]&lt;long&gt; (7 samples, 0.02%)</title><rect x="89.9479%" y="37" width="0.0170%" height="15" fill="rgb(229,81,49)" fg:x="37099" fg:w="7"/><text x="90.1979%" y="47.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,129 samples, 10.01%)</title><rect x="79.9806%" y="69" width="10.0109%" height="15" fill="rgb(236,28,36)" fg:x="32988" fg:w="4129"/><text x="80.2306%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (11 samples, 0.03%)</title><rect x="89.9648%" y="53" width="0.0267%" height="15" fill="rgb(249,185,26)" fg:x="37106" fg:w="11"/><text x="90.2148%" y="63.50"></text></g><g><title>Thread_144753 (4,133 samples, 10.02%)</title><rect x="79.9806%" y="245" width="10.0206%" height="15" fill="rgb(249,174,33)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="255.50">Thread_144753</text></g><g><title>libsystem_pthread`thread_start (4,133 samples, 10.02%)</title><rect x="79.9806%" y="229" width="10.0206%" height="15" fill="rgb(233,201,37)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,133 samples, 10.02%)</title><rect x="79.9806%" y="213" width="10.0206%" height="15" fill="rgb(221,78,26)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,133 samples, 10.02%)</title><rect x="79.9806%" y="197" width="10.0206%" height="15" fill="rgb(250,127,30)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,133 samples, 10.02%)</title><rect x="79.9806%" y="181" width="10.0206%" height="15" fill="rgb(230,49,44)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,133 samples, 10.02%)</title><rect x="79.9806%" y="165" width="10.0206%" height="15" fill="rgb(229,67,23)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,133 samples, 10.02%)</title><rect x="79.9806%" y="149" width="10.0206%" height="15" fill="rgb(249,83,47)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,133 samples, 10.02%)</title><rect x="79.9806%" y="133" width="10.0206%" height="15" fill="rgb(215,43,3)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,133 samples, 10.02%)</title><rect x="79.9806%" y="117" width="10.0206%" height="15" fill="rgb(238,154,13)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="127.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,133 samples, 10.02%)</title><rect x="79.9806%" y="101" width="10.0206%" height="15" fill="rgb(219,56,2)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,133 samples, 10.02%)</title><rect x="79.9806%" y="85" width="10.0206%" height="15" fill="rgb(233,0,4)" fg:x="32988" fg:w="4133"/><text x="80.2306%" y="95.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::details::Semaphore::timed_wait (4,100 samples, 9.94%)</title><rect x="90.0279%" y="53" width="9.9406%" height="15" fill="rgb(235,30,7)" fg:x="37132" fg:w="4100"/><text x="90.2779%" y="63.50">libgalay-kerne..</text></g><g><title>libsystem_kernel`semaphore_timedwait_trap (4,100 samples, 9.94%)</title><rect x="90.0279%" y="37" width="9.9406%" height="15" fill="rgb(250,79,13)" fg:x="37132" fg:w="4100"/><text x="90.2779%" y="47.50">libsystem_kern..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::waitWithPartialSpinning (4,121 samples, 9.99%)</title><rect x="90.0036%" y="69" width="9.9915%" height="15" fill="rgb(211,146,34)" fg:x="37122" fg:w="4121"/><text x="90.2536%" y="79.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::atomic_signal_fence[abi:ne190102] (9 samples, 0.02%)</title><rect x="99.9733%" y="53" width="0.0218%" height="15" fill="rgb(228,22,38)" fg:x="41234" fg:w="9"/><text x="100.2233%" y="63.50"></text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask&gt; (4,122 samples, 9.99%)</title><rect x="90.0036%" y="101" width="9.9939%" height="15" fill="rgb(235,168,5)" fg:x="37122" fg:w="4122"/><text x="90.2536%" y="111.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::LightweightSemaphore::wait (4,122 samples, 9.99%)</title><rect x="90.0036%" y="85" width="9.9939%" height="15" fill="rgb(221,155,16)" fg:x="37122" fg:w="4122"/><text x="90.2536%" y="95.50">libgalay-kerne..</text></g><g><title>all (41,245 samples, 100%)</title><rect x="0.0000%" y="261" width="100.0000%" height="15" fill="rgb(215,215,53)" fg:x="0" fg:w="41245"/><text x="0.2500%" y="271.50"></text></g><g><title>Thread_144754 (4,124 samples, 10.00%)</title><rect x="90.0012%" y="245" width="9.9988%" height="15" fill="rgb(223,4,10)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="255.50">Thread_144754</text></g><g><title>libsystem_pthread`thread_start (4,124 samples, 10.00%)</title><rect x="90.0012%" y="229" width="9.9988%" height="15" fill="rgb(234,103,6)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="239.50">libsystem_pthr..</text></g><g><title>libsystem_pthread`_pthread_start (4,124 samples, 10.00%)</title><rect x="90.0012%" y="213" width="9.9988%" height="15" fill="rgb(227,97,0)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="223.50">libsystem_pthr..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_proxy[abi:ne190102]&lt;std::tuple&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,124 samples, 10.00%)</title><rect x="90.0012%" y="197" width="9.9988%" height="15" fill="rgb(234,150,53)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="207.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`std::__thread_execute[abi:ne190102]&lt;std::unique_ptr&lt;std::__thread_struct&gt;, galay::kernel::ComputeScheduler::start (4,124 samples, 10.00%)</title><rect x="90.0012%" y="181" width="9.9988%" height="15" fill="rgb(228,201,54)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="191.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`decltype (4,124 samples, 10.00%)</title><rect x="90.0012%" y="165" width="9.9988%" height="15" fill="rgb(222,22,37)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="175.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::start (4,124 samples, 10.00%)</title><rect x="90.0012%" y="149" width="9.9988%" height="15" fill="rgb(237,53,32)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="159.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`galay::kernel::ComputeScheduler::workerLoop (4,124 samples, 10.00%)</title><rect x="90.0012%" y="133" width="9.9988%" height="15" fill="rgb(233,25,53)" fg:x="37121" fg:w="4124"/><text x="90.2512%" y="143.50">libgalay-kerne..</text></g><g><title>libgalay-kernel.1.0.0`moodycamel::BlockingConcurrentQueue&lt;galay::kernel::ComputeTask, moodycamel::ConcurrentQueueDefaultTraits&gt;::wait_dequeue_timed&lt;galay::kernel::ComputeTask, long long, std::ratio&lt;1l, 1000l&gt;&gt; (4,123 samples, 10.00%)</title><rect x="90.0036%" y="117" width="9.9964%" height="15" fill="rgb(210,40,34)" fg:x="37122" fg:w="4123"/><text x="90.2536%" y="127.50">libgalay-kerne..</text></g></svg></svg>

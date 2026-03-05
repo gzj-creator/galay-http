@@ -3,6 +3,7 @@
 
 #include "HttpWriterSetting.h"
 #include "HttpLog.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpError.h"
@@ -101,13 +102,16 @@ public:
 #else
         bool handleComplete(GHandle handle) override {
             while (m_owner->m_writer->getRemainingBytes() > 0) {
-                syncIovecs();
-                if (m_iovecs.empty()) {
+                auto* iov_data = m_owner->m_writer->getIovecsData();
+                auto iov_count = m_owner->m_writer->getIovecsCount();
+                if (iov_data == nullptr || iov_count == 0) {
                     m_owner->setSendError(HttpError(kSendError, "No remaining iovec to write"));
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleWritev(handle, m_iovecs.data(), static_cast<int>(m_iovecs.size()));
+                auto result = galay::kernel::io::handleWritev(handle,
+                                                              const_cast<iovec*>(iov_data),
+                                                              static_cast<int>(iov_count));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -129,7 +133,7 @@ public:
 
     private:
         void syncIovecs() {
-            m_iovecs = m_owner->m_writer->getIovecsCopy();
+            m_owner->m_writer->copyIovecsTo(m_iovecs);
         }
 
         SendResponseWritevAwaitableImpl* m_owner;
@@ -388,7 +392,6 @@ public:
         : m_setting(setting)
         , m_socket(&socket)
         , m_remaining_bytes(0)
-        , m_writev_offset(0)
     {
     }
 
@@ -397,7 +400,6 @@ public:
             logResponseStatus(response.header().code());
 
             if constexpr (is_tcp_socket_v<SocketType>) {
-                // TcpSocket: 使用 writev 避免内存拷贝
                 m_body_buffer = response.getBodyStr();
 
                 if(!response.header().isChunked()) {
@@ -405,15 +407,7 @@ public:
                 }
 
                 m_buffer = response.header().toString();
-
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_body_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_body_buffer.size();
-                m_writev_offset = 0;
+                prepareTcpSendLayout();
             } else {
                 // SslSocket: 使用 send
                 m_buffer = response.toString();
@@ -440,14 +434,7 @@ public:
                 }
 
                 m_buffer = request.header().toString();
-                m_iovecs.clear();
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
-                if (!m_body_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
-                }
-
-                m_remaining_bytes = m_buffer.size() + m_body_buffer.size();
-                m_writev_offset = 0;
+                prepareTcpSendLayout();
             } else {
                 m_buffer = request.toString();
                 m_remaining_bytes = m_buffer.size();
@@ -543,40 +530,22 @@ public:
         if (bytes_sent >= m_remaining_bytes) {
             m_remaining_bytes = 0;
             m_buffer.clear();
+            m_body_buffer.clear();
+            m_writev_cursor.reset(std::vector<iovec>{});
         } else {
             m_remaining_bytes -= bytes_sent;
         }
     }
 
     void updateRemainingWritev(size_t bytes_sent) {
-        if (bytes_sent >= m_remaining_bytes) {
+        const size_t advanced = m_writev_cursor.advance(bytes_sent);
+        if (advanced >= m_remaining_bytes) {
             m_remaining_bytes = 0;
             m_buffer.clear();
             m_body_buffer.clear();
-            m_iovecs.clear();
-            m_writev_offset = 0;
+            m_writev_cursor.reset(std::vector<iovec>{});
         } else {
-            m_remaining_bytes -= bytes_sent;
-            m_writev_offset += bytes_sent;
-
-            // 更新 iovec 数组，跳过已发送的部分
-            size_t offset = m_writev_offset;
-            m_iovecs.clear();
-
-            size_t header_size = m_buffer.size();
-            if (offset < header_size) {
-                // 还在 header 部分
-                m_iovecs.push_back({const_cast<char*>(m_buffer.data() + offset), header_size - offset});
-                if (!m_body_buffer.empty()) {
-                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
-                }
-            } else {
-                // 已经到 body 部分
-                size_t body_offset = offset - header_size;
-                if (body_offset < m_body_buffer.size()) {
-                    m_iovecs.push_back({const_cast<char*>(m_body_buffer.data() + body_offset), m_body_buffer.size() - body_offset});
-                }
-            }
+            m_remaining_bytes -= advanced;
         }
     }
 
@@ -593,10 +562,51 @@ public:
     }
 
     std::vector<iovec> getIovecsCopy() const {
-        return m_iovecs;
+        std::vector<iovec> out;
+        m_writev_cursor.exportWindow(out);
+        return out;
+    }
+
+    void copyIovecsTo(std::vector<iovec>& out) const {
+        m_writev_cursor.exportWindow(out);
+    }
+
+    const iovec* getIovecsData() const {
+        return m_writev_cursor.data();
+    }
+
+    size_t getIovecsCount() const {
+        return m_writev_cursor.count();
     }
 
 private:
+    void prepareTcpSendLayout() {
+        const size_t total_size = m_buffer.size() + m_body_buffer.size();
+        const size_t coalesce_threshold = m_setting.getWritevCoalesceThreshold();
+
+        if (coalesce_threshold > 0 && total_size <= coalesce_threshold) {
+            if (!m_body_buffer.empty()) {
+                m_buffer.append(m_body_buffer);
+                m_body_buffer.clear();
+            }
+            std::vector<iovec> iovecs;
+            iovecs.reserve(1);
+            iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+            m_writev_cursor.reset(std::move(iovecs));
+            m_remaining_bytes = m_writev_cursor.remainingBytes();
+            return;
+        }
+
+        std::vector<iovec> iovecs;
+        iovecs.reserve(2);
+        iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+        if (!m_body_buffer.empty()) {
+            iovecs.push_back({const_cast<char*>(m_body_buffer.data()), m_body_buffer.size()});
+        }
+        m_writev_cursor.reset(std::move(iovecs));
+        m_remaining_bytes = m_writev_cursor.remainingBytes();
+    }
+
     static void logResponseStatus(HttpStatusCode code) {
         const int status = static_cast<int>(code);
         if (status >= 500) {
@@ -615,8 +625,7 @@ private:
 
     // writev 专用成员（仅 TcpSocket 使用）
     std::string m_body_buffer;   // 存储 body
-    std::vector<iovec> m_iovecs;
-    size_t m_writev_offset;
+    IoVecCursor m_writev_cursor;
 };
 
 // 类型别名 - HTTP (TcpSocket)

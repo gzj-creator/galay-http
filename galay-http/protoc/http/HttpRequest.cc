@@ -1,122 +1,6 @@
 #include "HttpRequest.h"
 #include "HttpChunk.h"
-#include <algorithm>
-#include <cctype>
-
-namespace {
-
-void removeHeaderPairLoose(galay::http::HeaderPair& headers, const std::string& key)
-{
-    headers.removeHeaderPair(key);
-
-    std::string lower = key;
-    std::transform(lower.begin(), lower.end(), lower.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (lower != key) {
-        headers.removeHeaderPair(lower);
-    }
-
-    std::string upper = key;
-    std::transform(upper.begin(), upper.end(), upper.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
-    if (upper != key && upper != lower) {
-        headers.removeHeaderPair(upper);
-    }
-
-    std::string canonical = lower;
-    bool word_start = true;
-    for (char& ch : canonical) {
-        unsigned char c = static_cast<unsigned char>(ch);
-        ch = static_cast<char>(word_start ? std::toupper(c) : std::tolower(c));
-        word_start = (ch == '-');
-    }
-    if (canonical != key && canonical != lower && canonical != upper) {
-        headers.removeHeaderPair(canonical);
-    }
-}
-
-std::string toLowerAscii(std::string value)
-{
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-}
-
-std::string toCanonicalHeaderKey(std::string value)
-{
-    bool word_start = true;
-    for (char& ch : value) {
-        unsigned char c = static_cast<unsigned char>(ch);
-        ch = static_cast<char>(word_start ? std::toupper(c) : std::tolower(c));
-        word_start = (ch == '-');
-    }
-    return value;
-}
-
-std::string getHeaderValueLoose(const galay::http::HeaderPair& headers, const std::string& key)
-{
-    return headers.getValue(key);
-}
-
-bool headerValueContainsToken(const std::string& value, const std::string& token)
-{
-    const std::string needle = toLowerAscii(token);
-    std::string current;
-
-    auto flush = [&]() -> bool {
-        size_t begin = 0;
-        while (begin < current.size() && std::isspace(static_cast<unsigned char>(current[begin]))) {
-            ++begin;
-        }
-        size_t end = current.size();
-        while (end > begin && std::isspace(static_cast<unsigned char>(current[end - 1]))) {
-            --end;
-        }
-        bool matched = false;
-        if (end > begin) {
-            matched = (toLowerAscii(current.substr(begin, end - begin)) == needle);
-        }
-        current.clear();
-        return matched;
-    };
-
-    for (char ch : value) {
-        if (ch == ',') {
-            if (flush()) {
-                return true;
-            }
-        } else {
-            current.push_back(ch);
-        }
-    }
-
-    return flush();
-}
-
-std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t skip_bytes)
-{
-    std::vector<iovec> sliced;
-    sliced.reserve(iovecs.size());
-
-    size_t skip = skip_bytes;
-    for (const auto& iov : iovecs) {
-        if (skip >= iov.iov_len) {
-            skip -= iov.iov_len;
-            continue;
-        }
-
-        const char* base = static_cast<const char*>(iov.iov_base);
-        iovec part{};
-        part.iov_base = const_cast<char*>(base + skip);
-        part.iov_len = iov.iov_len - skip;
-        sliced.push_back(part);
-        skip = 0;
-    }
-
-    return sliced;
-}
-
-} // namespace
+#include "HttpParseUtils.h"
 
 namespace galay::http
 {
@@ -190,25 +74,26 @@ namespace galay::http
             header_bytes = header_consumed;
             newly_consumed = header_consumed;
             m_headerParsed = true;
-            is_chunked = headerValueContainsToken(
-                getHeaderValueLoose(m_header.headerPairs(), "Transfer-Encoding"),
-                "chunked");
+            if (const auto* te = detail::getHeaderValuePtrLoose(m_header.headerPairs(), "transfer-encoding");
+                te != nullptr) {
+                is_chunked = detail::headerValueContainsToken(*te, "chunked");
+            }
 
             if (is_chunked) {
                 // chunked body 继续往下解析
             } else {
                 // header解析完成，获取Content-Length
-                std::string content_length_str = getHeaderValueLoose(m_header.headerPairs(), "Content-Length");
-                if (content_length_str.empty()) {
+                const auto* content_length = detail::getHeaderValuePtrLoose(m_header.headerPairs(), "content-length");
+                if (content_length == nullptr || content_length->empty()) {
                     // 没有body，解析完成
                     return {kNoError, newly_consumed};
                 }
 
-                try {
-                    m_contentLength = std::stoull(content_length_str);
-                } catch (...) {
+                auto parsed_length = detail::parseSizeTStrict(*content_length);
+                if (!parsed_length.has_value()) {
                     return {kBadRequest, -1};
                 }
+                m_contentLength = parsed_length.value();
 
                 if (m_contentLength == 0) {
                     return {kNoError, newly_consumed};
@@ -216,13 +101,14 @@ namespace galay::http
                 m_body.reserve(m_contentLength);
             }
         } else {
-            is_chunked = headerValueContainsToken(
-                getHeaderValueLoose(m_header.headerPairs(), "Transfer-Encoding"),
-                "chunked");
+            if (const auto* te = detail::getHeaderValuePtrLoose(m_header.headerPairs(), "transfer-encoding");
+                te != nullptr) {
+                is_chunked = detail::headerValueContainsToken(*te, "chunked");
+            }
         }
 
         if (is_chunked) {
-            auto body_iovecs = sliceIovecs(iovecs, header_bytes);
+            auto body_iovecs = detail::sliceIovecs(iovecs, header_bytes);
             if (body_iovecs.empty()) {
                 return {kNoError, newly_consumed};
             }
@@ -238,8 +124,8 @@ namespace galay::http
             newly_consumed += chunk_result.value().second;
 
             if (chunk_result.value().first) {
-                removeHeaderPairLoose(m_header.headerPairs(), "Transfer-Encoding");
-                m_header.headerPairs().addHeaderPair("Content-Length", std::to_string(m_body.size()));
+                detail::removeHeaderPairLoose(m_header.headerPairs(), "transfer-encoding");
+                m_header.headerPairs().addHeaderPair("content-length", std::to_string(m_body.size()));
                 m_contentLength = m_body.size();
                 m_bodyParsed = m_contentLength;
             }

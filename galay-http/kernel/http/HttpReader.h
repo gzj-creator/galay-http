@@ -3,6 +3,7 @@
 
 #include "HttpReaderSetting.h"
 #include "HttpLog.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpError.h"
@@ -15,6 +16,7 @@
 #include <coroutine>
 #include <type_traits>
 #include <variant>
+#include <span>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
@@ -49,20 +51,21 @@ class HttpReaderImpl;
 template<typename SocketType, bool IsSsl = is_ssl_socket_v<SocketType>>
 class GetRequestAwaitableImpl;
 
-// TcpSocket 特化版本（CustomAwaitable + RecvAwaitable）
+// TcpSocket 特化版本（CustomAwaitable + ReadvIOContext）
 template<typename SocketType>
 class GetRequestAwaitableImpl<SocketType, false>
     : public galay::kernel::CustomAwaitable
     , public galay::kernel::TimeoutSupport<GetRequestAwaitableImpl<SocketType, false>>
 {
 public:
-    class ProtocolRecvAwaitable : public galay::kernel::RecvAwaitable
+    class ProtocolRecvAwaitable : public galay::kernel::ReadvIOContext
     {
     public:
         explicit ProtocolRecvAwaitable(GetRequestAwaitableImpl* owner)
-            : galay::kernel::RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
+            : galay::kernel::ReadvIOContext(std::span<const struct iovec>())
             , m_owner(owner)
         {
+            m_iovecs.reserve(2);
         }
 
 #ifdef USE_IOURING
@@ -79,7 +82,7 @@ public:
                 return false;
             }
 
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            auto result = galay::kernel::io::handleReadv(cqe);
             if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                 return false;
             }
@@ -88,7 +91,7 @@ public:
                 return true;
             }
 
-            size_t recv_bytes = result.value().size();
+            size_t recv_bytes = result.value();
             if (recv_bytes == 0) {
                 m_owner->setParseError(HttpError(kConnectionClose));
                 return true;
@@ -119,7 +122,9 @@ public:
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                auto result = galay::kernel::io::handleReadv(handle,
+                                                             m_iovecs.data(),
+                                                             static_cast<int>(m_iovecs.size()));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -128,7 +133,7 @@ public:
                     return true;
                 }
 
-                size_t recv_bytes = result.value().size();
+                size_t recv_bytes = result.value();
                 if (recv_bytes == 0) {
                     m_owner->setParseError(HttpError(kConnectionClose));
                     return true;
@@ -146,14 +151,12 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
-            if (write_iovecs.empty()) {
+            struct iovec write_iovecs[2];
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(write_iovecs, 2);
+            if (iov_count == 0) {
                 return false;
             }
-
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
+            return IoVecWindow::buildWindow(write_iovecs, iov_count, m_iovecs) > 0;
         }
 
         GetRequestAwaitableImpl* m_owner;
@@ -172,7 +175,8 @@ public:
         , m_recv_awaitable(this)
         , m_result(true)
     {
-        addTask(IOEventType::RECV, &m_recv_awaitable);
+        m_parse_iovecs.reserve(2);
+        addTask(IOEventType::READV, &m_recv_awaitable);
     }
 
     bool await_ready() const noexcept {
@@ -203,12 +207,17 @@ public:
 
 private:
     bool parseRequestFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
-        if (read_iovecs.empty()) {
+        struct iovec read_iovecs[2];
+        const size_t iov_count = m_ring_buffer->getReadIovecs(read_iovecs, 2);
+        if (iov_count == 0) {
             return false;
         }
 
-        auto [error_code, consumed] = m_request->fromIOVec(read_iovecs);
+        if (IoVecWindow::buildWindow(read_iovecs, iov_count, m_parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_request->fromIOVec(m_parse_iovecs);
         if (consumed > 0) {
             m_ring_buffer->consume(consumed);
         }
@@ -234,11 +243,11 @@ private:
         }
 
         auto& header = m_request->header();
-        std::string host = header.headerPairs().getValue("Host");
+        const std::string* host = header.headerPairs().getValuePtr("host");
         HTTP_LOG_INFO("[{}] [{}] [{}]",
                       httpMethodToString(header.method()),
                       header.uri(),
-                      host.empty() ? "-" : host);
+                      (host == nullptr || host->empty()) ? "-" : *host);
         return true;
     }
 
@@ -259,6 +268,7 @@ private:
     HttpRequest* m_request;
     SocketType* m_socket;
     size_t m_total_received;
+    std::vector<iovec> m_parse_iovecs;
     ProtocolRecvAwaitable m_recv_awaitable;
     std::optional<HttpError> m_http_error;
 
@@ -457,7 +467,7 @@ private:
         }
 
         auto& header = m_request->header();
-        std::string host = header.headerPairs().getValue("Host");
+        std::string host = header.headerPairs().getValue("host");
         HTTP_LOG_INFO("[{}] [{}] [{}]",
                       httpMethodToString(header.method()),
                       header.uri(),

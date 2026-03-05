@@ -1,0 +1,199 @@
+=== b10b11_h2cmux_client (total_samples=63102) ===
+Thread_74175                                                                           4854     7.69%
+Thread_74176                                                                           4854     7.69%
+Thread_74177                                                                           4854     7.69%
+Thread_74178                                                                           4854     7.69%
+Thread_74179                                                                           4854     7.69%
+Thread_74180                                                                           4854     7.69%
+Thread_74181                                                                           4854     7.69%
+Thread_74182                                                                           4854     7.69%
+Thread_74183                                                                           4854     7.69%
+Thread_74184                                                                           4854     7.69%
+Thread_74185                                                                           4854     7.69%
+Thread_74186                                                                           4854     7.69%
+
+=== b10b11_h2cmux_server (total_samples=73365) ===
+Thread_74145                                                                           4891     6.67%
+Thread_74146                                                                           4891     6.67%
+Thread_74147                                                                           4891     6.67%
+Thread_74148                                                                           4891     6.67%
+Thread_74149                                                                           4891     6.67%
+Thread_74150                                                                           4891     6.67%
+Thread_74151                                                                           4891     6.67%
+Thread_74152                                                                           4891     6.67%
+Thread_74153                                                                           4891     6.67%
+Thread_74154                                                                           4891     6.67%
+Thread_74155                                                                           4891     6.67%
+Thread_74156                                                                           4891     6.67%
+
+=== b12b13_h2tls_client (total_samples=58728) ===
+Thread_74648                                                                           4894     8.33%
+Thread_74649                                                                           4894     8.33%
+Thread_74650                                                                           4894     8.33%
+Thread_74651                                                                           4894     8.33%
+Thread_74652                                                                           4894     8.33%
+Thread_74653                                                                           4894     8.33%
+Thread_74654                                                                           4894     8.33%
+Thread_74655                                                                           4894     8.33%
+Thread_74656                                                                           4894     8.33%
+Thread_74657                                                                           4894     8.33%
+Thread_74658                                                                           4894     8.33%
+Thread_74659                                                                           4894     8.33%
+
+=== b12b13_h2tls_server (total_samples=73665) ===
+Thread_74624                                                                           4911     6.67%
+Thread_74625                                                                           4911     6.67%
+Thread_74626                                                                           4911     6.67%
+Thread_74627                                                                           4911     6.67%
+Thread_74628                                                                           4911     6.67%
+Thread_74629                                                                           4911     6.67%
+Thread_74630                                                                           4911     6.67%
+Thread_74631                                                                           4911     6.67%
+Thread_74632                                                                           4911     6.67%
+Thread_74633                                                                           4911     6.67%
+Thread_74634                                                                           4911     6.67%
+Thread_74635                                                                           4911     6.67%
+
+=== b1b2_http_client (total_samples=67634) ===
+Thread_68289                                                                           4831     7.14%
+Thread_68290                                                                           4831     7.14%
+Thread_68291                                                                           4831     7.14%
+Thread_68292                                                                           4831     7.14%
+Thread_68293                                                                           4831     7.14%
+Thread_68294                                                                           4831     7.14%
+Thread_68295                                                                           4831     7.14%
+Thread_68296                                                                           4831     7.14%
+Thread_68297                                                                           4831     7.14%
+Thread_68298                                                                           4831     7.14%
+Thread_68299                                                                           4831     7.14%
+Thread_68300                                                                           4831     7.14%
+
+=== b1b2_http_server (total_samples=73530) ===
+Thread_68250                                                                           4902     6.67%
+Thread_68251                                                                           4902     6.67%
+Thread_68252                                                                           4902     6.67%
+Thread_68253                                                                           4902     6.67%
+Thread_68254                                                                           4902     6.67%
+Thread_68255                                                                           4902     6.67%
+Thread_68256                                                                           4902     6.67%
+Thread_68257                                                                           4902     6.67%
+Thread_68258                                                                           4902     6.67%
+Thread_68259                                                                           4902     6.67%
+Thread_68260                                                                           4902     6.67%
+Thread_68261                                                                           4902     6.67%
+
+=== b3b4_h2c_client (total_samples=841) ===
+Thread_68658                                                                             71     8.44%
+Thread_68659                                                                             70     8.32%
+Thread_68660                                                                             70     8.32%
+Thread_68661                                                                             70     8.32%
+Thread_68662                                                                             70     8.32%
+Thread_68663                                                                             70     8.32%
+Thread_68664                                                                             70     8.32%
+Thread_68665                                                                             70     8.32%
+Thread_68666                                                                             70     8.32%
+Thread_68667                                                                             70     8.32%
+Thread_68668                                                                             70     8.32%
+Thread_68669                                                                             70     8.32%
+
+=== b3b4_h2c_server (total_samples=69660) ===
+Thread_68519                                                                           4644     6.67%
+Thread_68520                                                                           4644     6.67%
+Thread_68521                                                                           4644     6.67%
+Thread_68522                                                                           4644     6.67%
+Thread_68523                                                                           4644     6.67%
+Thread_68524                                                                           4644     6.67%
+Thread_68525                                                                           4644     6.67%
+Thread_68526                                                                           4644     6.67%
+Thread_68527                                                                           4644     6.67%
+Thread_68528                                                                           4644     6.67%
+Thread_68529                                                                           4644     6.67%
+Thread_68530                                                                           4644     6.67%
+
+=== b5b6_ws_client (total_samples=135191) ===
+Thread_68859                                                                           4361     3.23%
+Thread_68860                                                                           4361     3.23%
+Thread_68861                                                                           4361     3.23%
+Thread_68862                                                                           4361     3.23%
+Thread_68863                                                                           4361     3.23%
+Thread_68864                                                                           4361     3.23%
+Thread_68865                                                                           4361     3.23%
+Thread_68866                                                                           4361     3.23%
+Thread_68867                                                                           4361     3.23%
+Thread_68868                                                                           4361     3.23%
+Thread_68869                                                                           4361     3.23%
+Thread_68870                                                                           4361     3.23%
+
+=== b5b6_ws_server (total_samples=78336) ===
+Thread_68818                                                                           4896     6.25%
+Thread_68819                                                                           4896     6.25%
+Thread_68820                                                                           4896     6.25%
+Thread_68821                                                                           4896     6.25%
+Thread_68822                                                                           4896     6.25%
+Thread_68823                                                                           4896     6.25%
+Thread_68824                                                                           4896     6.25%
+Thread_68825                                                                           4896     6.25%
+Thread_68826                                                                           4896     6.25%
+Thread_68827                                                                           4896     6.25%
+Thread_68828                                                                           4896     6.25%
+Thread_68829                                                                           4896     6.25%
+
+=== b7b8_wss_client (total_samples=71220) ===
+Thread_69193                                                                           4748     6.67%
+Thread_69194                                                                           4748     6.67%
+Thread_69195                                                                           4748     6.67%
+Thread_69196                                                                           4748     6.67%
+Thread_69197                                                                           4748     6.67%
+Thread_69198                                                                           4748     6.67%
+Thread_69199                                                                           4748     6.67%
+Thread_69200                                                                           4748     6.67%
+Thread_69201                                                                           4748     6.67%
+Thread_69202                                                                           4748     6.67%
+Thread_69203                                                                           4748     6.67%
+Thread_69204                                                                           4748     6.67%
+
+=== b7b8_wss_server (total_samples=73140) ===
+Thread_69163                                                                           4876     6.67%
+Thread_69164                                                                           4876     6.67%
+Thread_69165                                                                           4876     6.67%
+Thread_69166                                                                           4876     6.67%
+Thread_69167                                                                           4876     6.67%
+Thread_69168                                                                           4876     6.67%
+Thread_69169                                                                           4876     6.67%
+Thread_69170                                                                           4876     6.67%
+Thread_69171                                                                           4876     6.67%
+Thread_69172                                                                           4876     6.67%
+Thread_69173                                                                           4876     6.67%
+Thread_69174                                                                           4876     6.67%
+
+=== b9_hpack (total_samples=0) ===
+Thread_69502                                                                              0     0.00%
+
+=== smoke_b1_server (total_samples=36915) ===
+Thread_66460                                                                           2461     6.67%
+Thread_66461                                                                           2461     6.67%
+Thread_66462                                                                           2461     6.67%
+Thread_66463                                                                           2461     6.67%
+Thread_66464                                                                           2461     6.67%
+Thread_66465                                                                           2461     6.67%
+Thread_66466                                                                           2461     6.67%
+Thread_66467                                                                           2461     6.67%
+Thread_66468                                                                           2461     6.67%
+Thread_66469                                                                           2461     6.67%
+Thread_66470                                                                           2461     6.67%
+Thread_66471                                                                           2461     6.67%
+
+=== smoke_b2_client (total_samples=7799) ===
+Thread_66492                                                                            558     7.15%
+Thread_66493                                                                            557     7.14%
+Thread_66494                                                                            557     7.14%
+Thread_66495                                                                            557     7.14%
+Thread_66496                                                                            557     7.14%
+Thread_66497                                                                            557     7.14%
+Thread_66498                                                                            557     7.14%
+Thread_66499                                                                            557     7.14%
+Thread_66500                                                                            557     7.14%
+Thread_66501                                                                            557     7.14%
+Thread_66502                                                                            557     7.14%
+Thread_66503                                                                            557     7.14%
+

@@ -1,0 +1,220 @@
+630 libsystem_kernel`writev
+590 libsystem_kernel`__recvfrom
+116 libsystem_malloc`tiny_malloc_from_free_list
+92 libsystem_malloc`tiny_free_no_lock
+90 libsystem_kernel`__ulock_wait2
+87 libsystem_malloc`free_tiny
+85 libsystem_kernel`__psynch_mutexwait
+72 libsystem_kernel`__psynch_cvsignal
+65 libsystem_malloc`tiny_free_list_add_ptr
+64 libsystem_kernel`mach_absolute_time
+46 libsystem_malloc`tiny_malloc_should_clear
+40 libsystem_malloc`_szone_free
+37 libsystem_kernel`__psynch_mutexdrop
+35 libsystem_platform`_platform_memset
+34 libsystem_platform`_platform_memmove
+34 libsystem_malloc`_free
+34 libsystem_kernel`__ulock_wake
+29 libsystem_malloc`_malloc_zone_malloc
+27 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::queue::Steal<T>::steal_into
+26 libsystem_malloc`tiny_free_list_remove_ptr
+24 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::worker::Context::run
+23 galay-http-rust-proto-server`http::header::map::HeaderMap<T>::try_insert_entry
+22 galay-http-rust-proto-server`<hyper::server::conn::http1::UpgradeableConnection<I,S> as core::future::future::Future>::poll
+21 galay-http-rust-proto-server`tokio::runtime::io::scheduled_io::ScheduledIo::wake
+20 galay-http-rust-proto-server`_RNvCskdKJRKLKjqM_7___rustc11___rdl_alloc
+20 galay-http-rust-proto-server`<hyper::proto::h1::role::Server as hyper::proto::h1::Http1Transaction>::parse
+19 libsystem_malloc`szone_malloc_should_clear
+19 libsystem_malloc`rack_get_thread_index
+19 galay-http-rust-proto-server`http::header::map::hash_elem_using
+18 libsystem_malloc`get_tiny_previous_free_msize
+18 galay-http-rust-proto-server`tokio::runtime::io::scheduled_io::ScheduledIo::poll_readiness
+18 galay-http-rust-proto-server`http::header::map::HeaderMap<T>::try_reserve_one
+18 galay-http-rust-proto-server`<hyper::proto::h1::role::Server as hyper::proto::h1::Http1Transaction>::encode
+17 libsystem_kernel`swtch_pri
+17 galay-http-rust-proto-server`axum::extract::matched_path::set_matched_path_for_request
+16 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::worker::_<impl tokio::runtime::scheduler::multi_thread::handle::Handle>::schedule_local
+16 galay-http-rust-proto-server`hyper::proto::h1::io::Buffered<T,B>::poll_read_from_io
+16 galay-http-rust-proto-server`hashbrown::map::HashMap<K,V,S,A>::insert
+14 libsystem_c`clock_gettime
+14 galay-http-rust-proto-server`tokio::runtime::task::state::State::transition_to_notified_by_val
+14 galay-http-rust-proto-server`http::header::name::StandardHeader::from_bytes
+14 galay-http-rust-proto-server`axum::routing::Router<S>::call_with_state
+14 galay-http-rust-proto-server`<alloc::collections::vec_deque::iter::Iter<T> as core::iter::traits::iterator::Iterator>::fold
+13 libsystem_malloc`free_small
+13 galay-http-rust-proto-server`hyper::proto::h1::io::Buffered<T,B>::poll_flush
+13 galay-http-rust-proto-server`http::header::name::HeaderName::from_bytes
+13 galay-http-rust-proto-server`<hyper_util::service::oneshot::Oneshot<S,Req> as core::future::future::Future>::poll
+12 galay-http-rust-proto-server`tokio::runtime::io::driver::Driver::turn
+12 galay-http-rust-proto-server`matchit::tree::Node<T>::at
+12 galay-http-rust-proto-server`bytes::bytes_mut::BytesMut::reserve_inner
+12 galay-http-rust-proto-server`<futures_util::future::future::map::Map<Fut,F> as core::future::future::Future>::poll
+11 libsystem_malloc`small_free_list_add_ptr
+11 libdyld`_tlv_get_addr
+11 galay-http-rust-proto-server`hyper::proto::h1::io::Buffered<T,B>::parse
+11 galay-http-rust-proto-server`httparse::parse_headers_iter_uninit
+11 galay-http-rust-proto-server`http::header::map::HeaderMap<T>::try_insert2
+11 galay-http-rust-proto-server`http::extensions::Extensions::insert
+11 galay-http-rust-proto-server`axum_core::body::Body::new
+11 galay-http-rust-proto-server`_RNvCskdKJRKLKjqM_7___rustc14___rust_dealloc
+11 galay-http-rust-proto-server`<axum::routing::route::RouteFuture<E> as core::future::future::Future>::poll
+10 libsystem_malloc`_tiny_check_and_zero_inline_meta_from_freelist
+10 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::park::Parker::park
+10 galay-http-rust-proto-server`hyper::proto::h1::conn::Conn<I,B,T>::poll_read_head
+10 galay-http-rust-proto-server`hashbrown::raw::RawTable<T,A>::remove_entry
+10 galay-http-rust-proto-server`core::str::iter::SplitInternal<P>::next
+10 galay-http-rust-proto-server`<alloc::borrow::Cow<str> as axum_core::response::into_response::IntoResponse>::into_response
+9 libsystem_malloc`small_malloc_should_clear
+9 galay-http-rust-proto-server`tokio::runtime::io::registration::Registration::poll_io
+9 galay-http-rust-proto-server`std::sys::pal::unix::sync::mutex::Mutex::lock
+9 galay-http-rust-proto-server`hashbrown::raw::RawTableInner::drop_elements
+9 galay-http-rust-proto-server`core::str::_<impl str>::trim_matches
+9 galay-http-rust-proto-server`axum::routing::url_params::insert_url_params
+9 galay-http-rust-proto-server`axum::routing::method_routing::MethodRouter<S,E>::call_with_state
+9 galay-http-rust-proto-server`DYLD-STUB$$free
+8 galay-http-rust-proto-server`core::ptr::drop_in_place<axum::routing::route::RouteFuture<core::convert::Infallible>>
+8 galay-http-rust-proto-server`bytes::bytes::static_drop
+8 galay-http-rust-proto-server`<hyper_util::server::conn::auto::UpgradeableConnection<I,S,E> as core::future::future::Future>::poll
+8 galay-http-rust-proto-server`<hyper::proto::h1::dispatch::Server<S,hyper::body::incoming::Incoming> as hyper::proto::h1::dispatch::Dispatch>::recv_msg
+8 galay-http-rust-proto-server`<alloc::vec::Vec<T,A> as core::ops::drop::Drop>::drop
+7 libsystem_platform`_platform_memcmp
+7 galay-http-rust-proto-server`tokio::runtime::io::registration::Registration::poll_ready
+7 galay-http-rust-proto-server`hyper::proto::h1::conn::Conn<I,B,T>::write_head
+7 galay-http-rust-proto-server`httparse::Request::parse_with_config_and_uninit_headers
+7 galay-http-rust-proto-server`core::result::Result::Ok
+7 galay-http-rust-proto-server`core::ptr::drop_in_place<http::uri::Uri>
+7 galay-http-rust-proto-server`bytes::bytes_mut::shared_v_drop
+7 galay-http-rust-proto-server`_RNvCskdKJRKLKjqM_7___rustc35___rust_no_alloc_shim_is_unstable_v2
+7 galay-http-rust-proto-server`<axum::serve::Serve<M,S> as core::future::into_future::IntoFuture>::into_future::_{{closure}}::_{{closure}}
+6 libsystem_malloc`small_free_list_remove_ptr_no_clear
+6 libsystem_c`clock_gettime_nsec_np
+6 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::worker::Context::park_internal
+6 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::handle::_<impl tokio::runtime::task::Schedule for alloc::sync::Arc<tokio::runtime::scheduler::multi_thread::handle::Handle>>::schedule
+6 galay-http-rust-proto-server`tokio::runtime::context::with_scheduler
+6 galay-http-rust-proto-server`std::sys::pal::unix::time::Timespec::sub_timespec
+6 galay-http-rust-proto-server`hyper::headers::connection_close
+6 galay-http-rust-proto-server`core::ptr::drop_in_place<http::header::map::HeaderMap>
+6 galay-http-rust-proto-server`bytes::bytes_mut::shared_v_clone
+6 galay-http-rust-proto-server`axum::routing::route::set_content_length
+6 galay-http-rust-proto-server`_RNvCskdKJRKLKjqM_7___rustc12___rust_alloc
+6 galay-http-rust-proto-server`DYLD-STUB$$malloc
+6 galay-http-rust-proto-server`<u64 as itoa::Unsigned>::fmt
+6 galay-http-rust-proto-server`<hyper::proto::h1::io::WriteBuf<B> as bytes::buf::buf_impl::Buf>::chunks_vectored
+6 galay-http-rust-proto-server`<hyper::common::buf::BufList<T> as bytes::buf::buf_impl::Buf>::advance
+6 galay-http-rust-proto-server`<http::uri::Uri as core::clone::Clone>::clone
+6 galay-http-rust-proto-server`<deduplicated_symbol>
+5 libsystem_pthread`pthread_mutex_lock
+5 libsystem_pthread`_pthread_mutex_droplock
+5 galay-http-rust-proto-server`tokio::runtime::task::harness::Harness<T,S>::poll
+5 galay-http-rust-proto-server`hyper::proto::h1::io::WriteBuf<B>::can_buffer
+5 galay-http-rust-proto-server`hyper::proto::h1::conn::State::try_keep_alive
+5 galay-http-rust-proto-server`hyper::proto::h1::conn::Conn<I,B,T>::poll_read_keep_alive
+5 galay-http-rust-proto-server`http::uri::Uri::from_shared
+5 galay-http-rust-proto-server`http::header::map::HeaderMap<T>::get
+5 galay-http-rust-proto-server`http::header::map::HeaderMap<T>::contains_key
+5 galay-http-rust-proto-server`core::ptr::drop_in_place<axum::routing::url_params::UrlParams>
+5 galay-http-rust-proto-server`core::hash::BuildHasher::hash_one
+5 galay-http-rust-proto-server`<http::header::map::Drain<T> as core::ops::drop::Drop>::drop
+5 galay-http-rust-proto-server`<core::hash::sip::Hasher<S> as core::hash::Hasher>::write
+5 galay-http-rust-proto-server`<axum::routing::route::Route<E> as core::clone::Clone>::clone
+5 galay-http-rust-proto-server`<alloc::vec::Vec<T,A> as alloc::vec::spec_extend::SpecExtend<&T,core::slice::iter::Iter<T>>>::spec_extend
+4 libsystem_platform`_os_unfair_lock_lock_slow
+4 libsystem_malloc`szone_try_free_default
+4 libsystem_malloc`small_malloc_from_free_list
+4 libsystem_kernel`mach_timebase_info
+4 libsystem_kernel`__commpage_gettimeofday_internal
+4 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::worker::Context::run_task
+4 galay-http-rust-proto-server`std::sys::pal::unix::time::Timespec::now
+4 galay-http-rust-proto-server`std::sys::pal::unix::sync::mutex::Mutex::unlock
+4 galay-http-rust-proto-server`parking_lot::condvar::Condvar::notify_one_slow
+4 galay-http-rust-proto-server`matchit::params::Params::for_each_key_mut
+4 galay-http-rust-proto-server`httparse::Request::parse_with_uninit_headers
+4 galay-http-rust-proto-server`http::method::Method::from_bytes
+4 galay-http-rust-proto-server`http::header::map::HeaderMap<T>::try_reserve
+4 galay-http-rust-proto-server`hashbrown::raw::RawTable<T,A>::reserve_rehash
+4 galay-http-rust-proto-server`core::ptr::drop_in_place<hyper_util::service::oneshot::Oneshot<tower::util::map_request::MapRequest<axum::routing::Router,<axum::serve::Serve<axum::routing::Router,axum::routing::Router> as core::future::into_future::IntoFuture>::into_future::{{closure}}::{{closure}}>,http::request::Request<hyper::body::incoming::Incoming>>>
+4 galay-http-rust-proto-server`core::ptr::drop_in_place<hyper::body::incoming::Incoming>
+4 galay-http-rust-proto-server`bytes::bytes_mut::BytesMut::split_to
+4 galay-http-rust-proto-server`bytes::bytes::Bytes::slice_ref
+4 galay-http-rust-proto-server`bytes::bytes::Bytes::slice
+4 galay-http-rust-proto-server`axum::routing::route::Route<E>::oneshot_inner_owned
+4 galay-http-rust-proto-server`<tower::util::oneshot::Oneshot<S,Req> as core::future::future::Future>::poll
+4 galay-http-rust-proto-server`<tower::util::map_future::MapFuture<S,F> as tower_service::Service<R>>::call
+4 galay-http-rust-proto-server`<hyper::proto::h1::role::Server as hyper::proto::h1::Http1Transaction>::update_date
+4 galay-http-rust-proto-server`<core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::try_fold
+4 galay-http-rust-proto-server`<axum_core::body::Body as core::convert::From<alloc::borrow::Cow<str>>>::from
+4 galay-http-rust-proto-server`<alloc::string::String as core::clone::Clone>::clone
+4 galay-http-rust-proto-server`<F as axum::handler::Handler<((),),S>>::call::_{{closure}}
+4 galay-http-rust-proto-server`<&std::fs::File as std::io::Write>::write_vectored
+4 galay-http-rust-proto-server`<&mio::net::tcp::stream::TcpStream as std::io::Write>::write_vectored
+3 libsystem_pthread`pthread_mutex_unlock
+3 libsystem_platform`os_unfair_lock_lock_with_options
+3 libsystem_malloc`szone_malloc_type_malloc
+3 libsystem_malloc`small_free_list_find_by_ptr
+3 libsystem_malloc`malloc
+3 libsystem_malloc`free
+3 galay-http-rust-proto-server`tokio::runtime::task::state::State::transition_to_running
+3 galay-http-rust-proto-server`tokio::runtime::task::raw::poll
+3 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::park::Inner::park_condvar
+3 galay-http-rust-proto-server`parking_lot::condvar::Condvar::wait_until_internal
+3 galay-http-rust-proto-server`http::header::name::StandardHeader::as_str
+3 galay-http-rust-proto-server`core::str::converts::from_utf8
+3 galay-http-rust-proto-server`core::ptr::drop_in_place<tower::util::oneshot::State<tower::util::boxed_clone::BoxCloneService<http::request::Request<axum_core::body::Body>,http::response::Response<axum_core::body::Body>,core::convert::Infallible>,http::request::Request<axum_core::body::Body>>>
+3 galay-http-rust-proto-server`core::ptr::drop_in_place<[(alloc::sync::Arc<str>,axum::util::PercentDecodedStr)]>
+3 galay-http-rust-proto-server`bytes::bytes::Bytes::copy_from_slice
+3 galay-http-rust-proto-server`DYLD-STUB$$memcpy
+3 galay-http-rust-proto-server`<&str as axum_core::response::into_response::IntoResponse>::into_response
+2 libsystem_pthread`_pthread_cond_wait
+2 libsystem_malloc`small_free_list_remove_ptr
+2 libsystem_m`pow
+2 libsystem_kernel`__commpage_gettimeofday
+2 libsystem_c`gettimeofday
+2 libsystem_c`DYLD-STUB$$__commpage_gettimeofday
+2 galay-http-rust-proto-server`tokio::runtime::time::Driver::park_internal
+2 galay-http-rust-proto-server`tokio::runtime::task::waker::clone_waker
+2 galay-http-rust-proto-server`tokio::runtime::task::core::TaskIdGuard::enter
+2 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::worker::_<impl tokio::runtime::scheduler::multi_thread::handle::Handle>::notify_parked_local
+2 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::worker::_<impl tokio::runtime::scheduler::multi_thread::handle::Handle>::notify_if_work_pending
+2 galay-http-rust-proto-server`tokio::runtime::scheduler::multi_thread::idle::Idle::transition_worker_to_parked
+2 galay-http-rust-proto-server`std::time::SystemTime::now
+2 galay-http-rust-proto-server`std::time::Instant::now
+2 galay-http-rust-proto-server`std::time::Instant::elapsed
+2 galay-http-rust-proto-server`hyper::proto::h1::conn::Conn<I,B,T>::write_body_and_end
+2 galay-http-rust-proto-server`hyper::proto::h1::conn::Conn<I,B,T>::maybe_notify
+2 galay-http-rust-proto-server`hyper::common::date::update
+2 galay-http-rust-proto-server`http::request::Parts::new
+2 galay-http-rust-proto-server`core::ptr::drop_in_place<tower::util::map_future::MapFuture<tower::util::map_response::MapResponse<axum::handler::service::HandlerService<galay_http_rust_proto_server::echo,(axum_core::extract::private::ViaRequest,alloc::string::String),galay_http_rust_proto_server::AppState>,<http::response::Response<axum_core::body::Body> as axum_core::response::into_response::IntoResponse>::into_response>,tower::util::boxed_clone::BoxCloneService<http::request::Request<axum_core::body::Body>,http::response::Response<axum_core::body::Body>,core::convert::Infallible>::new<tower::util::map_response::MapResponse<axum::handler::service::HandlerService<galay_http_rust_proto_server::echo,(axum_core::extract::private::ViaRequest,alloc::string::String),galay_http_rust_proto_server::AppState>,<http::response::Response<axum_core::body::Body> as axum_core::response::into_response::IntoResponse>::into_response>>::{{closure}}>>
+2 galay-http-rust-proto-server`core::ptr::drop_in_place<core::option::Option<http::request::Request<axum_core::body::Body>>>
+2 galay-http-rust-proto-server`core::iter::adapters::try_process
+2 galay-http-rust-proto-server`core::alloc::layout::Layout::is_size_align_valid
+2 galay-http-rust-proto-server`bytes::bytes::static_clone
+2 galay-http-rust-proto-server`axum::routing::path_router::Node::at
+2 galay-http-rust-proto-server`<std::sys::sync::mutex::pthread::Mutex as core::ops::drop::Drop>::drop
+2 galay-http-rust-proto-server`<matchit::params::ParamsIter as core::iter::traits::iterator::Iterator>::next
+2 galay-http-rust-proto-server`<F as axum::handler::Handler<((),),S>>::call
+1 libsystem_pthread`pthread_cond_signal
+1 libsystem_pthread`_pthread_cond_updateval
+1 libsystem_c`DYLD-STUB$$mach_timebase_info
+1 libsystem_c`DYLD-STUB$$mach_absolute_time
+1 galay-http-rust-proto-server`tokio::runtime::time::wheel::Wheel::next_expiration
+1 galay-http-rust-proto-server`tokio::runtime::task::waker::wake_by_val
+1 galay-http-rust-proto-server`tokio::runtime::signal::Driver::process
+1 galay-http-rust-proto-server`tokio::runtime::driver::Driver::park_timeout
+1 galay-http-rust-proto-server`tokio::process::imp::orphan::OrphanQueueImpl<T>::reap_orphans
+1 galay-http-rust-proto-server`parking_lot_core::parking_lot::lock_bucket_pair
+1 galay-http-rust-proto-server`parking_lot::raw_mutex::RawMutex::lock_slow
+1 galay-http-rust-proto-server`mio::poll::Poll::poll
+1 galay-http-rust-proto-server`matchit::params::Params::iter
+1 galay-http-rust-proto-server`hyper::proto::h1::encode::Encoder::encode_and_end
+1 galay-http-rust-proto-server`hyper::common::date::extend
+1 galay-http-rust-proto-server`httparse::parse_version
+1 galay-http-rust-proto-server`core::ptr::drop_in_place<http::request::Request<axum_core::body::Body>>
+1 galay-http-rust-proto-server`core::ptr::drop_in_place<http::request::Parts>
+1 galay-http-rust-proto-server`core::ptr::drop_in_place<axum::extract::request_parts::OriginalUri>
+1 galay-http-rust-proto-server`core::ptr::drop_in_place<axum::extract::matched_path::MatchedPath>
+1 galay-http-rust-proto-server`DYLD-STUB$$pthread_mutex_lock
+1 galay-http-rust-proto-server`<tokio::runtime::task::core::TaskIdGuard as core::ops::drop::Drop>::drop
+1 galay-http-rust-proto-server`<http_body_util::combinators::map_err::MapErr<B,F> as http_body::Body>::poll_frame
+1 galay-http-rust-proto-server`<http_body_util::combinators::map_err::MapErr<B,F> as http_body::Body>::is_end_stream
+1 galay-http-rust-proto-server`<bytes::bytes::Bytes as core::convert::From<alloc::vec::Vec<u8>>>::from
+1 galay-http-rust-proto-server`<T as tower::util::boxed_clone::CloneService<R>>::clone_box

@@ -65,10 +65,27 @@ public:
         return m_max_response_size;
     }
 
+    /**
+     * @brief 设置 writev 聚合阈值（仅 TcpSocket）
+     * @details 当 header+body 总长度 <= threshold 时，改为单缓冲 send；
+     *          设为 0 表示始终使用 writev。
+     */
+    void setWritevCoalesceThreshold(size_t threshold) {
+        m_writev_coalesce_threshold = threshold;
+    }
+
+    /**
+     * @brief 获取 writev 聚合阈值（字节）
+     */
+    size_t getWritevCoalesceThreshold() const {
+        return m_writev_coalesce_threshold;
+    }
+
 private:
     int m_send_timeout_ms = DEFAULT_HTTP_SEND_TIME_MS;
     bool m_buffering_enabled = true;
     size_t m_max_response_size = DEFAULT_HTTP_MAX_BODY_SIZE;
+    size_t m_writev_coalesce_threshold = 0;
 };
 
 } // namespace galay::http

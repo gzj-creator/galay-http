@@ -1,9 +1,11 @@
 build/
-build_ssl/
+build*/
 build_mod/
 build_mod_llvm/
 .vscode/
 .cache/
+.vscode/
+.venv*/
 *.log
 cert/*.log
 files/*.bin

@@ -1,0 +1,10 @@
+/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/compare/protocols/rust-server/target/release/deps/log-821c4da05786a8ea.d: /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/lib.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/macros.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/serde.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/__private_api.rs
+
+/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/compare/protocols/rust-server/target/release/deps/liblog-821c4da05786a8ea.rlib: /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/lib.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/macros.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/serde.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/__private_api.rs
+
+/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/compare/protocols/rust-server/target/release/deps/liblog-821c4da05786a8ea.rmeta: /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/lib.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/macros.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/serde.rs /Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/__private_api.rs
+
+/Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/lib.rs:
+/Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/macros.rs:
+/Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/serde.rs:
+/Users/gongzhijie/.cargo/registry/src/mirrors.ustc.edu.cn-5857e57f01837ef8/log-0.4.29/src/__private_api.rs:

@@ -1,0 +1,15 @@
+Thread_74173   DispatchQueue_1: com.apple.main-thread  (serial) 4854
+Thread_74175 4854
+Thread_74176 4854
+Thread_74177 4854
+Thread_74178 4854
+Thread_74179 4854
+Thread_74180 4854
+Thread_74181 4854
+Thread_74182 4854
+Thread_74183 4854
+Thread_74184 4854
+Thread_74185 4854
+Thread_74186 4854
+Thread_74187 4854
+Thread_74190;thread_start;_pthread_start;std::__thread_proxy[abi:ne190102]<std::tuple<std::unique_ptr<std::__thread_struct>, spdlog::details::thread_pool::thread_pool(unsigned long, unsigned long, std::function<void ()>, std::function<void ()>)::'lambda'()>>(void*);spdlog::details::thread_pool::process_next_msg_();spdlog::details::mpmc_blocking_queue<spdlog::details::async_msg>::dequeue(spdlog::details::async_msg&);std::condition_variable::wait(std::unique_lock<std::mutex>&);_pthread_cond_wait;__psynch_cvwait 4854

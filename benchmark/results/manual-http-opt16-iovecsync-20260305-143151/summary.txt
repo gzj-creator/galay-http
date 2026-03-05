@@ -1,0 +1,5 @@
+galay: median=125278.50
+go: median=152296.62
+rust: median=162979.50
+gap_vs_go=-17.74%
+gap_vs_rust=-23.13%

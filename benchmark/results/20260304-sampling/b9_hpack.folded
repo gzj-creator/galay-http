@@ -1,0 +1,8 @@
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;runBench(int) 4974
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;runBench(int) 145
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;runBench(int) 28
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;galay::http2::HpackEncoder::encode(std::vector<galay::http2::Http2HeaderField> const&) 4
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;_szone_free 3
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;free_tiny 3
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;runBench(int) 2
+Thread_69502   DispatchQueue_1: com.apple.main-thread  (serial);start;main;runBench(int);_free 1

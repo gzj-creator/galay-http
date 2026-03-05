@@ -3,6 +3,7 @@
 
 #include "Http2Conn.h"
 #include "Http2Stream.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/kernel/http/HttpLog.h"
@@ -15,7 +16,9 @@
 #endif
 #include <memory>
 #include <optional>
+#include <array>
 #include <cstring>
+#include <vector>
 
 namespace galay::http2
 {
@@ -23,6 +26,74 @@ namespace galay::http2
 #ifdef GALAY_HTTP_SSL_ENABLED
 using namespace galay::kernel;
 using namespace galay::ssl;
+
+namespace detail
+{
+inline bool parseFrameFromRingBuffer(RingBuffer& ring_buffer,
+                                     uint32_t max_frame_size,
+                                     std::optional<Http2ErrorCode>& error,
+                                     std::vector<uint8_t>& scratch,
+                                     Http2Frame::uptr& frame)
+{
+    std::array<iovec, 2> read_iovecs{};
+    const size_t iov_count = ring_buffer.getReadIovecs(read_iovecs.data(), read_iovecs.size());
+    if (iov_count == 0) {
+        return false;
+    }
+
+    const size_t available = IoVecBytes::sum(read_iovecs, iov_count);
+    if (available < kHttp2FrameHeaderLength) {
+        return false;
+    }
+
+    uint8_t header_buf[kHttp2FrameHeaderLength];
+    if (IoVecBytes::copyPrefix(read_iovecs, iov_count, header_buf, kHttp2FrameHeaderLength)
+        < kHttp2FrameHeaderLength) {
+        return false;
+    }
+
+    const Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
+    if (header.length > max_frame_size) {
+        error = Http2ErrorCode::FrameSizeError;
+        return false;
+    }
+
+    const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(header.length);
+    if (available < frame_size) {
+        return false;
+    }
+
+    const iovec* first_segment = IoVecWindow::firstNonEmpty(read_iovecs, iov_count);
+    if (first_segment != nullptr && first_segment->iov_len >= frame_size) {
+        const auto* frame_data = static_cast<const uint8_t*>(first_segment->iov_base);
+        auto frame_result = Http2FrameParser::parseFrame(frame_data, frame_size);
+        ring_buffer.consume(frame_size);
+        if (!frame_result.has_value()) {
+            error = Http2ErrorCode::ProtocolError;
+            return false;
+        }
+        frame = std::move(frame_result.value());
+        return true;
+    }
+
+    if (scratch.size() < frame_size) {
+        scratch.resize(frame_size);
+    }
+
+    if (IoVecBytes::copyPrefix(read_iovecs, iov_count, scratch.data(), frame_size) < frame_size) {
+        return false;
+    }
+
+    auto frame_result = Http2FrameParser::parseFrame(scratch.data(), frame_size);
+    ring_buffer.consume(frame_size);
+    if (!frame_result.has_value()) {
+        error = Http2ErrorCode::ProtocolError;
+        return false;
+    }
+    frame = std::move(frame_result.value());
+    return true;
+}
+} // namespace detail
 
 /**
  * @brief H2 客户端配置
@@ -404,12 +475,7 @@ public:
         private:
             bool prepareRecvWindow() {
                 auto write_iovecs = m_owner->m_ring_buffer.getWriteIovecs();
-                if (write_iovecs.empty()) {
-                    return false;
-                }
-                this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-                this->m_plainLength = write_iovecs[0].iov_len;
-                return this->m_plainLength > 0;
+                return IoVecWindow::bindFirstNonEmpty(write_iovecs, this->m_plainBuffer, this->m_plainLength);
             }
 
             ConnectAwaitable* m_owner;
@@ -568,62 +634,12 @@ public:
         }
 
         bool parseNextFrame(Http2Frame::uptr& frame) {
-            auto read_iovecs = m_ring_buffer.getReadIovecs();
-            if (read_iovecs.empty()) {
-                return false;
-            }
-
-            size_t available = 0;
-            for (const auto& iov : read_iovecs) {
-                available += iov.iov_len;
-            }
-
-            if (available < kHttp2FrameHeaderLength) {
-                return false;
-            }
-
-            uint8_t header_buf[kHttp2FrameHeaderLength];
-            size_t copied = 0;
-            for (const auto& iov : read_iovecs) {
-                const size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
-                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-                copied += to_copy;
-                if (copied >= kHttp2FrameHeaderLength) {
-                    break;
-                }
-            }
-
-            Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
-            if (header.length > m_peer_settings.max_frame_size) {
-                m_error = Http2ErrorCode::FrameSizeError;
-                return false;
-            }
-
-            const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(header.length);
-            if (available < frame_size) {
-                return false;
-            }
-
-            std::vector<uint8_t> frame_buf(frame_size);
-            copied = 0;
-            for (const auto& iov : read_iovecs) {
-                const size_t to_copy = std::min(iov.iov_len, frame_size - copied);
-                std::memcpy(frame_buf.data() + copied, iov.iov_base, to_copy);
-                copied += to_copy;
-                if (copied >= frame_size) {
-                    break;
-                }
-            }
-
-            auto frame_result = Http2FrameParser::parseFrame(frame_buf.data(), frame_size);
-            m_ring_buffer.consume(frame_size);
-            if (!frame_result.has_value()) {
-                m_error = Http2ErrorCode::ProtocolError;
-                return false;
-            }
-
-            frame = std::move(frame_result.value());
-            return true;
+            return detail::parseFrameFromRingBuffer(
+                m_ring_buffer,
+                m_peer_settings.max_frame_size,
+                m_error,
+                m_frame_scratch,
+                frame);
         }
 
         bool consumeSettingsFrames() {
@@ -680,6 +696,7 @@ public:
         bool m_done = false;
         char m_dummy_recv_buffer[1]{0};
         Scheduler* m_scheduler = nullptr;
+        std::vector<uint8_t> m_frame_scratch;
 
     public:
         std::expected<bool, IOError> m_result;
@@ -904,12 +921,7 @@ public:
         private:
             bool prepareRecvWindow() {
                 auto write_iovecs = m_owner->m_client.m_conn->ringBuffer().getWriteIovecs();
-                if (write_iovecs.empty()) {
-                    return false;
-                }
-                this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-                this->m_plainLength = write_iovecs[0].iov_len;
-                return this->m_plainLength > 0;
+                return IoVecWindow::bindFirstNonEmpty(write_iovecs, this->m_plainBuffer, this->m_plainLength);
             }
 
             RequestAwaitable* m_owner;
@@ -950,19 +962,15 @@ public:
                 headers.push_back(h);
             }
 
-            Http2HeadersFrame headers_frame;
-            headers_frame.header().stream_id = m_stream_id;
-            headers_frame.setHeaderBlock(m_client.m_conn->encoder().encode(headers));
-            headers_frame.setEndHeaders(true);
-            headers_frame.setEndStream(m_request.body.empty());
-            m_send_buffer = headers_frame.serialize();
+            auto headers_frame = Http2FrameBuilder::headers(m_stream_id,
+                                                            m_client.m_conn->encoder().encode(headers),
+                                                            m_request.body.empty(),
+                                                            true);
+            m_send_buffer = headers_frame->serialize();
 
             if (!m_request.body.empty()) {
-                Http2DataFrame data_frame;
-                data_frame.header().stream_id = m_stream_id;
-                data_frame.setData(m_request.body);
-                data_frame.setEndStream(true);
-                m_send_buffer.append(data_frame.serialize());
+                auto data_frame = Http2FrameBuilder::data(m_stream_id, std::string(m_request.body), true);
+                m_send_buffer.append(data_frame->serialize());
             }
 
             m_send_awaitable = ProtocolSendAwaitable(this);
@@ -1013,63 +1021,12 @@ public:
         }
 
         bool parseNextFrame(Http2Frame::uptr& frame) {
-            auto& ring_buffer = m_client.m_conn->ringBuffer();
-            auto read_iovecs = ring_buffer.getReadIovecs();
-            if (read_iovecs.empty()) {
-                return false;
-            }
-
-            size_t available = 0;
-            for (const auto& iov : read_iovecs) {
-                available += iov.iov_len;
-            }
-
-            if (available < kHttp2FrameHeaderLength) {
-                return false;
-            }
-
-            uint8_t header_buf[kHttp2FrameHeaderLength];
-            size_t copied = 0;
-            for (const auto& iov : read_iovecs) {
-                const size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
-                std::memcpy(header_buf + copied, iov.iov_base, to_copy);
-                copied += to_copy;
-                if (copied >= kHttp2FrameHeaderLength) {
-                    break;
-                }
-            }
-
-            Http2FrameHeader header = Http2FrameHeader::deserialize(header_buf);
-            if (header.length > m_client.m_conn->peerSettings().max_frame_size) {
-                m_error = Http2ErrorCode::FrameSizeError;
-                return false;
-            }
-
-            const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(header.length);
-            if (available < frame_size) {
-                return false;
-            }
-
-            std::vector<uint8_t> frame_buf(frame_size);
-            copied = 0;
-            for (const auto& iov : read_iovecs) {
-                const size_t to_copy = std::min(iov.iov_len, frame_size - copied);
-                std::memcpy(frame_buf.data() + copied, iov.iov_base, to_copy);
-                copied += to_copy;
-                if (copied >= frame_size) {
-                    break;
-                }
-            }
-
-            auto frame_result = Http2FrameParser::parseFrame(frame_buf.data(), frame_size);
-            ring_buffer.consume(frame_size);
-            if (!frame_result.has_value()) {
-                m_error = Http2ErrorCode::ProtocolError;
-                return false;
-            }
-
-            frame = std::move(frame_result.value());
-            return true;
+            return detail::parseFrameFromRingBuffer(
+                m_client.m_conn->ringBuffer(),
+                m_client.m_conn->peerSettings().max_frame_size,
+                m_error,
+                m_frame_scratch,
+                frame);
         }
 
         bool decodeHeaderBlock() {
@@ -1209,6 +1166,7 @@ public:
         std::optional<Http2ErrorCode> m_error;
         bool m_done = false;
         char m_dummy_recv_buffer[1]{0};
+        std::vector<uint8_t> m_frame_scratch;
 
     public:
         std::expected<bool, IOError> m_result;
@@ -1307,6 +1265,8 @@ public:
 
     H2Client(const H2Client&) = delete;
     H2Client& operator=(const H2Client&) = delete;
+    H2Client(H2Client&&) noexcept = default;
+    H2Client& operator=(H2Client&&) noexcept = default;
 
     RuntimeConnectAwaitable connect(const std::string& host, uint16_t port = 443) {
         return RuntimeConnectAwaitable(*this, host, port);

@@ -1304,13 +1304,24 @@ public:
     }
     
     Http2Stream::ptr createStream(uint32_t stream_id) {
-        auto stream = Http2Stream::create(stream_id);
-        m_streams[stream_id] = stream;
-        return stream;
+        auto [it, inserted] = m_streams.try_emplace(stream_id);
+        if (inserted || !it->second) {
+            it->second = Http2Stream::create(stream_id);
+        }
+        return it->second;
     }
     
     void removeStream(uint32_t stream_id) {
         m_streams.erase(stream_id);
+    }
+
+    void reserveStreams(size_t capacity) {
+        if (capacity == 0) {
+            return;
+        }
+        if (capacity > m_streams.bucket_count()) {
+            m_streams.reserve(capacity);
+        }
     }
     
     size_t streamCount() const { return m_streams.size(); }
@@ -1547,16 +1558,14 @@ public:
      * @brief 发送 RST_STREAM
      */
     Http2WriteFrameAwaitableImpl<SocketType> sendRstStream(uint32_t stream_id, Http2ErrorCode error) {
-        Http2RstStreamFrame frame;
-        frame.header().stream_id = stream_id;
-        frame.setErrorCode(error);
+        auto bytes = Http2FrameBuilder::rstStreamBytes(stream_id, error);
         
         auto stream = getStream(stream_id);
         if (stream) {
             stream->onRstStreamSent();
         }
         
-        return writeFrame(frame);
+        return writeRaw(std::move(bytes));
     }
     
     /**
@@ -1579,19 +1588,17 @@ public:
         bool end_headers = true)
     {
         std::string header_block = m_encoder.encode(headers);
-        
-        Http2HeadersFrame frame;
-        frame.header().stream_id = stream_id;
-        frame.setHeaderBlock(std::move(header_block));
-        frame.setEndStream(end_stream);
-        frame.setEndHeaders(end_headers);
+        auto bytes = Http2FrameBuilder::headersBytes(stream_id,
+                                                     header_block,
+                                                     end_stream,
+                                                     end_headers);
         
         auto stream = getStream(stream_id);
         if (stream) {
             stream->onHeadersSent(end_stream);
         }
         
-        return writeFrame(frame);
+        return writeRaw(std::move(bytes));
     }
     
     /**
@@ -1602,10 +1609,7 @@ public:
         const std::string& data,
         bool end_stream = false)
     {
-        Http2DataFrame frame;
-        frame.header().stream_id = stream_id;
-        frame.setData(data);
-        frame.setEndStream(end_stream);
+        auto bytes = Http2FrameBuilder::dataBytes(stream_id, data, end_stream);
         
         auto stream = getStream(stream_id);
         if (stream) {
@@ -1616,7 +1620,7 @@ public:
             }
         }
         
-        return writeFrame(frame);
+        return writeRaw(std::move(bytes));
     }
     
     /**
