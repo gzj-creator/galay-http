@@ -210,6 +210,7 @@ namespace galay::http {
         std::string m_parseHeaderKey;
         std::string m_parseHeaderValue;
         size_t m_parsedBytes = 0;  // 已经解析的字节数
+        CommonHeaderIndex m_currentCommonHeaderIdx = CommonHeaderIndex::NotCommon;
     };
 
 }

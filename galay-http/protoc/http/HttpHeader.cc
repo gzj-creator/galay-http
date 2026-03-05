@@ -1456,12 +1456,27 @@ namespace galay::http
     void HttpResponseHeader::commitParsedHeaderPair()
     {
         if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
-            m_headerPairs.addNormalizedHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+            // Server 端：使用 fast path
+            if (m_currentCommonHeaderIdx != CommonHeaderIndex::NotCommon) {
+                m_headerPairs.setCommonHeader(
+                    m_currentCommonHeaderIdx,
+                    std::move(m_parseHeaderValue)
+                );
+            } else {
+                // 罕见 header，key 已经是小写
+                m_headerPairs.addNormalizedHeaderPair(
+                    std::move(m_parseHeaderKey),
+                    std::move(m_parseHeaderValue)
+                );
+            }
         } else {
+            // Client 端：直接存 map，不转小写
             m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
         }
+
         m_parseHeaderKey.clear();
         m_parseHeaderValue.clear();
+        m_currentCommonHeaderIdx = CommonHeaderIndex::NotCommon;
     }
 
     bool HttpResponseHeader::isKeepAlive() const
@@ -1610,18 +1625,38 @@ namespace galay::http
             } else if (c == '\n') {
                 return kBadRequest;
             } else {
-                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
+                // Server 端：边解析边转小写
+                if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                    m_parseHeaderKey += toLowerAsciiChar(c);
+                } else {
+                    m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
+                }
                 m_parseState = ResponseParseState::HeaderKey;
             }
             break;
 
         case ResponseParseState::HeaderKey:
             if (c == ':') {
+                if (m_parseHeaderKey.size() > 256) {
+                    return kBadRequest;
+                }
+                // Server 端：尝试匹配常见 header
+                if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                    m_currentCommonHeaderIdx = matchCommonHeader(m_parseHeaderKey);
+                }
                 m_parseState = ResponseParseState::HeaderColon;
             } else if (c == '\r' || c == '\n') {
                 return kBadRequest;
             } else {
-                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
+                if (m_parseHeaderKey.size() >= 256) {
+                    return kBadRequest;
+                }
+                // Server 端：边解析边转小写
+                if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                    m_parseHeaderKey += toLowerAsciiChar(c);
+                } else {
+                    m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
+                }
             }
             break;
 
@@ -1670,7 +1705,12 @@ namespace galay::http
             if (c == '\r') {
                 m_parseState = ResponseParseState::HeaderEndCR;
             } else {
-                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
+                // Server 端：边解析边转小写
+                if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                    m_parseHeaderKey += toLowerAsciiChar(c);
+                } else {
+                    m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
+                }
                 m_parseState = ResponseParseState::HeaderKey;
             }
             break;
@@ -1879,7 +1919,12 @@ namespace galay::http
                         return {kBadRequest, -1};
                     }
                     reserveIfUnset(m_parseHeaderKey, 32);
-                    m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    // Server 端：边解析边转小写
+                    if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                        m_parseHeaderKey.push_back(toLowerAsciiChar(data[i]));
+                    } else {
+                        m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    }
                     ++i;
                     m_parseState = ResponseParseState::HeaderKey;
                     break;
@@ -1895,6 +1940,13 @@ namespace galay::http
                     }
                     if (data[i++] != ':') {
                         return {kBadRequest, -1};
+                    }
+                    if (m_parseHeaderKey.size() > 256) {
+                        return {kBadRequest, -1};
+                    }
+                    // Server 端：尝试匹配常见 header
+                    if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                        m_currentCommonHeaderIdx = matchCommonHeader(m_parseHeaderKey);
                     }
                     m_parseState = ResponseParseState::HeaderColon;
                     break;
@@ -1978,7 +2030,12 @@ namespace galay::http
                         break;
                     }
                     reserveIfUnset(m_parseHeaderKey, 32);
-                    m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    // Server 端：边解析边转小写
+                    if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                        m_parseHeaderKey.push_back(toLowerAsciiChar(data[i]));
+                    } else {
+                        m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    }
                     ++i;
                     m_parseState = ResponseParseState::HeaderKey;
                     break;
