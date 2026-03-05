@@ -281,25 +281,24 @@ namespace galay::http
 
     HeaderPair::HeaderPair(Mode mode)
         : m_mode(mode)
+        , m_commonHeaderPresent(0)  // 初始化为全 0
     {
     }
 
     HeaderPair::HeaderPair(const HeaderPair &other)
         : m_mode(other.m_mode)
+        , m_commonHeaders(other.m_commonHeaders)
+        , m_commonHeaderPresent(other.m_commonHeaderPresent)
+        , m_headerPairs(other.m_headerPairs)
     {
-        if(this != &other)
-        {
-            m_headerPairs = other.m_headerPairs;
-        }
     }
 
     HeaderPair::HeaderPair(HeaderPair &&other)
         : m_mode(other.m_mode)
+        , m_commonHeaders(std::move(other.m_commonHeaders))
+        , m_commonHeaderPresent(other.m_commonHeaderPresent)
+        , m_headerPairs(std::move(other.m_headerPairs))
     {
-        if(this != &other)
-        {
-            std::swap(m_headerPairs, other.m_headerPairs);
-        }
     }
 
     bool HeaderPair::hasKey(const std::string &key) const
@@ -417,16 +416,70 @@ namespace galay::http
 
     HeaderPair &HeaderPair::operator=(const HeaderPair &other)
     {
-        m_mode = other.m_mode;
-        m_headerPairs = other.m_headerPairs;
+        if (this != &other) {
+            m_mode = other.m_mode;
+            m_commonHeaders = other.m_commonHeaders;
+            m_commonHeaderPresent = other.m_commonHeaderPresent;
+            m_headerPairs = other.m_headerPairs;
+        }
         return *this;
     }
 
     HeaderPair &HeaderPair::operator=(HeaderPair &&other)
     {
-        m_mode = other.m_mode;
-        std::swap(m_headerPairs, other.m_headerPairs);
+        if (this != &other) {
+            m_mode = other.m_mode;
+            m_commonHeaders = std::move(other.m_commonHeaders);
+            m_commonHeaderPresent = other.m_commonHeaderPresent;
+            m_headerPairs = std::move(other.m_headerPairs);
+        }
         return *this;
+    }
+
+    void HeaderPair::setCommonHeader(CommonHeaderIndex idx, std::string value)
+    {
+        size_t i = static_cast<size_t>(idx);
+
+        if (m_commonHeaderPresent.test(i)) {
+            // 已存在：追加（用逗号分隔，符合 RFC 7230）
+            m_commonHeaders[i] += ", ";
+            m_commonHeaders[i] += value;
+        } else {
+            // 首次设置
+            m_commonHeaders[i] = std::move(value);
+            m_commonHeaderPresent.set(i);
+        }
+    }
+
+    std::string_view HeaderPair::getCommonHeader(CommonHeaderIndex idx) const
+    {
+        size_t i = static_cast<size_t>(idx);
+        if (m_commonHeaderPresent.test(i)) {
+            return m_commonHeaders[i];
+        }
+        return {};
+    }
+
+    bool HeaderPair::hasCommonHeader(CommonHeaderIndex idx) const
+    {
+        return m_commonHeaderPresent.test(static_cast<size_t>(idx));
+    }
+
+    void HeaderPair::forEachHeader(std::function<void(std::string_view, std::string_view)> callback) const
+    {
+        if (m_mode == Mode::ServerSide) {
+            // 先遍历常见 headers
+            for (size_t i = 0; i < 15; ++i) {
+                if (m_commonHeaderPresent.test(i)) {
+                    callback(getCommonHeaderName(static_cast<CommonHeaderIndex>(i)),
+                            m_commonHeaders[i]);
+                }
+            }
+        }
+        // 再遍历 map
+        for (const auto& [k, v] : m_headerPairs) {
+            callback(k, v);
+        }
     }
 
     HttpMethod& HttpRequestHeader::method()
