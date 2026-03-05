@@ -1,0 +1,22 @@
+========================================================================================================================
+HTTP Header Parsing Performance Benchmark
+========================================================================================================================
+Benchmark                                   Avg      Median         Min         Max  Iterations    Per Item
+------------------------------------------------------------------------------------------------------------------------
+
+[Phase 1: Parsing Performance - Fast-path vs Slow-path]
+
+BM_ParseCommonHeaders                     539.9 ns       500.0 ns       416.0 ns    855791.0 ns      100000 iters
+BM_ParseRareHeaders                       638.2 ns       625.0 ns       500.0 ns    240958.0 ns      100000 iters
+BM_ParseMixedHeaders                      755.6 ns       750.0 ns       625.0 ns     47958.0 ns      100000 iters
+BM_ParseLargeHeaders                     2801.6 ns      2667.0 ns      2291.0 ns    225291.0 ns       50000 iters
+BM_ParseResponseHeaders                   388.6 ns       375.0 ns       291.0 ns     74750.0 ns      100000 iters
+
+[Phase 2: Lookup Performance - O(1) vs O(log n)]
+
+BM_HeaderLookup_Common                     24.2 ns        41.0 ns         0.0 ns      1333.0 ns      100000 iters         8.1 ns/item
+BM_HeaderLookup_Rare                       60.6 ns        42.0 ns         0.0 ns    399667.0 ns      100000 iters        20.2 ns/item
+
+========================================================================================================================
+Benchmark completed successfully!
+========================================================================================================================
