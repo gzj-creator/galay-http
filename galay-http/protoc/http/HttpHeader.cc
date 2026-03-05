@@ -80,7 +80,7 @@ namespace galay::http
 
     // 获取常见 header 的标准名称（小写）
     std::string_view getCommonHeaderName(CommonHeaderIndex idx) {
-        static constexpr std::array<std::string_view, 15> names = {
+        static const std::array<std::string_view, 15> names = {
             "host",
             "content-length",
             "content-type",
