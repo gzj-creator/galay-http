@@ -316,6 +316,26 @@ namespace galay::http
 
     const std::string* HeaderPair::getValuePtr(const std::string& key) const
     {
+        // ServerSide 模式：先尝试 fast-path
+        if (m_mode == Mode::ServerSide) {
+            // 需要先转小写再匹配
+            std::string normalized;
+            if (hasUpperAscii(key)) {
+                normalized = toLowerAscii(key);
+            } else {
+                normalized = key;
+            }
+
+            CommonHeaderIndex idx = matchCommonHeader(normalized);
+            if (idx != CommonHeaderIndex::NotCommon) {
+                if (hasCommonHeader(idx)) {
+                    return &m_commonHeaders[static_cast<size_t>(idx)];
+                }
+                return nullptr;
+            }
+        }
+
+        // Fallback: 在 map 中查找
         auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
         if (it == m_headerPairs.end()) {
             return nullptr;
@@ -357,11 +377,21 @@ namespace galay::http
     HttpErrorCode HeaderPair::addHeaderPair(const std::string& key, const std::string& value)
     {
         if (m_mode == Mode::ServerSide) {
+            std::string normalized;
             if (!hasUpperAscii(key)) {
-                m_headerPairs.insert_or_assign(key, value);
+                normalized = key;
+            } else {
+                normalized = toLowerAscii(key);
+            }
+
+            // 尝试使用 fast-path
+            CommonHeaderIndex idx = matchCommonHeader(normalized);
+            if (idx != CommonHeaderIndex::NotCommon) {
+                setCommonHeader(idx, value);
                 return kNoError;
             }
-            std::string normalized = toLowerAscii(key);
+
+            // Fallback: 存入 map
             m_headerPairs.insert_or_assign(std::move(normalized), value);
             return kNoError;
         }
@@ -374,6 +404,19 @@ namespace galay::http
 
     HttpErrorCode HeaderPair::addNormalizedHeaderPair(std::string key, std::string value)
     {
+        // ServerSide 模式：尝试使用 fast-path
+        if (m_mode == Mode::ServerSide) {
+            CommonHeaderIndex idx = matchCommonHeader(key);
+            if (idx != CommonHeaderIndex::NotCommon) {
+                // 直接替换（不追加），与 insert_or_assign 行为一致
+                size_t i = static_cast<size_t>(idx);
+                m_commonHeaders[i] = std::move(value);
+                m_commonHeaderPresent.set(i);
+                return kNoError;
+            }
+        }
+
+        // Fallback: 存入 map
         m_headerPairs.insert_or_assign(std::move(key), std::move(value));
         return kNoError;
     }
@@ -381,6 +424,17 @@ namespace galay::http
     size_t HeaderPair::estimatedSerializedSize() const
     {
         size_t estimated_size = 0;
+
+        // 计算 common headers 的大小
+        for (size_t i = 0; i < m_commonHeaders.size(); ++i) {
+            if (m_commonHeaderPresent.test(i)) {
+                estimated_size += getCommonHeaderName(static_cast<CommonHeaderIndex>(i)).size();
+                estimated_size += m_commonHeaders[i].size();
+                estimated_size += 4; // ": " + "\r\n"
+            }
+        }
+
+        // 计算 map 中其他 headers 的大小
         for (const auto& [k, v] : m_headerPairs) {
             estimated_size += k.size() + v.size() + 4; // "key: value\r\n"
         }
@@ -389,6 +443,17 @@ namespace galay::http
 
     void HeaderPair::appendTo(std::string& out) const
     {
+        // 先输出 common headers
+        for (size_t i = 0; i < m_commonHeaders.size(); ++i) {
+            if (m_commonHeaderPresent.test(i)) {
+                out += getCommonHeaderName(static_cast<CommonHeaderIndex>(i));
+                out += ": ";
+                out += m_commonHeaders[i];
+                out += "\r\n";
+            }
+        }
+
+        // 再输出 map 中的其他 headers
         for (const auto& [k, v] : m_headerPairs) {
             out += k;
             out += ": ";
@@ -399,7 +464,7 @@ namespace galay::http
 
     std::string HeaderPair::toString() const
     {
-        if (m_headerPairs.empty()) {
+        if (m_headerPairs.empty() && m_commonHeaderPresent.none()) {
             return "";
         }
 
@@ -511,12 +576,27 @@ namespace galay::http
     void HttpRequestHeader::commitParsedHeaderPair()
     {
         if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
-            m_headerPairs.addNormalizedHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+            // Server 端：使用 fast path
+            if (m_currentCommonHeaderIdx != CommonHeaderIndex::NotCommon) {
+                m_headerPairs.setCommonHeader(
+                    m_currentCommonHeaderIdx,
+                    std::move(m_parseHeaderValue)
+                );
+            } else {
+                // 罕见 header，key 已经是小写
+                m_headerPairs.addNormalizedHeaderPair(
+                    std::move(m_parseHeaderKey),
+                    std::move(m_parseHeaderValue)
+                );
+            }
         } else {
+            // Client 端：直接存 map，不转小写
             m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
         }
+
         m_parseHeaderKey.clear();
         m_parseHeaderValue.clear();
+        m_currentCommonHeaderIdx = CommonHeaderIndex::NotCommon;
     }
 
     HttpErrorCode HttpRequestHeader::parseChar(char c)
