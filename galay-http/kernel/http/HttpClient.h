@@ -74,12 +74,12 @@ class HttpClientImpl;
  */
 struct HttpClientConfig
 {
-    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
 };
 
 class HttpClientBuilder {
 public:
-    HttpClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    HttpClientBuilder& headerMode(HeaderPair::Mode v) { m_config.header_mode = v; return *this; }
     HttpClientImpl<TcpSocket> build() const;
     HttpClientConfig buildConfig() const                       { return m_config; }
 private:
@@ -109,8 +109,8 @@ public:
 
     HttpClientImpl(const HttpClientImpl&) = delete;
     HttpClientImpl& operator=(const HttpClientImpl&) = delete;
-    HttpClientImpl(HttpClientImpl&&) = delete;
-    HttpClientImpl& operator=(HttpClientImpl&&) = delete;
+    HttpClientImpl(HttpClientImpl&&) noexcept = default;
+    HttpClientImpl& operator=(HttpClientImpl&&) noexcept = default;
 
     auto connect(const std::string& url) {
         auto parsed_url = HttpUrl::parse(url);
@@ -186,7 +186,7 @@ struct HttpsClientConfig
     std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
     bool verify_peer = false;       // 是否验证服务器证书
     int verify_depth = 4;           // 证书链验证深度
-    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
 };
 
 class HttpsClient;
@@ -196,7 +196,7 @@ public:
     HttpsClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
     HttpsClientBuilder& verifyPeer(bool v)                 { m_config.verify_peer = v; return *this; }
     HttpsClientBuilder& verifyDepth(int v)                 { m_config.verify_depth = v; return *this; }
-    HttpsClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    HttpsClientBuilder& headerMode(HeaderPair::Mode v) { m_config.header_mode = v; return *this; }
     HttpsClient build() const;
     HttpsClientConfig buildConfig() const                  { return m_config; }
 private:
@@ -221,8 +221,8 @@ public:
 
     HttpsClient(const HttpsClient&) = delete;
     HttpsClient& operator=(const HttpsClient&) = delete;
-    HttpsClient(HttpsClient&&) = delete;
-    HttpsClient& operator=(HttpsClient&&) = delete;
+    HttpsClient(HttpsClient&&) noexcept = default;
+    HttpsClient& operator=(HttpsClient&&) noexcept = default;
 
     auto connect(const std::string& url) {
         auto parsed_url = HttpUrl::parse(url);

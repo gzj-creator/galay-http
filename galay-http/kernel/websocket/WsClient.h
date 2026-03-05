@@ -4,6 +4,7 @@
 #include "WsSession.h"
 #include "WsConn.h"
 #include "WsUpgrade.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/kernel/http/HttpLog.h"
@@ -18,6 +19,7 @@
 #include <memory>
 #include <regex>
 #include <random>
+#include <span>
 #include <type_traits>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
@@ -101,12 +103,12 @@ class WsUpgraderImpl;
 
 struct WsClientConfig
 {
-    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
 };
 
 class WsClientBuilder {
 public:
-    WsClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    WsClientBuilder& headerMode(HeaderPair::Mode v) { m_config.header_mode = v; return *this; }
     WsClientImpl<TcpSocket> build() const;
     WsClientConfig buildConfig() const                       { return m_config; }
 private:
@@ -202,30 +204,43 @@ class WsUpgradeAwaitableImpl<TcpSocket>
     , public galay::kernel::TimeoutSupport<WsUpgradeAwaitableImpl<TcpSocket>>
 {
 public:
-    class UpgradeSendAwaitable : public galay::kernel::SendAwaitable
+    class UpgradeSendAwaitable : public galay::kernel::WritevIOContext
     {
     public:
         explicit UpgradeSendAwaitable(WsUpgradeAwaitableImpl* owner)
-            : galay::kernel::SendAwaitable(owner->m_upgrader->m_socket->controller(), nullptr, 0)
+            : galay::kernel::WritevIOContext(std::span<const struct iovec>())
             , m_owner(owner)
         {
+            m_iovecs.reserve(1);
         }
 
         void resetBuffer(const char* buffer, size_t length) {
-            m_buffer = buffer;
-            m_length = length;
+            std::vector<iovec> segments;
+            if (buffer == nullptr || length == 0) {
+                m_cursor.reset(std::move(segments));
+                syncSendWindow();
+                return;
+            }
+
+            segments.push_back({
+                .iov_base = const_cast<char*>(buffer),
+                .iov_len = length
+            });
+            m_cursor.reset(std::move(segments));
+            syncSendWindow();
         }
 
 #ifdef USE_IOURING
         bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_length == 0) {
+            if (pendingIovCount() == 0) {
                 return true;
             }
             if (cqe == nullptr) {
-                return false;
+                syncSendWindow();
+                return pendingIovCount() == 0;
             }
 
-            auto result = galay::kernel::io::handleSend(cqe);
+            auto result = galay::kernel::io::handleWritev(cqe);
             if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                 return false;
             }
@@ -234,19 +249,31 @@ public:
                 return true;
             }
 
-            size_t sent = result.value();
+            const size_t sent = result.value();
             if (sent == 0) {
                 return false;
             }
 
-            m_buffer += sent;
-            m_length -= sent;
-            return m_length == 0;
+            if (!advanceAfterWrite(sent)) {
+                m_owner->setSendError(galay::kernel::IOError(galay::kernel::kSendFailed, 0));
+                return true;
+            }
+            if (pendingIovCount() == 0) {
+                return true;
+            }
+            syncSendWindow();
+            return false;
         }
 #else
         bool handleComplete(GHandle handle) override {
-            while (m_length > 0) {
-                auto result = galay::kernel::io::handleSend(handle, m_buffer, m_length);
+            while (true) {
+                syncSendWindow();
+                const int iov_count = pendingIovCount();
+                if (iov_count == 0) {
+                    return true;
+                }
+
+                auto result = galay::kernel::io::handleWritev(handle, m_iovecs.data(), iov_count);
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -255,29 +282,44 @@ public:
                     return true;
                 }
 
-                size_t sent = result.value();
+                const size_t sent = result.value();
                 if (sent == 0) {
                     return false;
                 }
 
-                m_buffer += sent;
-                m_length -= sent;
+                if (!advanceAfterWrite(sent)) {
+                    m_owner->setSendError(galay::kernel::IOError(galay::kernel::kSendFailed, 0));
+                    return true;
+                }
             }
-            return true;
         }
 #endif
 
     private:
+        void syncSendWindow() {
+            m_cursor.exportWindow(m_iovecs);
+        }
+
+        int pendingIovCount() {
+            return static_cast<int>(m_cursor.count());
+        }
+
+        bool advanceAfterWrite(size_t sent_bytes) {
+            return m_cursor.advance(sent_bytes) == sent_bytes;
+        }
+
         WsUpgradeAwaitableImpl* m_owner;
+        IoVecCursor m_cursor;
     };
 
-    class UpgradeRecvAwaitable : public galay::kernel::RecvAwaitable
+    class UpgradeRecvAwaitable : public galay::kernel::ReadvIOContext
     {
     public:
         explicit UpgradeRecvAwaitable(WsUpgradeAwaitableImpl* owner)
-            : galay::kernel::RecvAwaitable(owner->m_upgrader->m_socket->controller(), nullptr, 0)
+            : galay::kernel::ReadvIOContext(std::span<const struct iovec>())
             , m_owner(owner)
         {
+            m_iovecs.reserve(2);
         }
 
 #ifdef USE_IOURING
@@ -294,7 +336,7 @@ public:
                 return false;
             }
 
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
+            auto result = galay::kernel::io::handleReadv(cqe);
             if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                 return false;
             }
@@ -303,7 +345,7 @@ public:
                 return true;
             }
 
-            size_t bytes_read = result.value().size();
+            const size_t bytes_read = result.value();
             if (bytes_read == 0) {
                 m_owner->setProtocolError("Connection closed");
                 return true;
@@ -333,7 +375,9 @@ public:
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
+                auto result = galay::kernel::io::handleReadv(handle,
+                                                             m_iovecs.data(),
+                                                             static_cast<int>(m_iovecs.size()));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -342,7 +386,7 @@ public:
                     return true;
                 }
 
-                size_t bytes_read = result.value().size();
+                const size_t bytes_read = result.value();
                 if (bytes_read == 0) {
                     m_owner->setProtocolError("Connection closed");
                     return true;
@@ -355,14 +399,13 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_upgrader->m_ring_buffer->getWriteIovecs();
-            if (write_iovecs.empty()) {
+            struct iovec write_iovecs[2];
+            const size_t iov_count = m_owner->m_upgrader->m_ring_buffer->getWriteIovecs(write_iovecs, 2);
+            if (iov_count == 0) {
                 return false;
             }
 
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
+            return IoVecWindow::buildWindow(write_iovecs, iov_count, m_iovecs) > 0;
         }
 
         WsUpgradeAwaitableImpl* m_owner;
@@ -382,8 +425,8 @@ public:
 
         initUpgradeRequest();
         m_send_awaitable.resetBuffer(m_send_buffer.data(), m_send_buffer.size());
-        addTask(IOEventType::SEND, &m_send_awaitable);
-        addTask(IOEventType::RECV, &m_recv_awaitable);
+        addTask(IOEventType::WRITEV, &m_send_awaitable);
+        addTask(IOEventType::READV, &m_recv_awaitable);
     }
 
     bool await_ready() const noexcept { return m_done; }
@@ -536,8 +579,8 @@ public:
 
     WsClientImpl(const WsClientImpl&) = delete;
     WsClientImpl& operator=(const WsClientImpl&) = delete;
-    WsClientImpl(WsClientImpl&&) = delete;
-    WsClientImpl& operator=(WsClientImpl&&) = delete;
+    WsClientImpl(WsClientImpl&&) noexcept = default;
+    WsClientImpl& operator=(WsClientImpl&&) noexcept = default;
 
     auto connect(const std::string& url) {
         auto parsed_url = WsUrl::parse(url);
@@ -1031,7 +1074,7 @@ struct WssClientConfig
     std::string ca_path;            // CA 证书路径（可选，用于验证服务器）
     bool verify_peer = false;       // 是否验证服务器证书
     int verify_depth = 4;           // 证书链验证深度
-    HeaderPair::NormalizeMode header_mode = HeaderPair::NormalizeMode::Canonical;
+    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
 };
 
 class WssClient;
@@ -1041,7 +1084,7 @@ public:
     WssClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
     WssClientBuilder& verifyPeer(bool v)                 { m_config.verify_peer = v; return *this; }
     WssClientBuilder& verifyDepth(int v)                 { m_config.verify_depth = v; return *this; }
-    WssClientBuilder& headerMode(HeaderPair::NormalizeMode v) { m_config.header_mode = v; return *this; }
+    WssClientBuilder& headerMode(HeaderPair::Mode v) { m_config.header_mode = v; return *this; }
     WssClient build() const;
     WssClientConfig buildConfig() const                  { return m_config; }
 private:
@@ -1067,8 +1110,8 @@ public:
 
     WssClient(const WssClient&) = delete;
     WssClient& operator=(const WssClient&) = delete;
-    WssClient(WssClient&&) = delete;
-    WssClient& operator=(WssClient&&) = delete;
+    WssClient(WssClient&&) noexcept = default;
+    WssClient& operator=(WssClient&&) noexcept = default;
 
     auto connect(const std::string& url) {
         auto parsed_url = WsUrl::parse(url);

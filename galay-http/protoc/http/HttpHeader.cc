@@ -2,17 +2,44 @@
 #include <cassert>
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <string_view>
 
 namespace galay::http
 {
     namespace {
 
+    inline char toLowerAsciiChar(char ch)
+    {
+        if (ch >= 'A' && ch <= 'Z') {
+            return static_cast<char>(ch + ('a' - 'A'));
+        }
+        return ch;
+    }
+
+    inline char toUpperAsciiChar(char ch)
+    {
+        if (ch >= 'a' && ch <= 'z') {
+            return static_cast<char>(ch - ('a' - 'A'));
+        }
+        return ch;
+    }
+
+    inline bool hasUpperAscii(std::string_view value)
+    {
+        for (char ch : value) {
+            if (ch >= 'A' && ch <= 'Z') {
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::string toLowerAscii(std::string value)
     {
-        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
+        for (char& ch : value) {
+            ch = toLowerAsciiChar(ch);
+        }
         return value;
     }
 
@@ -21,11 +48,10 @@ namespace galay::http
         std::string result = value;
         bool word_start = true;
         for (char& ch : result) {
-            unsigned char c = static_cast<unsigned char>(ch);
             if (word_start) {
-                ch = static_cast<char>(std::toupper(c));
+                ch = toUpperAsciiChar(ch);
             } else {
-                ch = static_cast<char>(std::tolower(c));
+                ch = toLowerAsciiChar(ch);
             }
             word_start = (ch == '-');
         }
@@ -39,114 +65,138 @@ namespace galay::http
         }
 
         for (size_t i = 0; i < lhs.size(); ++i) {
-            unsigned char l = static_cast<unsigned char>(lhs[i]);
-            unsigned char r = static_cast<unsigned char>(rhs[i]);
-            if (std::tolower(l) != std::tolower(r)) {
+            if (toLowerAsciiChar(lhs[i]) != toLowerAsciiChar(rhs[i])) {
                 return false;
             }
         }
         return true;
     }
 
-    std::string normalizeKey(HeaderPair::NormalizeMode mode, const std::string& key)
+    std::string normalizeKey(HeaderPair::Mode mode, const std::string& key)
     {
         switch (mode) {
-        case HeaderPair::NormalizeMode::Lowercase:  return toLowerAscii(key);
-        case HeaderPair::NormalizeMode::Canonical:   return toCanonicalHeaderKey(key);
-        case HeaderPair::NormalizeMode::Raw:         return key;
+        case HeaderPair::Mode::ServerSide:
+            if (!hasUpperAscii(key)) {
+                return key;
+            }
+            return toLowerAscii(key);
+        case HeaderPair::Mode::ClientSide:   return toCanonicalHeaderKey(key);
         }
         return key;
     }
 
     std::map<std::string, std::string>::iterator findHeaderPairIter(
-        HeaderPair::NormalizeMode mode,
+        HeaderPair::Mode mode,
         std::map<std::string, std::string>& headers,
         const std::string& key)
     {
-        std::string normalized = normalizeKey(mode, key);
-        auto it = headers.find(normalized);
+        if (mode == HeaderPair::Mode::ServerSide) {
+            auto it = headers.find(key);
+            if (it != headers.end()) {
+                return it;
+            }
+            if (!hasUpperAscii(key)) {
+                return headers.end();
+            }
+
+            std::string normalized = toLowerAscii(key);
+            return headers.find(normalized);
+        }
+
+        // ClientSide mode
+        auto it = headers.find(key);
         if (it != headers.end()) {
             return it;
         }
 
-        // Raw 模式：exact miss 则线性 case-insensitive 扫描
-        if (mode == HeaderPair::NormalizeMode::Raw) {
-            for (it = headers.begin(); it != headers.end(); ++it) {
-                if (equalsIgnoreCaseAscii(it->first, key)) {
-                    return it;
-                }
-            }
+        std::string normalized = toCanonicalHeaderKey(key);
+        if (normalized == key) {
+            return headers.end();
         }
-        return headers.end();
+        return headers.find(normalized);
     }
 
     std::map<std::string, std::string>::const_iterator findHeaderPairIter(
-        HeaderPair::NormalizeMode mode,
+        HeaderPair::Mode mode,
         const std::map<std::string, std::string>& headers,
         const std::string& key)
     {
-        std::string normalized = normalizeKey(mode, key);
-        auto it = headers.find(normalized);
+        if (mode == HeaderPair::Mode::ServerSide) {
+            auto it = headers.find(key);
+            if (it != headers.end()) {
+                return it;
+            }
+            if (!hasUpperAscii(key)) {
+                return headers.end();
+            }
+
+            std::string normalized = toLowerAscii(key);
+            return headers.find(normalized);
+        }
+
+        // ClientSide mode
+        auto it = headers.find(key);
         if (it != headers.end()) {
             return it;
         }
 
-        // Raw 模式：exact miss 则线性 case-insensitive 扫描
-        if (mode == HeaderPair::NormalizeMode::Raw) {
-            for (it = headers.begin(); it != headers.end(); ++it) {
-                if (equalsIgnoreCaseAscii(it->first, key)) {
-                    return it;
-                }
-            }
+        std::string normalized = toCanonicalHeaderKey(key);
+        if (normalized == key) {
+            return headers.end();
         }
-        return headers.end();
+        return headers.find(normalized);
     }
 
-    std::string getHeaderValueLoose(const HeaderPair& headers, const std::string& key)
+    inline char normalizeHeaderKeyChar(char ch, HeaderPair::Mode mode)
     {
-        return headers.getValue(key);
+        if (mode == HeaderPair::Mode::ServerSide) {
+            return toLowerAsciiChar(ch);
+        }
+        return ch;
     }
 
-    bool headerValueContainsToken(const std::string& value, const std::string& token)
+    inline void reserveIfUnset(std::string& text, size_t capacity_hint)
     {
-        const std::string needle = toLowerAscii(token);
-        std::string current;
+        if (text.capacity() == 0) {
+            text.reserve(capacity_hint);
+        }
+    }
 
-        auto flush = [&]() -> bool {
-            size_t begin = 0;
-            while (begin < current.size() && std::isspace(static_cast<unsigned char>(current[begin]))) {
-                ++begin;
-            }
-            size_t end = current.size();
-            while (end > begin && std::isspace(static_cast<unsigned char>(current[end - 1]))) {
-                --end;
-            }
-
-            bool matched = false;
-            if (end > begin) {
-                const std::string normalized = toLowerAscii(current.substr(begin, end - begin));
-                matched = (normalized == needle);
-            }
-            current.clear();
-            return matched;
-        };
-
-        for (char ch : value) {
-            if (ch == ',') {
-                if (flush()) {
-                    return true;
-                }
-            } else {
-                current.push_back(ch);
-            }
+    bool headerValueContainsToken(std::string_view value, std::string_view token)
+    {
+        if (value.empty() || token.empty()) {
+            return false;
         }
 
-        return flush();
+        size_t start = 0;
+        while (start < value.size()) {
+            size_t end = value.find(',', start);
+            if (end == std::string_view::npos) {
+                end = value.size();
+            }
+
+            size_t left = start;
+            while (left < end && std::isspace(static_cast<unsigned char>(value[left]))) {
+                ++left;
+            }
+            size_t right = end;
+            while (right > left && std::isspace(static_cast<unsigned char>(value[right - 1]))) {
+                --right;
+            }
+
+            if (right > left && equalsIgnoreCaseAscii(value.substr(left, right - left), token)) {
+                return true;
+            }
+
+            start = end + 1;
+        }
+
+        return false;
     }
 
     } // namespace
 
-    HeaderPair::HeaderPair(NormalizeMode mode)
+    HeaderPair::HeaderPair(Mode mode)
         : m_mode(mode)
     {
     }
@@ -176,11 +226,19 @@ namespace galay::http
 
     std::string HeaderPair::getValue(const std::string& key) const
     {
-        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
-        if (it != m_headerPairs.end()) {
-            return it->second;
+        if (const auto* value = getValuePtr(key); value != nullptr) {
+            return *value;
         }
-        return "";
+        return {};
+    }
+
+    const std::string* HeaderPair::getValuePtr(const std::string& key) const
+    {
+        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
+        if (it == m_headerPairs.end()) {
+            return nullptr;
+        }
+        return &it->second;
     }
 
     HttpErrorCode HeaderPair::removeHeaderPair(const std::string& key)
@@ -195,24 +253,66 @@ namespace galay::http
 
     HttpErrorCode HeaderPair::addHeaderPairIfNotExist(const std::string& key, const std::string& value)
     {
-        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
-        if (it != m_headerPairs.end()) {
-            return kHeaderPairExist;
+        if (m_mode == Mode::ServerSide) {
+            if (!hasUpperAscii(key)) {
+                auto [it, inserted] = m_headerPairs.try_emplace(key, value);
+                (void)it;
+                return inserted ? kNoError : kHeaderPairExist;
+            }
+            std::string normalized = toLowerAscii(key);
+            auto [it, inserted] = m_headerPairs.try_emplace(std::move(normalized), value);
+            (void)it;
+            return inserted ? kNoError : kHeaderPairExist;
         }
-        this->m_headerPairs.emplace(normalizeKey(m_mode, key), value);
-        return kNoError;
+
+        // ClientSide mode
+        std::string normalized = toCanonicalHeaderKey(key);
+        auto [it, inserted] = m_headerPairs.try_emplace(std::move(normalized), value);
+        (void)it;
+        return inserted ? kNoError : kHeaderPairExist;
     }
 
     HttpErrorCode HeaderPair::addHeaderPair(const std::string& key, const std::string& value)
     {
-        auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
-        if (it != m_headerPairs.end()) {
-            it->second = value;
+        if (m_mode == Mode::ServerSide) {
+            if (!hasUpperAscii(key)) {
+                m_headerPairs.insert_or_assign(key, value);
+                return kNoError;
+            }
+            std::string normalized = toLowerAscii(key);
+            m_headerPairs.insert_or_assign(std::move(normalized), value);
             return kNoError;
         }
 
-        this->m_headerPairs[normalizeKey(m_mode, key)] = value;
+        // ClientSide mode
+        std::string normalized = toCanonicalHeaderKey(key);
+        m_headerPairs.insert_or_assign(std::move(normalized), value);
         return kNoError;
+    }
+
+    HttpErrorCode HeaderPair::addNormalizedHeaderPair(std::string key, std::string value)
+    {
+        m_headerPairs.insert_or_assign(std::move(key), std::move(value));
+        return kNoError;
+    }
+
+    size_t HeaderPair::estimatedSerializedSize() const
+    {
+        size_t estimated_size = 0;
+        for (const auto& [k, v] : m_headerPairs) {
+            estimated_size += k.size() + v.size() + 4; // "key: value\r\n"
+        }
+        return estimated_size;
+    }
+
+    void HeaderPair::appendTo(std::string& out) const
+    {
+        for (const auto& [k, v] : m_headerPairs) {
+            out += k;
+            out += ": ";
+            out += v;
+            out += "\r\n";
+        }
     }
 
     std::string HeaderPair::toString() const
@@ -220,23 +320,10 @@ namespace galay::http
         if (m_headerPairs.empty()) {
             return "";
         }
-        
-        // 预估算字符串大小，减少重分配
-        size_t estimated_size = 0;
-        for (const auto& [k, v] : m_headerPairs) {
-            estimated_size += k.size() + v.size() + 4; // "key: value\r\n"
-        }
-        
+
         std::string result;
-        result.reserve(estimated_size);
-        
-        // 直接拼接，避免 ostringstream 开销
-        for (const auto& [k, v] : m_headerPairs) {
-            result += k;
-            result += ": ";
-            result += v;
-            result += "\r\n";
-        }
+        result.reserve(estimatedSerializedSize());
+        appendTo(result);
         return result;
     }
 
@@ -283,6 +370,17 @@ namespace galay::http
     HeaderPair& HttpRequestHeader::headerPairs()
     {
         return this->m_headerPairs;
+    }
+
+    void HttpRequestHeader::commitParsedHeaderPair()
+    {
+        if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+            m_headerPairs.addNormalizedHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+        } else {
+            m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+        }
+        m_parseHeaderKey.clear();
+        m_parseHeaderValue.clear();
     }
 
     HttpErrorCode HttpRequestHeader::parseChar(char c)
@@ -368,7 +466,7 @@ namespace galay::http
             } else if (c == '\n') {
                 return kBadRequest;
             } else {
-                m_parseHeaderKey += c;
+                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
                 m_parseState = RequestParseState::HeaderKey;
             }
             break;
@@ -379,7 +477,7 @@ namespace galay::http
             } else if (c == '\r' || c == '\n') {
                 return kBadRequest;
             } else {
-                m_parseHeaderKey += c;
+                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
             }
             break;
 
@@ -387,9 +485,7 @@ namespace galay::http
             if (c == ' ') {
                 m_parseState = RequestParseState::HeaderSpace;
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
-                m_parseHeaderKey.clear();
-                m_parseHeaderValue.clear();
+                commitParsedHeaderPair();
                 m_parseState = RequestParseState::HeaderCR;
             } else {
                 m_parseHeaderValue += c;
@@ -401,9 +497,7 @@ namespace galay::http
             if (c == ' ') {
                 // skip extra spaces
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
-                m_parseHeaderKey.clear();
-                m_parseHeaderValue.clear();
+                commitParsedHeaderPair();
                 m_parseState = RequestParseState::HeaderCR;
             } else {
                 m_parseHeaderValue += c;
@@ -413,9 +507,7 @@ namespace galay::http
 
         case RequestParseState::HeaderValue:
             if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
-                m_parseHeaderKey.clear();
-                m_parseHeaderValue.clear();
+                commitParsedHeaderPair();
                 m_parseState = RequestParseState::HeaderCR;
             } else {
                 m_parseHeaderValue += c;
@@ -434,7 +526,7 @@ namespace galay::http
             if (c == '\r') {
                 m_parseState = RequestParseState::HeaderEndCR;
             } else {
-                m_parseHeaderKey += c;
+                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
                 m_parseState = RequestParseState::HeaderKey;
             }
             break;
@@ -478,22 +570,296 @@ namespace galay::http
             return {kNoError, 0};
         }
 
+        auto appendHeaderKeyChunk = [&](const char* begin, size_t len) {
+            if (len == 0) {
+                return;
+            }
+            reserveIfUnset(m_parseHeaderKey, 32);
+            if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                const size_t old_size = m_parseHeaderKey.size();
+                m_parseHeaderKey.resize(old_size + len);
+                for (size_t i = 0; i < len; ++i) {
+                    m_parseHeaderKey[old_size + i] = toLowerAsciiChar(begin[i]);
+                }
+                return;
+            }
+            m_parseHeaderKey.append(begin, len);
+        };
+
         // 调用方保证每次传入的buffer都是新数据（已consume过的）
-        ssize_t consumed = 0;
+        size_t total_consumed = 0;
         for (size_t iov_idx = 0; iov_idx < iovecs.size(); ++iov_idx) {
             const char* data = static_cast<const char*>(iovecs[iov_idx].iov_base);
-            for (size_t i = 0; i < iovecs[iov_idx].iov_len; ++i) {
-                HttpErrorCode err = parseChar(data[i]);
-                ++consumed;
-                ++m_parsedBytes;
-                if (err == kIncomplete) {
-                    return {kNoError, consumed}; // 解析完成
-                } else if (err != kNoError) {
-                    return {err, -1}; // 解析错误
+            const size_t len = iovecs[iov_idx].iov_len;
+            size_t i = 0;
+
+            while (i < len) {
+                switch (m_parseState) {
+                case RequestParseState::Method: {
+                    const size_t start = i;
+                    while (i < len && data[i] != ' ' && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseMethodStr, 16);
+                        m_parseMethodStr.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c != ' ') {
+                        return {kBadRequest, -1};
+                    }
+                    m_method = stringToHttpMethod(m_parseMethodStr);
+                    m_parseState = RequestParseState::MethodSP;
+                    break;
+                }
+
+                case RequestParseState::MethodSP: {
+                    while (i < len && data[i] == ' ') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c == '\r' || c == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    reserveIfUnset(m_parseUriStr, 64);
+                    m_parseUriStr.push_back(c);
+                    m_parseState = RequestParseState::Uri;
+                    break;
+                }
+
+                case RequestParseState::Uri: {
+                    const size_t start = i;
+                    while (i < len && data[i] != ' ' && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseUriStr, 64);
+                        m_parseUriStr.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c != ' ') {
+                        return {kBadRequest, -1};
+                    }
+
+                    std::string full_uri = convertFromUri(m_parseUriStr, false);
+                    parseArgs(full_uri);
+                    if (m_uri.empty()) {
+                        m_uri = full_uri;
+                    }
+                    m_parseState = RequestParseState::UriSP;
+                    break;
+                }
+
+                case RequestParseState::UriSP: {
+                    while (i < len && data[i] == ' ') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c == '\r' || c == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    reserveIfUnset(m_parseVersionStr, 16);
+                    m_parseVersionStr.push_back(c);
+                    m_parseState = RequestParseState::Version;
+                    break;
+                }
+
+                case RequestParseState::Version: {
+                    const size_t start = i;
+                    while (i < len && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseVersionStr, 16);
+                        m_parseVersionStr.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c == '\n') {
+                        return {kBadRequest, -1};
+                    }
+
+                    m_version = stringToHttpVersion(m_parseVersionStr);
+                    if (m_version == HttpVersion::HttpVersion_Unknown) {
+                        return {kVersionNotSupport, -1};
+                    }
+                    if (m_version != HttpVersion::HttpVersion_1_0 &&
+                        m_version != HttpVersion::HttpVersion_1_1) {
+                        return {kVersionNotSupport, -1};
+                    }
+                    m_parseState = RequestParseState::VersionCR;
+                    break;
+                }
+
+                case RequestParseState::VersionCR:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = RequestParseState::VersionLF;
+                    break;
+
+                case RequestParseState::VersionLF:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        m_parseState = RequestParseState::HeaderEndCR;
+                        break;
+                    }
+                    if (data[i] == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    reserveIfUnset(m_parseHeaderKey, 32);
+                    m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    ++i;
+                    m_parseState = RequestParseState::HeaderKey;
+                    break;
+
+                case RequestParseState::HeaderKey: {
+                    const size_t start = i;
+                    while (i < len && data[i] != ':' && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    appendHeaderKeyChunk(data + start, i - start);
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != ':') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = RequestParseState::HeaderColon;
+                    break;
+                }
+
+                case RequestParseState::HeaderColon:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == ' ') {
+                        ++i;
+                        m_parseState = RequestParseState::HeaderSpace;
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        commitParsedHeaderPair();
+                        m_parseState = RequestParseState::HeaderCR;
+                        break;
+                    }
+                    reserveIfUnset(m_parseHeaderValue, 64);
+                    m_parseHeaderValue.push_back(data[i]);
+                    ++i;
+                    m_parseState = RequestParseState::HeaderValue;
+                    break;
+
+                case RequestParseState::HeaderSpace:
+                    while (i < len && data[i] == ' ') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        commitParsedHeaderPair();
+                        m_parseState = RequestParseState::HeaderCR;
+                        break;
+                    }
+                    reserveIfUnset(m_parseHeaderValue, 64);
+                    m_parseHeaderValue.push_back(data[i]);
+                    ++i;
+                    m_parseState = RequestParseState::HeaderValue;
+                    break;
+
+                case RequestParseState::HeaderValue: {
+                    const size_t start = i;
+                    while (i < len && data[i] != '\r') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseHeaderValue, 64);
+                        m_parseHeaderValue.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+                    ++i; // consume '\r'
+                    commitParsedHeaderPair();
+                    m_parseState = RequestParseState::HeaderCR;
+                    break;
+                }
+
+                case RequestParseState::HeaderCR:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = RequestParseState::HeaderLF;
+                    break;
+
+                case RequestParseState::HeaderLF:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        m_parseState = RequestParseState::HeaderEndCR;
+                        break;
+                    }
+                    reserveIfUnset(m_parseHeaderKey, 32);
+                    m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    ++i;
+                    m_parseState = RequestParseState::HeaderKey;
+                    break;
+
+                case RequestParseState::HeaderEndCR:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = RequestParseState::Done;
+                    total_consumed += i;
+                    m_parsedBytes += i;
+                    return {kNoError, static_cast<ssize_t>(total_consumed)};
+
+                case RequestParseState::Done:
+                    total_consumed += i;
+                    m_parsedBytes += i;
+                    return {kNoError, static_cast<ssize_t>(total_consumed)};
                 }
             }
+
+            total_consumed += i;
+            m_parsedBytes += i;
         }
-        return {kIncomplete, consumed}; // 数据不完整，返回已消费的字节数
+        return {kIncomplete, static_cast<ssize_t>(total_consumed)};
     }
 
     std::string HttpRequestHeader::toString() const
@@ -519,11 +885,11 @@ namespace galay::http
         // 获取方法、版本和头部字符串
         std::string method_str = httpMethodToString(this->m_method);
         std::string version_str = httpVersionToString(this->m_version);
-        std::string headers_str = m_headerPairs.toString();
-        
+        const size_t headers_size = m_headerPairs.estimatedSerializedSize();
+
         // 预分配结果字符串
-        size_t estimated_size = method_str.size() + 1 + uri_str.size() + 1 + 
-                                version_str.size() + 2 + headers_str.size() + 2;
+        size_t estimated_size = method_str.size() + 1 + uri_str.size() + 1 +
+                                version_str.size() + 2 + headers_size + 2;
         std::string result;
         result.reserve(estimated_size);
         
@@ -534,7 +900,7 @@ namespace galay::http
         result += ' ';
         result += version_str;
         result += "\r\n";
-        result += headers_str;
+        m_headerPairs.appendTo(result);
         result += "\r\n";
         
         return result;
@@ -542,14 +908,14 @@ namespace galay::http
 
     bool HttpRequestHeader::isKeepAlive() const
     {
-        const std::string conn = m_headerPairs.getValue("Connection");
-        if (conn.empty()) {
+        const auto* conn = m_headerPairs.getValuePtr("connection");
+        if (conn == nullptr || conn->empty()) {
             return m_version == HttpVersion::HttpVersion_1_1;
         }
-        if (headerValueContainsToken(conn, "close")) {
+        if (headerValueContainsToken(*conn, "close")) {
             return false;
         }
-        if (headerValueContainsToken(conn, "keep-alive")) {
+        if (headerValueContainsToken(*conn, "keep-alive")) {
             return true;
         }
         return m_version == HttpVersion::HttpVersion_1_1;
@@ -557,14 +923,18 @@ namespace galay::http
 
     bool HttpRequestHeader::isChunked() const
     {
-        const std::string te = m_headerPairs.getValue("Transfer-Encoding");
-        return headerValueContainsToken(te, "chunked");
+        if (const auto* te = m_headerPairs.getValuePtr("transfer-encoding"); te != nullptr) {
+            return headerValueContainsToken(*te, "chunked");
+        }
+        return false;
     }
 
     bool HttpRequestHeader::isConnectionClose() const
     {
-        const std::string conn = m_headerPairs.getValue("Connection");
-        return headerValueContainsToken(conn, "close");
+        if (const auto* conn = m_headerPairs.getValuePtr("connection"); conn != nullptr) {
+            return headerValueContainsToken(*conn, "close");
+        }
+        return false;
     }
 
     void HttpRequestHeader::copyFrom(const HttpRequestHeader& header)
@@ -845,16 +1215,27 @@ namespace galay::http
         return this->m_headerPairs;
     }
 
+    void HttpResponseHeader::commitParsedHeaderPair()
+    {
+        if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+            m_headerPairs.addNormalizedHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+        } else {
+            m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
+        }
+        m_parseHeaderKey.clear();
+        m_parseHeaderValue.clear();
+    }
+
     bool HttpResponseHeader::isKeepAlive() const
     {
-        const std::string conn = m_headerPairs.getValue("Connection");
-        if (conn.empty()) {
+        const auto* conn = m_headerPairs.getValuePtr("connection");
+        if (conn == nullptr || conn->empty()) {
             return m_version == HttpVersion::HttpVersion_1_1;
         }
-        if (headerValueContainsToken(conn, "close")) {
+        if (headerValueContainsToken(*conn, "close")) {
             return false;
         }
-        if (headerValueContainsToken(conn, "keep-alive")) {
+        if (headerValueContainsToken(*conn, "keep-alive")) {
             return true;
         }
         return m_version == HttpVersion::HttpVersion_1_1;
@@ -862,14 +1243,18 @@ namespace galay::http
 
     bool HttpResponseHeader::isChunked() const
     {
-        const std::string te = m_headerPairs.getValue("Transfer-Encoding");
-        return headerValueContainsToken(te, "chunked");
+        if (const auto* te = m_headerPairs.getValuePtr("transfer-encoding"); te != nullptr) {
+            return headerValueContainsToken(*te, "chunked");
+        }
+        return false;
     }
 
     bool HttpResponseHeader::isConnectionClose() const
     {
-        const std::string conn = m_headerPairs.getValue("Connection");
-        return headerValueContainsToken(conn, "close");
+        if (const auto* conn = m_headerPairs.getValuePtr("connection"); conn != nullptr) {
+            return headerValueContainsToken(*conn, "close");
+        }
+        return false;
     }
 
     std::string HttpResponseHeader::toString() const
@@ -878,11 +1263,11 @@ namespace galay::http
         std::string version_str = httpVersionToString(m_version);
         std::string code_str = std::to_string(static_cast<int>(this->m_code));
         std::string status_str = httpStatusCodeToString(m_code);
-        std::string headers_str = m_headerPairs.toString();
-        
+        const size_t headers_size = m_headerPairs.estimatedSerializedSize();
+
         // 预分配结果字符串
-        size_t estimated_size = version_str.size() + 1 + code_str.size() + 1 + 
-                                status_str.size() + 2 + headers_str.size() + 2;
+        size_t estimated_size = version_str.size() + 1 + code_str.size() + 1 +
+                                status_str.size() + 2 + headers_size + 2;
         std::string result;
         result.reserve(estimated_size);
         
@@ -893,7 +1278,7 @@ namespace galay::http
         result += ' ';
         result += status_str;
         result += "\r\n";
-        result += headers_str;
+        m_headerPairs.appendTo(result);
         result += "\r\n";
         
         return result;
@@ -987,7 +1372,7 @@ namespace galay::http
             } else if (c == '\n') {
                 return kBadRequest;
             } else {
-                m_parseHeaderKey += c;
+                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
                 m_parseState = ResponseParseState::HeaderKey;
             }
             break;
@@ -998,7 +1383,7 @@ namespace galay::http
             } else if (c == '\r' || c == '\n') {
                 return kBadRequest;
             } else {
-                m_parseHeaderKey += c;
+                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
             }
             break;
 
@@ -1006,9 +1391,7 @@ namespace galay::http
             if (c == ' ') {
                 m_parseState = ResponseParseState::HeaderSpace;
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
-                m_parseHeaderKey.clear();
-                m_parseHeaderValue.clear();
+                commitParsedHeaderPair();
                 m_parseState = ResponseParseState::HeaderCR;
             } else {
                 m_parseHeaderValue += c;
@@ -1020,9 +1403,7 @@ namespace galay::http
             if (c == ' ') {
                 // skip extra spaces
             } else if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
-                m_parseHeaderKey.clear();
-                m_parseHeaderValue.clear();
+                commitParsedHeaderPair();
                 m_parseState = ResponseParseState::HeaderCR;
             } else {
                 m_parseHeaderValue += c;
@@ -1032,9 +1413,7 @@ namespace galay::http
 
         case ResponseParseState::HeaderValue:
             if (c == '\r') {
-                m_headerPairs.addHeaderPair(m_parseHeaderKey, m_parseHeaderValue);
-                m_parseHeaderKey.clear();
-                m_parseHeaderValue.clear();
+                commitParsedHeaderPair();
                 m_parseState = ResponseParseState::HeaderCR;
             } else {
                 m_parseHeaderValue += c;
@@ -1053,7 +1432,7 @@ namespace galay::http
             if (c == '\r') {
                 m_parseState = ResponseParseState::HeaderEndCR;
             } else {
-                m_parseHeaderKey += c;
+                m_parseHeaderKey += normalizeHeaderKeyChar(c, m_headerPairs.mode());
                 m_parseState = ResponseParseState::HeaderKey;
             }
             break;
@@ -1097,22 +1476,298 @@ namespace galay::http
             return {kNoError, 0};
         }
 
+        auto appendHeaderKeyChunk = [&](const char* begin, size_t len) {
+            if (len == 0) {
+                return;
+            }
+            reserveIfUnset(m_parseHeaderKey, 32);
+            if (m_headerPairs.mode() == HeaderPair::Mode::ServerSide) {
+                const size_t old_size = m_parseHeaderKey.size();
+                m_parseHeaderKey.resize(old_size + len);
+                for (size_t i = 0; i < len; ++i) {
+                    m_parseHeaderKey[old_size + i] = toLowerAsciiChar(begin[i]);
+                }
+                return;
+            }
+            m_parseHeaderKey.append(begin, len);
+        };
+
+        auto parseStatusCode = [&]() -> bool {
+            if (m_parseCodeStr.empty()) {
+                return false;
+            }
+
+            int code = 0;
+            const char* begin = m_parseCodeStr.data();
+            const char* end = begin + m_parseCodeStr.size();
+            auto [ptr, ec] = std::from_chars(begin, end, code);
+            if (ec != std::errc{} || ptr != end) {
+                return false;
+            }
+
+            m_code = static_cast<HttpStatusCode>(code);
+            return true;
+        };
+
         // 调用方保证每次传入的buffer都是新数据（已consume过的）
-        ssize_t consumed = 0;
+        size_t total_consumed = 0;
         for (size_t iov_idx = 0; iov_idx < iovecs.size(); ++iov_idx) {
             const char* data = static_cast<const char*>(iovecs[iov_idx].iov_base);
-            for (size_t i = 0; i < iovecs[iov_idx].iov_len; ++i) {
-                HttpErrorCode err = parseChar(data[i]);
-                ++consumed;
-                ++m_parsedBytes;
-                if (err == kIncomplete) {
-                    return {kNoError, consumed}; // 解析完成
-                } else if (err != kNoError) {
-                    return {err, -1}; // 解析错误
+            const size_t len = iovecs[iov_idx].iov_len;
+            size_t i = 0;
+
+            while (i < len) {
+                switch (m_parseState) {
+                case ResponseParseState::Version: {
+                    const size_t start = i;
+                    while (i < len && data[i] != ' ' && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseVersionStr, 16);
+                        m_parseVersionStr.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c != ' ') {
+                        return {kBadRequest, -1};
+                    }
+                    m_version = stringToHttpVersion(m_parseVersionStr);
+                    if (m_version != HttpVersion::HttpVersion_1_0 && m_version != HttpVersion::HttpVersion_1_1) {
+                        return {kVersionNotSupport, -1};
+                    }
+                    m_parseState = ResponseParseState::VersionSP;
+                    break;
+                }
+
+                case ResponseParseState::VersionSP: {
+                    while (i < len && data[i] == ' ') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c == '\r' || c == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    reserveIfUnset(m_parseCodeStr, 4);
+                    m_parseCodeStr.push_back(c);
+                    m_parseState = ResponseParseState::Code;
+                    break;
+                }
+
+                case ResponseParseState::Code: {
+                    const size_t start = i;
+                    while (i < len && data[i] != ' ' && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseCodeStr, 4);
+                        m_parseCodeStr.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+
+                    const char c = data[i++];
+                    if (c == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    if (!parseStatusCode()) {
+                        return {kHttpCodeInvalid, -1};
+                    }
+                    m_parseState = (c == '\r') ? ResponseParseState::StatusCR
+                                               : ResponseParseState::CodeSP;
+                    break;
+                }
+
+                case ResponseParseState::CodeSP:
+                    while (i < len && data[i] == ' ') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        m_parseState = ResponseParseState::StatusCR;
+                        break;
+                    }
+                    if (data[i] == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    ++i; // consume first status-text char (ignored)
+                    m_parseState = ResponseParseState::Status;
+                    break;
+
+                case ResponseParseState::Status:
+                    while (i < len && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = ResponseParseState::StatusCR;
+                    break;
+
+                case ResponseParseState::StatusCR:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = ResponseParseState::StatusLF;
+                    break;
+
+                case ResponseParseState::StatusLF:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        m_parseState = ResponseParseState::HeaderEndCR;
+                        break;
+                    }
+                    if (data[i] == '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    reserveIfUnset(m_parseHeaderKey, 32);
+                    m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    ++i;
+                    m_parseState = ResponseParseState::HeaderKey;
+                    break;
+
+                case ResponseParseState::HeaderKey: {
+                    const size_t start = i;
+                    while (i < len && data[i] != ':' && data[i] != '\r' && data[i] != '\n') {
+                        ++i;
+                    }
+                    appendHeaderKeyChunk(data + start, i - start);
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != ':') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = ResponseParseState::HeaderColon;
+                    break;
+                }
+
+                case ResponseParseState::HeaderColon:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == ' ') {
+                        ++i;
+                        m_parseState = ResponseParseState::HeaderSpace;
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        commitParsedHeaderPair();
+                        m_parseState = ResponseParseState::HeaderCR;
+                        break;
+                    }
+                    reserveIfUnset(m_parseHeaderValue, 64);
+                    m_parseHeaderValue.push_back(data[i]);
+                    ++i;
+                    m_parseState = ResponseParseState::HeaderValue;
+                    break;
+
+                case ResponseParseState::HeaderSpace:
+                    while (i < len && data[i] == ' ') {
+                        ++i;
+                    }
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        commitParsedHeaderPair();
+                        m_parseState = ResponseParseState::HeaderCR;
+                        break;
+                    }
+                    reserveIfUnset(m_parseHeaderValue, 64);
+                    m_parseHeaderValue.push_back(data[i]);
+                    ++i;
+                    m_parseState = ResponseParseState::HeaderValue;
+                    break;
+
+                case ResponseParseState::HeaderValue: {
+                    const size_t start = i;
+                    while (i < len && data[i] != '\r') {
+                        ++i;
+                    }
+                    if (i > start) {
+                        reserveIfUnset(m_parseHeaderValue, 64);
+                        m_parseHeaderValue.append(data + start, i - start);
+                    }
+                    if (i == len) {
+                        break;
+                    }
+                    ++i; // consume '\r'
+                    commitParsedHeaderPair();
+                    m_parseState = ResponseParseState::HeaderCR;
+                    break;
+                }
+
+                case ResponseParseState::HeaderCR:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = ResponseParseState::HeaderLF;
+                    break;
+
+                case ResponseParseState::HeaderLF:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i] == '\r') {
+                        ++i;
+                        m_parseState = ResponseParseState::HeaderEndCR;
+                        break;
+                    }
+                    reserveIfUnset(m_parseHeaderKey, 32);
+                    m_parseHeaderKey.push_back(normalizeHeaderKeyChar(data[i], m_headerPairs.mode()));
+                    ++i;
+                    m_parseState = ResponseParseState::HeaderKey;
+                    break;
+
+                case ResponseParseState::HeaderEndCR:
+                    if (i == len) {
+                        break;
+                    }
+                    if (data[i++] != '\n') {
+                        return {kBadRequest, -1};
+                    }
+                    m_parseState = ResponseParseState::Done;
+                    total_consumed += i;
+                    m_parsedBytes += i;
+                    return {kNoError, static_cast<ssize_t>(total_consumed)};
+
+                case ResponseParseState::Done:
+                    total_consumed += i;
+                    m_parsedBytes += i;
+                    return {kNoError, static_cast<ssize_t>(total_consumed)};
                 }
             }
+
+            total_consumed += i;
+            m_parsedBytes += i;
         }
-        return {kIncomplete, consumed}; // 数据不完整，返回已消费的字节数
+        return {kIncomplete, static_cast<ssize_t>(total_consumed)};
     }
 
     void HttpResponseHeader::reset()

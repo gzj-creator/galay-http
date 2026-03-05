@@ -33,9 +33,9 @@ class Http1_1RequestBuilder
 public:
     /**
      * @brief 构造函数
-     * @param mode Header 归一化策略（默认 Canonical，适合 Client 端）
+     * @param mode Header 归一化策略（默认 ClientSide，适合 Client 端）
      */
-    explicit Http1_1RequestBuilder(HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    explicit Http1_1RequestBuilder(HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
 
     /**
      * @brief 设置 HTTP 方法
@@ -135,13 +135,13 @@ public:
     HttpRequest buildMove();
 
     // 常用 HTTP 方法的快捷方法
-    static Http1_1RequestBuilder get(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
-    static Http1_1RequestBuilder post(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
-    static Http1_1RequestBuilder put(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
-    static Http1_1RequestBuilder del(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
-    static Http1_1RequestBuilder patch(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
-    static Http1_1RequestBuilder head(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
-    static Http1_1RequestBuilder options(const std::string& uri, HeaderPair::NormalizeMode mode = HeaderPair::NormalizeMode::Canonical);
+    static Http1_1RequestBuilder get(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
+    static Http1_1RequestBuilder post(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
+    static Http1_1RequestBuilder put(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
+    static Http1_1RequestBuilder del(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
+    static Http1_1RequestBuilder patch(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
+    static Http1_1RequestBuilder head(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
+    static Http1_1RequestBuilder options(const std::string& uri, HeaderPair::Mode mode = HeaderPair::Mode::ClientSide);
 
 private:
     HttpRequest m_request;

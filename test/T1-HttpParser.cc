@@ -1066,51 +1066,36 @@ void test_response_chunked_case_insensitive()
 
 void test_header_case_config_switch()
 {
-    std::cout << "\n=== Test: Header NormalizeMode ===" << std::endl;
+    std::cout << "\n=== Test: Header Mode ===" << std::endl;
 
-    // Lowercase 模式：存 hOsT → 内部存为 host，查 host 能找到
+    // ServerSide 模式：存 hOsT → 内部存为 host，查 host 能找到
     {
-        HeaderPair headers(HeaderPair::NormalizeMode::Lowercase);
+        HeaderPair headers(HeaderPair::Mode::ServerSide);
         headers.addHeaderPair("hOsT", "example.com");
 
         TEST_ASSERT(headers.getValue("host") == "example.com",
-                    "Lowercase mode: lookup by 'host' should succeed");
+                    "ServerSide mode: lookup by 'host' should succeed");
         TEST_ASSERT(headers.getValue("HOST") == "example.com",
-                    "Lowercase mode: lookup by 'HOST' should succeed (normalized to lowercase)");
+                    "ServerSide mode: lookup by 'HOST' should succeed (normalized to lowercase)");
 
         std::string str = headers.toString();
         TEST_ASSERT(str.find("host: example.com\r\n") != std::string::npos,
-                    "Lowercase mode: stored key should be lowercase");
+                    "ServerSide mode: stored key should be lowercase");
     }
 
-    // Canonical 模式：存 hOsT → 内部存为 Host，查 Host 能找到
+    // ClientSide 模式：存 hOsT → 内部存为 Host，查 Host 能找到
     {
-        HeaderPair headers(HeaderPair::NormalizeMode::Canonical);
+        HeaderPair headers(HeaderPair::Mode::ClientSide);
         headers.addHeaderPair("hOsT", "example.com");
 
         TEST_ASSERT(headers.getValue("Host") == "example.com",
-                    "Canonical mode: lookup by 'Host' should succeed");
+                    "ClientSide mode: lookup by 'Host' should succeed");
         TEST_ASSERT(headers.getValue("host") == "example.com",
-                    "Canonical mode: lookup by 'host' should succeed (normalized to canonical)");
+                    "ClientSide mode: lookup by 'host' should succeed (normalized to canonical)");
 
         std::string str = headers.toString();
         TEST_ASSERT(str.find("Host: example.com\r\n") != std::string::npos,
-                    "Canonical mode: stored key should be canonical");
-    }
-
-    // Raw 模式：存 hOsT → 精确查 hOsT 能找到，Host 也能通过 case-insensitive fallback 找到
-    {
-        HeaderPair headers(HeaderPair::NormalizeMode::Raw);
-        headers.addHeaderPair("hOsT", "example.com");
-
-        TEST_ASSERT(headers.getValue("hOsT") == "example.com",
-                    "Raw mode: exact key lookup should succeed");
-        TEST_ASSERT(headers.getValue("Host") == "example.com",
-                    "Raw mode: case-insensitive fallback should succeed");
-
-        std::string str = headers.toString();
-        TEST_ASSERT(str.find("hOsT: example.com\r\n") != std::string::npos,
-                    "Raw mode: stored key should preserve original case");
+                    "ClientSide mode: stored key should be canonical");
     }
 
     // 解析测试：默认 Lowercase 模式下解析 HTTP 请求
@@ -1129,7 +1114,30 @@ void test_header_case_config_switch()
                     "Default lowercase mode: lookup by 'host' should succeed");
     }
 
-    TEST_PASS("Header NormalizeMode");
+    TEST_PASS("Header Mode");
+}
+
+void test_header_add_normalized_pair()
+{
+    std::cout << "\n=== Test: Header add normalized pair ===" << std::endl;
+
+    HeaderPair headers(HeaderPair::Mode::ServerSide);
+
+    std::string key1 = "content-length";
+    std::string value1 = "3";
+    auto err1 = headers.addNormalizedHeaderPair(std::move(key1), std::move(value1));
+    TEST_ASSERT(err1 == kNoError, "Insert normalized key should succeed");
+    TEST_ASSERT(headers.getValue("Content-Length") == "3",
+                "Lookup by mixed case should succeed for normalized insert");
+
+    std::string key2 = "content-length";
+    std::string value2 = "7";
+    auto err2 = headers.addNormalizedHeaderPair(std::move(key2), std::move(value2));
+    TEST_ASSERT(err2 == kNoError, "Update normalized key should succeed");
+    TEST_ASSERT(headers.getValue("content-length") == "7",
+                "Second normalized insert should update existing value");
+
+    TEST_PASS("Header add normalized pair");
 }
 
 // ============ 主函数 ============
@@ -1180,6 +1188,7 @@ int main()
     test_request_lowercase_content_length();
     test_response_chunked_case_insensitive();
     test_header_case_config_switch();
+    test_header_add_normalized_pair();
 
     std::cout << "\n========================================" << std::endl;
     std::cout << "Test Results: " << g_passed << " passed, " << g_failed << " failed" << std::endl;

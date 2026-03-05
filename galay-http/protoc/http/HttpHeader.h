@@ -8,6 +8,9 @@
 #include <memory>
 #include <vector>
 #include <sys/uio.h>
+#include <array>
+#include <bitset>
+#include <functional>
 
 
 namespace galay::http {
@@ -73,13 +76,12 @@ namespace galay::http {
     class HeaderPair
     {
     public:
-        enum class NormalizeMode {
-            Lowercase,   // content-type (默认，Server 端用)
-            Canonical,   // Content-Type
-            Raw          // 保持原样
+        enum class Mode {
+            ServerSide,   // 服务端：统一小写，使用 fast-path
+            ClientSide    // 客户端：保留原始大小写，不使用 fast-path
         };
 
-        explicit HeaderPair(NormalizeMode mode = NormalizeMode::Lowercase);
+        explicit HeaderPair(Mode mode = Mode::ServerSide);
         HeaderPair(const HeaderPair& other);
         HeaderPair(HeaderPair&& other);
         bool hasKey(const std::string& key) const;
@@ -94,11 +96,26 @@ namespace galay::http {
         void appendTo(std::string& out) const;
         std::string toString() const;
         void clear();
-        NormalizeMode mode() const { return m_mode; }
+        Mode mode() const { return m_mode; }
         HeaderPair& operator=(const HeaderPair& other);
         HeaderPair& operator=(HeaderPair&& other);
+
+        // 新增 fast-path 方法
+        void setCommonHeader(CommonHeaderIndex idx, std::string value);
+        std::string_view getCommonHeader(CommonHeaderIndex idx) const;
+        bool hasCommonHeader(CommonHeaderIndex idx) const;
+
+        // 新增遍历方法
+        void forEachHeader(std::function<void(std::string_view, std::string_view)> callback) const;
+
     private:
-        NormalizeMode m_mode;
+        Mode m_mode;
+
+        // Fast-path 存储（仅 ServerSide 使用）
+        std::array<std::string, 15> m_commonHeaders;
+        std::bitset<15> m_commonHeaderPresent;
+
+        // Slow-path 存储
         std::map<std::string, std::string> m_headerPairs;
     };
 
