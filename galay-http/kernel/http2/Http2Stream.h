@@ -267,6 +267,9 @@ public:
      * @brief 推入帧（由 StreamManager 调用）
      */
     void pushFrame(Http2Frame::uptr frame) {
+        if (!m_frame_queue_enabled) {
+            return;
+        }
         m_frame_channel.send(std::move(frame));
     }
 
@@ -282,6 +285,9 @@ public:
     }
 
     bool isFrameQueueClosed() const { return m_frame_queue_closed; }
+
+    void setFrameQueueEnabled(bool enabled) { m_frame_queue_enabled = enabled; }
+    bool isFrameQueueEnabled() const { return m_frame_queue_enabled; }
 
     void setGoAwayError(Http2GoAwayError error) { m_goaway_error = std::move(error); }
     bool hasGoAwayError() const { return m_goaway_error.has_value(); }
@@ -373,6 +379,14 @@ public:
 
     bool isResponseCompleted() const {
         return m_response_completed;
+    }
+
+    galay::kernel::AsyncWaiterAwaitable<void> waitRequestComplete() {
+        return m_request_waiter.wait();
+    }
+
+    galay::kernel::AsyncWaiterAwaitable<void> waitResponseComplete() {
+        return m_response_waiter.wait();
     }
 
     // ==================== 发送接口 ====================
@@ -542,6 +556,7 @@ private:
     // 帧通道
     galay::kernel::UnsafeChannel<Http2Frame::uptr> m_frame_channel;
     bool m_frame_queue_closed = false;
+    bool m_frame_queue_enabled = true;
     std::optional<Http2GoAwayError> m_goaway_error;
     galay::kernel::AsyncWaiter<void> m_request_waiter;
     galay::kernel::AsyncWaiter<void> m_response_waiter;

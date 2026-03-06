@@ -22,27 +22,13 @@ void signalHandler(int) {
 }
 
 Coroutine handleStream(Http2Stream::ptr stream) {
-    std::string body;
-
-    bool end_stream = false;
-    while (!end_stream) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) {
-            break;
-        }
-
-        auto frame = std::move(frame_result.value());
-        if (!frame) {
-            end_stream = true;
-            break;
-        }
-        if (frame->isData()) {
-            body.append(frame->asData()->data());
-        }
-        if (frame->isEndStream()) {
-            end_stream = true;
-        }
+    // Echo 压测场景直接消费 StreamManager 已聚合的请求体，避免每帧 await/拷贝。
+    stream->setFrameQueueEnabled(false);
+    auto request_done = co_await stream->waitRequestComplete();
+    if (!request_done) {
+        co_return;
     }
+    const std::string& body = stream->request().body;
 
     if (g_debug_log) {
         int idx = g_debug_logs.fetch_add(1);
