@@ -122,7 +122,7 @@ public:
         bool await_suspend(Handle handle) {
             if (!m_started) {
                 m_started = true;
-                m_wait_result.emplace(m_manager->shutdownOnce(m_error).wait());
+                m_wait_result.emplace(m_manager->shutdown(m_error).wait());
             }
             return m_wait_result->await_suspend(handle);
         }
@@ -276,32 +276,7 @@ public:
      * @brief 优雅关闭：发送 GOAWAY、关闭连接、等待 StreamManager 停止
      * @details 替代手动的 sendGoaway + conn.close() + waitStopped() 序列
      */
-    ShutdownAwaitable shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
-        return ShutdownAwaitable(this, error);
-    }
-
-private:
-    Coroutine startInBackgroundOnce(Http2StreamHandler handler) {
-        co_await spawn(start(std::move(handler)));
-        co_await m_writer_ready.wait();
-        co_return;
-    }
-
-    Coroutine readerLoopThenCleanup(Http2StreamHandler handler) {
-        co_await readerLoop(std::move(handler)).wait();
-
-        m_draining_handlers.store(true, std::memory_order_release);
-        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
-            co_await m_handler_waiter.wait();
-        }
-
-        m_running = false;
-        m_send_channel.send(Http2OutgoingFrame{});
-        m_stop_waiter.notify();
-        co_return;
-    }
-
-    Coroutine shutdownOnce(Http2ErrorCode error = Http2ErrorCode::NoError) {
+    Coroutine shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
         if (!m_started) co_return;
 
         if (m_running) {
@@ -340,19 +315,60 @@ private:
                 co_await galay::kernel::sleep(std::chrono::milliseconds(5));
             }
 
+            // 批量发送 RST_STREAM 给所有未完成的流
+            std::vector<Http2OutgoingFrame> rst_frames;
+            m_conn.forEachStream([&](uint32_t stream_id, Http2Stream::ptr& stream) {
+                if (stream && stream->state() != Http2StreamState::Closed) {
+                    auto bytes = Http2FrameBuilder::rstStreamBytes(stream_id, Http2ErrorCode::NoError);
+                    stream->onRstStreamSent();
+                    rst_frames.push_back(Http2OutgoingFrame{std::move(bytes), nullptr});
+                }
+            });
+
+            // 批量入队 RST_STREAM 帧
+            for (auto& frame : rst_frames) {
+                m_send_channel.send(std::move(frame));
+            }
+
+            // 等待 RST_STREAM 帧发送完成
+            if (!rst_frames.empty()) {
+                co_await galay::kernel::sleep(std::chrono::milliseconds(10));
+            }
+
             // 关闭所有流的帧队列
             m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
                 stream->closeFrameQueue();
             });
 
             // close() 设置 m_closing=true 并关闭 socket。
-            // readerLoop 的 readFrame() 在 await_ready() 中检测到 closing，
+            // readerLoop 的 readFramesBatch() 在 await_ready() 中检测到 closing，
             // 不再挂起，直接返回错误，readerLoop 退出。
             co_await m_conn.close();
             if (m_running) {
                 co_await waitStopped();
             }
         }
+        co_return;
+    }
+
+private:
+    Coroutine startInBackgroundOnce(Http2StreamHandler handler) {
+        co_await spawn(start(std::move(handler)));
+        co_await m_writer_ready.wait();
+        co_return;
+    }
+
+    Coroutine readerLoopThenCleanup(Http2StreamHandler handler) {
+        co_await readerLoop(std::move(handler)).wait();
+
+        m_draining_handlers.store(true, std::memory_order_release);
+        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
+            co_await m_handler_waiter.wait();
+        }
+
+        m_running = false;
+        m_send_channel.send(Http2OutgoingFrame{});
+        m_stop_waiter.notify();
         co_return;
     }
 
@@ -394,20 +410,19 @@ private:
         // GOAWAY（无论收到还是发出）不退出：GOAWAY 只表示不再有新流，
         // 已有流的帧仍需继续读取直到连接关闭（RFC 9113 §6.8）。
         while (true) {
-            auto read_awaitable = m_conn.readFrame();
-            auto frame_result = co_await read_awaitable;
+            auto frames_result = co_await m_conn.readFramesBatch();
 
-            if (!frame_result) {
+            if (!frames_result) {
                 if (m_conn.isClosing() || m_conn.isPeerClosed()) {
                     HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
                                   m_conn.isPeerClosed() ? "peer-closed" : "closing",
                                   m_conn.lastReadError());
                     break;
                 }
-                if (frame_result.error() == Http2ErrorCode::NoError) {
+                if (frames_result.error() == Http2ErrorCode::NoError) {
                     continue;
                 }
-                if (frame_result.error() == Http2ErrorCode::ProtocolError &&
+                if (frames_result.error() == Http2ErrorCode::ProtocolError &&
                     (m_conn.isPeerClosed() || m_conn.isClosing())) {
                     HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
                                   m_conn.isPeerClosed() ? "peer-closed" : "closing",
@@ -416,40 +431,42 @@ private:
                 }
                 if (m_conn.lastReadError().empty()) {
                     HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
-                                  http2ErrorCodeToString(frame_result.error()));
+                                  http2ErrorCodeToString(frames_result.error()));
                 } else {
                     HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
-                                  http2ErrorCodeToString(frame_result.error()),
+                                  http2ErrorCodeToString(frames_result.error()),
                                   m_conn.lastReadError());
                 }
-                enqueueGoaway(frame_result.error());
+                enqueueGoaway(frames_result.error());
                 break;
             }
 
-            auto& frame = *frame_result;
-            uint32_t stream_id = frame->streamId();
-            m_last_frame_recv_at = std::chrono::steady_clock::now();
+            auto& frames = *frames_result;
+            for (auto& frame : frames) {
+                uint32_t stream_id = frame->streamId();
+                m_last_frame_recv_at = std::chrono::steady_clock::now();
 
-            HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
-                          http2FrameTypeToString(frame->type()), stream_id, frame->header().flags);
+                HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
+                              http2FrameTypeToString(frame->type()), stream_id, frame->header().flags);
 
-            // CONTINUATION 状态检查
-            if (m_conn.isExpectingContinuation()) {
-                if (!frame->isContinuation() || stream_id != m_conn.continuationStreamId()) {
-                    enqueueGoaway(Http2ErrorCode::ProtocolError);
-                    break;
+                // CONTINUATION 状态检查
+                if (m_conn.isExpectingContinuation()) {
+                    if (!frame->isContinuation() || stream_id != m_conn.continuationStreamId()) {
+                        enqueueGoaway(Http2ErrorCode::ProtocolError);
+                        goto exit_loop;
+                    }
                 }
-            }
 
-            // 连接级帧
-            if (frame->isSettings() || frame->isPing() || frame->isGoAway() ||
-                (frame->isWindowUpdate() && stream_id == 0)) {
-                handleConnectionFrame(std::move(frame));
-                continue;
-            }
+                // 连接级帧
+                if (frame->isSettings() || frame->isPing() || frame->isGoAway() ||
+                    (frame->isWindowUpdate() && stream_id == 0)) {
+                    handleConnectionFrame(std::move(frame));
+                    continue;
+                }
 
-            // 流级帧 → 分发到 Http2Stream 帧队列
-            dispatchStreamFrame(std::move(frame));
+                // 流级帧 → 分发到 Http2Stream 帧队列
+                dispatchStreamFrame(std::move(frame));
+            }
 
             // 处理 dispatchStreamFrame 中标记的待处理动作
             processPendingActions();
@@ -463,6 +480,7 @@ private:
             }
         }
 
+    exit_loop:
         // 关闭所有流的帧队列
         m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
             stream->closeFrameQueue();

@@ -1194,17 +1194,17 @@ class Http2ReadFramesBatchAwaitableImpl<SocketType, false>
     , public TimeoutSupport<Http2ReadFramesBatchAwaitableImpl<SocketType, false>>
 {
 public:
-    class ProtocolRecvAwaitable : public RecvAwaitable
+    class ProtocolReadvAwaitable : public ReadvIOContext
     {
     public:
-        explicit ProtocolRecvAwaitable(Http2ReadFramesBatchAwaitableImpl* owner)
-            : RecvAwaitable(owner->m_socket.controller(), nullptr, 0)
+        explicit ProtocolReadvAwaitable(Http2ReadFramesBatchAwaitableImpl* owner)
+            : ReadvIOContext({})
             , m_owner(owner)
         {
         }
 
 #ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
+        bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
             if (m_owner->m_closing && *m_owner->m_closing) {
                 m_owner->setProtocolError(Http2ErrorCode::ProtocolError, "Connection closing");
                 return true;
@@ -1215,23 +1215,24 @@ public:
             }
 
             if (cqe == nullptr) {
-                if (!prepareRecvWindow()) {
+                if (!prepareReadvWindow()) {
                     m_owner->setProtocolError(Http2ErrorCode::ProtocolError, "RingBuffer is full");
                     return true;
                 }
                 return false;
             }
 
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+            // 使用 ReadvIOContext 的 handleComplete 处理 readv 结果
+            if (!ReadvIOContext::handleComplete(cqe, handle)) {
                 return false;
             }
-            if (!result) {
-                m_owner->setRecvError(result.error());
+
+            if (!m_result) {
+                m_owner->setRecvError(m_result.error());
                 return true;
             }
 
-            size_t bytes_read = result.value().size();
+            size_t bytes_read = m_result.value();
             if (bytes_read == 0) {
                 m_owner->setProtocolError(Http2ErrorCode::ProtocolError, "peer closed");
                 return true;
@@ -1246,7 +1247,7 @@ public:
                 return true;
             }
 
-            if (!prepareRecvWindow()) {
+            if (!prepareReadvWindow()) {
                 m_owner->setProtocolError(Http2ErrorCode::ProtocolError, "RingBuffer is full");
                 return true;
             }
@@ -1264,21 +1265,22 @@ public:
             }
 
             while (true) {
-                if (!prepareRecvWindow()) {
+                if (!prepareReadvWindow()) {
                     m_owner->setProtocolError(Http2ErrorCode::ProtocolError, "RingBuffer is full");
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
+                // 使用 ReadvIOContext 的 handleComplete 处理 readv 结果
+                if (!ReadvIOContext::handleComplete(handle)) {
                     return false;
                 }
-                if (!result) {
-                    m_owner->setRecvError(result.error());
+
+                if (!m_result) {
+                    m_owner->setRecvError(m_result.error());
                     return true;
                 }
 
-                size_t bytes_read = result.value().size();
+                size_t bytes_read = m_result.value();
                 if (bytes_read == 0) {
                     m_owner->setProtocolError(Http2ErrorCode::ProtocolError, "peer closed");
                     return true;
@@ -1297,14 +1299,14 @@ public:
 #endif
 
     private:
-        bool prepareRecvWindow() {
+        bool prepareReadvWindow() {
             auto write_iovecs = m_owner->m_ring_buffer.getWriteIovecs();
             if (write_iovecs.empty()) {
                 return false;
             }
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
+            // 使用所有可用的 iovecs，而不是只用第一个
+            m_iovecs.assign(write_iovecs.begin(), write_iovecs.end());
+            return !m_iovecs.empty();
         }
 
         Http2ReadFramesBatchAwaitableImpl* m_owner;
@@ -1524,7 +1526,7 @@ private:
     bool m_has_buffered_frames;
     std::vector<uint8_t> m_parse_buffer;
     bool m_has_async_task;
-    ProtocolRecvAwaitable m_recv_awaitable;
+    ProtocolReadvAwaitable m_recv_awaitable;
     std::optional<Http2ErrorCode> m_error;
 
 public:
@@ -2139,21 +2141,26 @@ public:
         m_continuation_stream_id = stream_id;
     }
     
-    // 关闭连接（awaitable 版本，需要 co_await）
+    // 关闭连接（awaitable 版本，需要 co_await）。
+    // 只负责传输层 teardown；协议级清理由 StreamManager 负责。
     auto close() {
         m_closing = true;
-        // shutdown(fd) 触发 kqueue 读事件（readv 返回 0），
-        // 让 readerLoop 能从 co_await readFrame() 中返回并退出。
-        ::shutdown(m_socket.handle().fd, SHUT_RDWR);
+        // shutdown(fd) 触发读事件（readv 返回 0），让 readerLoop 退出阻塞读取。
+        const int fd = m_socket.handle().fd;
+        if (fd >= 0) {
+            ::shutdown(fd, SHUT_RDWR);
+        }
         return m_socket.close();
     }
 
-    // 非 awaitable 关闭：仅设置 closing 标志并 shutdown(fd)，
-    // 触发 readerLoop 退出，不需要 co_await。
-    // 适用于调用者不方便 co_await 的场景（如从外部协程发起关闭）。
+    // 非 awaitable 关闭：仅设置 closing 标志并触发 TCP shutdown，
+    // 用于唤醒 readerLoop；不执行协议级收尾。
     void initiateClose() {
         m_closing = true;
-        ::shutdown(m_socket.handle().fd, SHUT_RDWR);
+        const int fd = m_socket.handle().fd;
+        if (fd >= 0) {
+            ::shutdown(fd, SHUT_RDWR);
+        }
     }
 
     // StreamManager 访问（需要 include Http2StreamManager.h 后才能使用）
