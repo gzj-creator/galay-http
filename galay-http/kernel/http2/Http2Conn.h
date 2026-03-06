@@ -1300,13 +1300,13 @@ public:
 
     private:
         bool prepareReadvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer.getWriteIovecs();
-            if (write_iovecs.empty()) {
+            struct iovec write_iovecs[2];
+            const size_t iov_count = m_owner->m_ring_buffer.getWriteIovecs(write_iovecs, 2);
+            if (iov_count == 0) {
                 return false;
             }
-            // 使用所有可用的 iovecs，而不是只用第一个
-            m_iovecs.assign(write_iovecs.begin(), write_iovecs.end());
-            return !m_iovecs.empty();
+            m_iovecs.assign(write_iovecs, write_iovecs + iov_count);
+            return true;
         }
 
         Http2ReadFramesBatchAwaitableImpl* m_owner;
@@ -1381,8 +1381,9 @@ private:
             return false;
         }
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
-        if (read_iovecs.empty()) {
+        struct iovec read_iovecs[2];
+        const size_t iov_count = m_ring_buffer.getReadIovecs(read_iovecs, 2);
+        if (iov_count == 0) {
             m_has_buffered_frames = false;
             return false;
         }
@@ -1395,7 +1396,8 @@ private:
         } else {
             uint8_t header_buf[kHttp2FrameHeaderLength];
             size_t copied = 0;
-            for (const auto& iov : read_iovecs) {
+            for (size_t i = 0; i < iov_count; ++i) {
+                const auto& iov = read_iovecs[i];
                 size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
                 std::memcpy(header_buf + copied, iov.iov_base, to_copy);
                 copied += to_copy;
@@ -1440,6 +1442,11 @@ private:
 
     std::expected<std::vector<Http2Frame::uptr>, Http2ErrorCode> parseFramesFromBuffer() {
         std::vector<Http2Frame::uptr> frames;
+        const size_t reserve_hint =
+            (m_max_frames == std::numeric_limits<size_t>::max())
+                ? 16
+                : std::min<size_t>(m_max_frames, 256);
+        frames.reserve(reserve_hint);
 
         while (frames.size() < m_max_frames) {
             // 检查是否有足够的数据读取帧头
@@ -1447,8 +1454,9 @@ private:
                 break;  // 不完整的帧头，停止解析
             }
 
-            auto read_iovecs = m_ring_buffer.getReadIovecs();
-            if (read_iovecs.empty()) {
+            struct iovec read_iovecs[2];
+            const size_t iov_count = m_ring_buffer.getReadIovecs(read_iovecs, 2);
+            if (iov_count == 0) {
                 break;
             }
 
@@ -1461,7 +1469,8 @@ private:
                 // 帧头跨越多个 iovec，需要拷贝
                 uint8_t header_buf[kHttp2FrameHeaderLength];
                 size_t copied = 0;
-                for (const auto& iov : read_iovecs) {
+                for (size_t i = 0; i < iov_count; ++i) {
+                    const auto& iov = read_iovecs[i];
                     size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
                     std::memcpy(header_buf + copied, iov.iov_base, to_copy);
                     copied += to_copy;
@@ -1495,7 +1504,8 @@ private:
                     m_parse_buffer.resize(total_frame_size);
                 }
                 size_t copied = 0;
-                for (const auto& iov : read_iovecs) {
+                for (size_t i = 0; i < iov_count; ++i) {
+                    const auto& iov = read_iovecs[i];
                     size_t to_copy = std::min(iov.iov_len, total_frame_size - copied);
                     std::memcpy(m_parse_buffer.data() + copied, iov.iov_base, to_copy);
                     copied += to_copy;
@@ -1666,8 +1676,9 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer.getWriteIovecs();
-            if (write_iovecs.empty()) {
+            struct iovec write_iovecs[2];
+            const size_t iov_count = m_owner->m_ring_buffer.getWriteIovecs(write_iovecs, 2);
+            if (iov_count == 0) {
                 return false;
             }
             this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
@@ -1742,8 +1753,9 @@ private:
             return false;
         }
 
-        auto read_iovecs = m_ring_buffer.getReadIovecs();
-        if (read_iovecs.empty()) {
+        struct iovec read_iovecs[2];
+        const size_t iov_count = m_ring_buffer.getReadIovecs(read_iovecs, 2);
+        if (iov_count == 0) {
             m_has_buffered_frames = false;
             return false;
         }
@@ -1755,7 +1767,8 @@ private:
         } else {
             uint8_t header_buf[kHttp2FrameHeaderLength];
             size_t copied = 0;
-            for (const auto& iov : read_iovecs) {
+            for (size_t i = 0; i < iov_count; ++i) {
+                const auto& iov = read_iovecs[i];
                 size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
                 std::memcpy(header_buf + copied, iov.iov_base, to_copy);
                 copied += to_copy;
@@ -1806,14 +1819,20 @@ private:
 
     std::expected<std::vector<Http2Frame::uptr>, Http2ErrorCode> parseFramesFromBuffer() {
         std::vector<Http2Frame::uptr> frames;
+        const size_t reserve_hint =
+            (m_max_frames == std::numeric_limits<size_t>::max())
+                ? 16
+                : std::min<size_t>(m_max_frames, 256);
+        frames.reserve(reserve_hint);
 
         while (frames.size() < m_max_frames) {
             if (m_ring_buffer.readable() < kHttp2FrameHeaderLength) {
                 break;
             }
 
-            auto read_iovecs = m_ring_buffer.getReadIovecs();
-            if (read_iovecs.empty()) {
+            struct iovec read_iovecs[2];
+            const size_t iov_count = m_ring_buffer.getReadIovecs(read_iovecs, 2);
+            if (iov_count == 0) {
                 break;
             }
 
@@ -1824,7 +1843,8 @@ private:
             } else {
                 uint8_t header_buf[kHttp2FrameHeaderLength];
                 size_t copied = 0;
-                for (const auto& iov : read_iovecs) {
+                for (size_t i = 0; i < iov_count; ++i) {
+                    const auto& iov = read_iovecs[i];
                     size_t to_copy = std::min(iov.iov_len, kHttp2FrameHeaderLength - copied);
                     std::memcpy(header_buf + copied, iov.iov_base, to_copy);
                     copied += to_copy;
@@ -1853,7 +1873,8 @@ private:
                     m_parse_buffer.resize(total_frame_size);
                 }
                 size_t copied = 0;
-                for (const auto& iov : read_iovecs) {
+                for (size_t i = 0; i < iov_count; ++i) {
+                    const auto& iov = read_iovecs[i];
                     size_t to_copy = std::min(iov.iov_len, total_frame_size - copied);
                     std::memcpy(m_parse_buffer.data() + copied, iov.iov_base, to_copy);
                     copied += to_copy;
