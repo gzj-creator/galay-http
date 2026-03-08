@@ -13,6 +13,7 @@
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
+#include <array>
 #include <coroutine>
 #include <type_traits>
 #include <variant>
@@ -62,10 +63,9 @@ public:
     {
     public:
         explicit ProtocolRecvAwaitable(GetRequestAwaitableImpl* owner)
-            : galay::kernel::ReadvIOContext(std::span<const struct iovec>())
+            : galay::kernel::ReadvIOContext(m_iovec_storage, 0)
             , m_owner(owner)
         {
-            m_iovecs.reserve(2);
         }
 
 #ifdef USE_IOURING
@@ -123,7 +123,7 @@ public:
                 }
 
                 auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovecs.data(),
+                                                             m_iovec_storage.data(),
                                                              static_cast<int>(m_iovecs.size()));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
@@ -151,15 +151,19 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            struct iovec write_iovecs[2];
-            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(write_iovecs, 2);
-            if (iov_count == 0) {
-                return false;
-            }
-            return IoVecWindow::buildWindow(write_iovecs, iov_count, m_iovecs) > 0;
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(
+                m_iovec_storage.data(), m_iovec_storage.size());
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
+            return compact_count > 0;
         }
 
         GetRequestAwaitableImpl* m_owner;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     GetRequestAwaitableImpl(RingBuffer& ring_buffer,
@@ -385,7 +389,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -439,12 +443,17 @@ public:
 
 private:
     bool parseRequestFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_request->fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_request->fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_ring_buffer->consume(consumed);
         }
@@ -546,7 +555,7 @@ public:
                 return true;
             }
 
-            size_t recv_bytes = result.value().size();
+            size_t recv_bytes = result.value();
             if (recv_bytes == 0) {
                 m_owner->setParseError(HttpError(kConnectionClose));
                 return true;
@@ -586,7 +595,7 @@ public:
                     return true;
                 }
 
-                size_t recv_bytes = result.value().size();
+                size_t recv_bytes = result.value();
                 if (recv_bytes == 0) {
                     m_owner->setParseError(HttpError(kConnectionClose));
                     return true;
@@ -604,7 +613,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -661,12 +670,17 @@ public:
 
 private:
     bool parseResponseFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response->fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_response->fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_ring_buffer->consume(consumed);
         }
@@ -823,7 +837,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -877,12 +891,17 @@ public:
 
 private:
     bool parseResponseFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response->fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_response->fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_ring_buffer->consume(consumed);
         }
@@ -974,7 +993,7 @@ public:
                 return true;
             }
 
-            size_t recv_bytes = result.value().size();
+            size_t recv_bytes = result.value();
             if (recv_bytes == 0) {
                 m_owner->setParseError(HttpError(kConnectionClose));
                 return true;
@@ -1013,7 +1032,7 @@ public:
                     return true;
                 }
 
-                size_t recv_bytes = result.value().size();
+                size_t recv_bytes = result.value();
                 if (recv_bytes == 0) {
                     m_owner->setParseError(HttpError(kConnectionClose));
                     return true;
@@ -1030,7 +1049,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -1086,12 +1105,17 @@ public:
 
 private:
     bool parseChunkFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto result = Chunk::fromIOVec(read_iovecs, *m_chunk_data);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto result = Chunk::fromIOVec(parse_iovecs, *m_chunk_data);
         if (!result) {
             auto& error = result.error();
             if (error.code() == kIncomplete) {
@@ -1237,7 +1261,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_ring_buffer->getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -1290,12 +1314,17 @@ public:
 
 private:
     bool parseChunkFromRingBuffer() {
-        auto read_iovecs = m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto result = Chunk::fromIOVec(read_iovecs, *m_chunk_data);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto result = Chunk::fromIOVec(parse_iovecs, *m_chunk_data);
         if (!result) {
             auto& error = result.error();
             if (error.code() == kIncomplete) {

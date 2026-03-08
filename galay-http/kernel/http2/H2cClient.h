@@ -16,6 +16,7 @@
 #include "galay-kernel/kernel/Timeout.hpp"
 #include <galay-utils/algorithm/Base64.hpp>
 #include <memory>
+#include <array>
 #include <algorithm>
 #include <string>
 #include <cstring>
@@ -89,18 +90,17 @@ public:
         ProtocolSendAwaitable(H2cUpgradeAwaitable* owner,
                               const std::string* payload,
                               bool finish_upgrade)
-            : WritevIOContext(std::span<const struct iovec>())
+            : WritevIOContext(m_iovec_storage, 0)
             , m_owner(owner), m_payload(payload), m_finish_upgrade(finish_upgrade)
             , m_completed(true)
         {
+            m_write_state.clear();
+            m_write_state.reserve(1);
             if (m_payload != nullptr && !m_payload->empty()) {
-                std::vector<iovec> segments;
-                segments.reserve(1);
-                segments.push_back({
+                m_write_state.append({
                     .iov_base = const_cast<char*>(m_payload->data()),
                     .iov_len = m_payload->size()
                 });
-                m_cursor.reset(std::move(segments));
                 m_completed = false;
             }
             syncSendWindow();
@@ -151,7 +151,7 @@ public:
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleWritev(handle, m_iovecs.data(), iov_count);
+                auto result = galay::kernel::io::handleWritev(handle, m_write_state.data(), iov_count);
                 if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
                 if (!result) { m_owner->setSendError(result.error()); return true; }
 
@@ -172,15 +172,24 @@ public:
 
     private:
         void syncSendWindow() {
-            m_cursor.exportWindow(m_iovecs);
+            const size_t iov_count = copyBoundedIovecs(
+                m_write_state.data(),
+                m_write_state.count(),
+                m_iovec_storage);
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
         }
 
         int pendingIovCount() {
-            return static_cast<int>(m_cursor.count());
+            return static_cast<int>(m_write_state.count());
         }
 
         bool advanceAfterWrite(size_t sent_bytes) {
-            const size_t advanced = m_cursor.advance(sent_bytes);
+            const size_t advanced = m_write_state.advance(sent_bytes);
             syncSendWindow();
             return advanced == sent_bytes;
         }
@@ -188,16 +197,16 @@ public:
         const std::string* m_payload;
         bool m_finish_upgrade;
         bool m_completed;
-        IoVecCursor m_cursor;
+        IoVecWriteState m_write_state;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     class UpgradeRecvAwaitable : public ReadvIOContext
     {
     public:
         explicit UpgradeRecvAwaitable(H2cUpgradeAwaitable* owner)
-            : ReadvIOContext(std::span<const struct iovec>())
+            : ReadvIOContext(m_iovec_storage, 0)
             , m_owner(owner) {
-            m_iovecs.reserve(2);
         }
 
 #ifdef USE_IOURING
@@ -225,7 +234,7 @@ public:
             while (true) {
                 if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting 101"); return true; }
                 auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovecs.data(),
+                                                             m_iovec_storage.data(),
                                                              static_cast<int>(m_iovecs.size()));
                 if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
                 if (!result) { m_owner->setRecvError(result.error()); return true; }
@@ -238,22 +247,26 @@ public:
 #endif
     private:
         bool prepareRecvWindow() {
-            struct iovec wv[2];
-            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(wv, 2);
-            if (iov_count == 0) return false;
-
-            return IoVecWindow::buildWindow(wv, iov_count, m_iovecs) > 0;
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(
+                m_iovec_storage.data(), m_iovec_storage.size());
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
+            return compact_count > 0;
         }
         H2cUpgradeAwaitable* m_owner;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     class SettingsRecvAwaitable : public ReadvIOContext
     {
     public:
         explicit SettingsRecvAwaitable(H2cUpgradeAwaitable* owner)
-            : ReadvIOContext(std::span<const struct iovec>())
+            : ReadvIOContext(m_iovec_storage, 0)
             , m_owner(owner) {
-            m_iovecs.reserve(2);
         }
 
 #ifdef USE_IOURING
@@ -281,7 +294,7 @@ public:
             while (true) {
                 if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting SETTINGS"); return true; }
                 auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovecs.data(),
+                                                             m_iovec_storage.data(),
                                                              static_cast<int>(m_iovecs.size()));
                 if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
                 if (!result) { m_owner->setRecvError(result.error()); return true; }
@@ -294,25 +307,30 @@ public:
 #endif
     private:
         bool prepareRecvWindow() {
-            struct iovec wv[2];
-            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(wv, 2);
-            if (iov_count == 0) return false;
-
-            return IoVecWindow::buildWindow(wv, iov_count, m_iovecs) > 0;
+            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(
+                m_iovec_storage.data(), m_iovec_storage.size());
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
+            return compact_count > 0;
         }
         H2cUpgradeAwaitable* m_owner;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     H2cUpgradeAwaitable(H2cClient& client, const std::string& path);
 
     bool await_ready() const noexcept { return m_error.has_value(); }
-    using CustomAwaitable::await_suspend;
-
-    std::expected<bool, Http2Error> await_resume() {
-        if (!await_ready()) onCompleted();
-        if (m_error.has_value()) return std::unexpected(std::move(*m_error));
-        return true;
+    bool await_suspend(std::coroutine_handle<PromiseType> handle) {
+        m_scheduler = handle.promise().getCoroutine().belongScheduler();
+        m_registered = true;
+        return CustomAwaitable::await_suspend(handle);
     }
+
+    std::expected<bool, Http2Error> await_resume();
 
 private:
     friend class ProtocolSendAwaitable;
@@ -333,9 +351,13 @@ private:
     }
 
     bool parseUpgradeResponse() {
-        auto rv = m_ring_buffer->getReadIovecs();
+        auto rv = borrowReadIovecs(*m_ring_buffer);
         if (rv.empty()) return false;
-        auto [ec, consumed] = m_upgrade_response.fromIOVec(rv);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(rv, parse_iovecs) == 0) {
+            return false;
+        }
+        auto [ec, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
         if (consumed > 0) m_ring_buffer->consume(consumed);
         if (ec == HttpErrorCode::kHeaderInComplete || ec == HttpErrorCode::kIncomplete) return false;
         if (ec != HttpErrorCode::kNoError) { setProtocolError("HTTP parse error during upgrade"); return true; }
@@ -354,7 +376,7 @@ private:
     }
 
     bool tryConsumeSettingsFrame() {
-        auto rv = m_ring_buffer->getReadIovecs();
+        auto rv = borrowReadIovecs(*m_ring_buffer);
         size_t available = 0;
         for (const auto& iov : rv) available += iov.iov_len;
         if (available < kHttp2FrameHeaderLength) return false;
@@ -393,6 +415,8 @@ private:
     SettingsRecvAwaitable m_settings_recv;
     ProtocolSendAwaitable m_ack_send;
     std::optional<Http2Error> m_error;
+    Scheduler* m_scheduler = nullptr;
+    bool m_registered = false;
 
 public:
     std::expected<bool, IOError> m_result;
@@ -407,6 +431,8 @@ class H2cShutdownAwaitable
     : public TimeoutSupport<H2cShutdownAwaitable>
 {
 public:
+    using ManagerShutdownAwaitable = Http2StreamManagerImpl<TcpSocket>::ShutdownAwaitable;
+
     explicit H2cShutdownAwaitable(H2cClient& client);
 
     bool await_ready() const noexcept { return false; }
@@ -422,7 +448,8 @@ public:
 private:
     H2cClient& m_client;
     bool m_started = false;
-    std::optional<galay::kernel::WaitResult> m_wait_result;
+    std::optional<ManagerShutdownAwaitable> m_manager_shutdown;
+    std::optional<galay::kernel::CloseAwaitable> m_socket_close;
 };
 
 /**
@@ -431,42 +458,6 @@ private:
 class H2cClient
 {
 public:
-    /**
-     * @brief upgrade() 的包装 Awaitable
-     * @details 先 co_await H2cUpgradeAwaitable（真正的 CustomAwaitable IO），
-     *          成功后启动 StreamManager（需要协程上下文）
-     */
-    class UpgradeAwaitable : public TimeoutSupport<UpgradeAwaitable>
-    {
-    public:
-        UpgradeAwaitable(H2cClient& client, std::string path)
-            : m_client(client), m_path(std::move(path)) {}
-
-        bool await_ready() const noexcept { return false; }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (!m_started) {
-                m_started = true;
-                m_wait_result.emplace(m_client.upgradeImpl(m_path).wait());
-            }
-            return m_wait_result->await_suspend(handle);
-        }
-
-        UpgradeAwaitable& wait() & { return *this; }
-        UpgradeAwaitable&& wait() && { return std::move(*this); }
-
-        std::expected<bool, Http2Error> await_resume() {
-            return m_client.m_upgrade_result;
-        }
-
-    private:
-        H2cClient& m_client;
-        std::string m_path;
-        bool m_started = false;
-        std::optional<galay::kernel::WaitResult> m_wait_result;
-    };
-
     H2cClient(const H2cClientConfig& config = H2cClientConfig(), size_t ring_buffer_size = 65536)
         : m_config(config), m_ring_buffer_size(ring_buffer_size), m_port(0), m_upgraded(false) {}
 
@@ -489,7 +480,7 @@ public:
         return m_socket->connect(server_host);
     }
 
-    UpgradeAwaitable upgrade(const std::string& path = "/");
+    H2cUpgradeAwaitable upgrade(const std::string& path = "/");
     Http2Stream::ptr get(const std::string& path);
     Http2Stream::ptr post(const std::string& path,
                           const std::string& body,
@@ -502,9 +493,6 @@ public:
 private:
     friend class H2cUpgradeAwaitable;
     friend class H2cShutdownAwaitable;
-
-    Coroutine upgradeImpl(const std::string& path);
-    Coroutine shutdownImpl();
 
     H2cClientConfig m_config;
     std::string m_host;
@@ -520,6 +508,24 @@ private:
 };
 
 inline H2cClient H2cClientBuilder::build() const { return H2cClient(m_config); }
+
+inline std::expected<bool, Http2Error> H2cUpgradeAwaitable::await_resume() {
+    if (m_registered) {
+        onCompleted();
+    }
+    if (m_error.has_value()) {
+        m_client->m_upgraded = false;
+        m_client->m_upgrade_result = std::unexpected(*m_error);
+        return std::unexpected(std::move(*m_error));
+    }
+
+    m_client->m_socket.reset();
+    m_client->m_ring_buffer.reset();
+    m_client->m_upgraded = true;
+    m_client->m_upgrade_result = true;
+    HTTP_LOG_INFO("[h2c] [upgrade] [done]");
+    return true;
+}
 
 // ============== H2cUpgradeAwaitable 构造 ==============
 
@@ -589,6 +595,10 @@ inline H2cUpgradeAwaitable::H2cUpgradeAwaitable(H2cClient& client, const std::st
 
 inline bool H2cUpgradeAwaitable::finishUpgrade() {
     if (m_error.has_value()) return true;
+    if (!m_scheduler) {
+        m_error = Http2Error(Http2ErrorCode::InternalError, "missing scheduler");
+        return true;
+    }
 
     m_client->m_conn = std::make_unique<Http2ConnImpl<TcpSocket>>(
         std::move(*m_client->m_socket), std::move(*m_client->m_ring_buffer));
@@ -597,38 +607,16 @@ inline bool H2cUpgradeAwaitable::finishUpgrade() {
     m_client->m_conn->markSettingsSent();
     m_client->m_conn->setIsClient(true);
     m_client->m_conn->initStreamManager();
+    m_client->m_conn->streamManager()->startWithScheduler(
+        m_scheduler,
+        [](Http2Stream::ptr) -> Coroutine { co_return; });
 
     HTTP_LOG_INFO("[h2c] [upgrade] [conn-ready]");
     return true;
 }
 
-// ============== upgradeImpl — 薄协程包装 ==============
-
-inline Coroutine H2cClient::upgradeImpl(const std::string& path) {
-    auto result = co_await H2cUpgradeAwaitable(*this, path);
-    if (!result) {
-        m_upgrade_result = std::unexpected(result.error());
-        co_return;
-    }
-
-    // H2cUpgradeAwaitable::await_resume() 会 onCompleted() 清理 IOController，
-    // 这里再释放旧 socket/ring buffer，避免提前释放导致 UAF。
-    m_socket.reset();
-    m_ring_buffer.reset();
-
-    // 启动 StreamManager（需要协程上下文）
-    co_await m_conn->streamManager()->startInBackground(
-        [](Http2Stream::ptr) -> Coroutine { co_return; }
-    );
-
-    m_upgraded = true;
-    m_upgrade_result = true;
-    HTTP_LOG_INFO("[h2c] [upgrade] [done]");
-    co_return;
-}
-
-inline H2cClient::UpgradeAwaitable H2cClient::upgrade(const std::string& path) {
-    return UpgradeAwaitable(*this, path);
+inline H2cUpgradeAwaitable H2cClient::upgrade(const std::string& path) {
+    return H2cUpgradeAwaitable(*this, path);
 }
 
 inline H2cShutdownAwaitable::H2cShutdownAwaitable(H2cClient& client)
@@ -638,34 +626,46 @@ inline H2cShutdownAwaitable::H2cShutdownAwaitable(H2cClient& client)
 
 template<typename Handle>
 inline bool H2cShutdownAwaitable::await_suspend(Handle handle) {
-    if (!m_started) {
-        m_started = true;
-        m_wait_result.emplace(m_client.shutdownImpl().wait());
+    if (m_started) {
+        return false;
     }
-    return m_wait_result->await_suspend(handle);
+    m_started = true;
+
+    HTTP_LOG_INFO("[h2c] [shutdown] [begin] [has-conn={}] [upgraded={}]",
+                  m_client.m_conn != nullptr, m_client.m_upgraded);
+
+    if (m_client.m_conn && m_client.m_conn->streamManager()) {
+        m_manager_shutdown.emplace(m_client.m_conn->streamManager()->shutdown(Http2ErrorCode::NoError));
+        return m_manager_shutdown->await_suspend(handle);
+    }
+
+    if (m_client.m_socket) {
+        m_socket_close.emplace(m_client.m_socket->close());
+        return m_socket_close->await_suspend(handle);
+    }
+
+    return false;
 }
 
 inline std::expected<bool, Http2Error> H2cShutdownAwaitable::await_resume() {
-    return m_client.m_shutdown_result;
-}
-
-// ============== shutdownImpl — 薄协程包装 ==============
-
-inline Coroutine H2cClient::shutdownImpl() {
-    HTTP_LOG_INFO("[h2c] [shutdown] [begin] [has-conn={}] [upgraded={}]",
-                  m_conn != nullptr, m_upgraded);
-
-    if (m_conn && m_conn->streamManager()) {
-        co_await m_conn->streamManager()->shutdown(Http2ErrorCode::NoError).wait();
+    if (m_socket_close.has_value()) {
+        auto close_result = m_socket_close->await_resume();
+        if (!close_result) {
+            m_client.m_shutdown_result = std::unexpected(
+                Http2Error(Http2ErrorCode::InternalError, close_result.error().message()));
+        }
     }
 
-    m_conn.reset();
-    m_socket.reset();
-    m_ring_buffer.reset();
-    m_upgraded = false;
-    m_shutdown_result = true;
+    m_client.m_conn.reset();
+    m_client.m_socket.reset();
+    m_client.m_ring_buffer.reset();
+    m_client.m_upgraded = false;
+    if (!m_client.m_shutdown_result) {
+        return m_client.m_shutdown_result;
+    }
+    m_client.m_shutdown_result = true;
     HTTP_LOG_INFO("[h2c] [shutdown] [done]");
-    co_return;
+    return m_client.m_shutdown_result;
 }
 
 // ============== get() / post() ==============

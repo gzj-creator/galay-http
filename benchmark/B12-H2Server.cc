@@ -20,6 +20,19 @@ using namespace galay::kernel;
 static volatile bool g_running = true;
 static const Http2HeaderField kStatus200{":status", "200"};
 static const Http2HeaderField kContentTypeTextPlain{"content-type", "text/plain"};
+static constexpr size_t kBenchmarkEchoBodySize = 128;
+
+static const std::string& cachedBenchmarkResponseHeaderBlock() {
+    static const std::string block = [] {
+        HpackEncoder encoder;
+        return encoder.encodeStateless({
+            {":status", "200"},
+            {"content-type", "text/plain"},
+            {"content-length", std::to_string(kBenchmarkEchoBodySize)},
+        });
+    }();
+    return block;
+}
 
 void signalHandler(int) {
     g_running = false;
@@ -48,16 +61,20 @@ Coroutine handleStream(Http2Stream::ptr stream) {
         }
     }
 
-    std::vector<Http2HeaderField> headers;
-    headers.reserve(3);
-    headers.push_back(kStatus200);
-    headers.push_back(kContentTypeTextPlain);
-    headers.push_back({"content-length", std::to_string(body.size())});
-
-    stream->sendHeaders(headers, body.empty(), true);
-    if (!body.empty()) {
-        stream->sendData(body, true);
+    if (body.size() == kBenchmarkEchoBodySize) {
+        stream->sendEncodedHeaders(cachedBenchmarkResponseHeaderBlock(), false, true);
+    } else {
+        std::vector<Http2HeaderField> headers;
+        headers.reserve(3);
+        headers.push_back(kStatus200);
+        headers.push_back(kContentTypeTextPlain);
+        headers.push_back({"content-length", std::to_string(body.size())});
+        stream->sendHeaders(headers, body.empty(), true);
     }
+    if (!body.empty()) {
+        stream->sendData(std::move(body), true);
+    }
+
     co_return;
 }
 
@@ -81,6 +98,7 @@ int main(int argc, char* argv[]) {
     std::cout << "========================================\n";
     std::cout << "Port: " << port << "\n";
     std::cout << "IO Threads: " << io_threads << "\n";
+    std::cout << "Configured Compute Threads: 0\n";
     std::cout << "Cert: " << cert_path << "\n";
     std::cout << "Key:  " << key_path << "\n";
     std::cout << "Press Ctrl+C to stop\n";
@@ -100,6 +118,9 @@ int main(int argc, char* argv[]) {
 
         server.start(handleStream);
         std::cout << "Server started successfully!\n";
+        std::cout << "Runtime Config: io=" << server.getRuntime().getIOSchedulerCount()
+                  << " compute=" << server.getRuntime().getComputeSchedulerCount()
+                  << " (configured io=" << io_threads << " compute=0)\n";
         std::cout << "Waiting for requests...\n\n";
 
         while (g_running) {

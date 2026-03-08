@@ -303,7 +303,7 @@ namespace galay::http
 
     bool HeaderPair::hasKey(const std::string &key) const
     {
-        return findHeaderPairIter(m_mode, m_headerPairs, key) != m_headerPairs.end();
+        return getValuePtr(key) != nullptr;
     }
 
     std::string HeaderPair::getValue(const std::string& key) const

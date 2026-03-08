@@ -18,6 +18,130 @@ namespace galay::websocket
 
 namespace {
 
+size_t computeHeaderLength(uint64_t payload_len, bool use_mask) {
+    size_t header_len = 2;
+    if (payload_len >= 126 && payload_len <= 0xFFFF) {
+        header_len += 2;
+    } else if (payload_len > 0xFFFF) {
+        header_len += 8;
+    }
+    if (use_mask) {
+        header_len += 4;
+    }
+    return header_len;
+}
+
+void fillMaskingKey(uint8_t masking_key[4]) {
+    thread_local static std::random_device rd;
+    thread_local static std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 255);
+    for (int i = 0; i < 4; ++i) {
+        masking_key[i] = static_cast<uint8_t>(dis(gen));
+    }
+}
+
+void appendFrameHeader(std::string& out,
+                       const WsFrame& frame,
+                       uint64_t payload_len,
+                       bool use_mask,
+                       uint8_t masking_key[4]) {
+    uint8_t byte1 = 0;
+    if (frame.header.fin) byte1 |= 0x80;
+    if (frame.header.rsv1) byte1 |= 0x40;
+    if (frame.header.rsv2) byte1 |= 0x20;
+    if (frame.header.rsv3) byte1 |= 0x10;
+    byte1 |= static_cast<uint8_t>(frame.header.opcode) & 0x0F;
+    out.push_back(static_cast<char>(byte1));
+
+    uint8_t byte2 = 0;
+    if (use_mask) byte2 |= 0x80;
+
+    if (payload_len < 126) {
+        byte2 |= static_cast<uint8_t>(payload_len);
+        out.push_back(static_cast<char>(byte2));
+    } else if (payload_len <= 0xFFFF) {
+        byte2 |= 126;
+        out.push_back(static_cast<char>(byte2));
+        out.push_back(static_cast<char>((payload_len >> 8) & 0xFF));
+        out.push_back(static_cast<char>(payload_len & 0xFF));
+    } else {
+        byte2 |= 127;
+        out.push_back(static_cast<char>(byte2));
+        for (int i = 7; i >= 0; --i) {
+            out.push_back(static_cast<char>((payload_len >> (i * 8)) & 0xFF));
+        }
+    }
+
+    if (use_mask) {
+        fillMaskingKey(masking_key);
+        for (int i = 0; i < 4; ++i) {
+            out.push_back(static_cast<char>(masking_key[i]));
+        }
+    }
+}
+
+void applyMaskBytes(char* data, size_t len, const uint8_t masking_key[4]) {
+    if (data == nullptr || len == 0) {
+        return;
+    }
+
+    size_t i = 0;
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(data);
+
+#if defined(GALAY_WS_SIMD_NEON)
+    if (len >= 16) {
+        uint8_t mask_array[16];
+        for (int j = 0; j < 16; ++j) {
+            mask_array[j] = masking_key[j % 4];
+        }
+        uint8x16_t mask_vec = vld1q_u8(mask_array);
+
+        for (; i + 16 <= len; i += 16) {
+            uint8x16_t data_vec = vld1q_u8(ptr + i);
+            uint8x16_t result = veorq_u8(data_vec, mask_vec);
+            vst1q_u8(ptr + i, result);
+        }
+    }
+#elif defined(GALAY_WS_SIMD_X86)
+    if (len >= 16) {
+        uint8_t mask_array[16];
+        for (int j = 0; j < 16; ++j) {
+            mask_array[j] = masking_key[j % 4];
+        }
+        __m128i mask_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_array));
+
+        for (; i + 16 <= len; i += 16) {
+            __m128i data_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            __m128i result = _mm_xor_si128(data_vec, mask_vec);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(ptr + i), result);
+        }
+    }
+#endif
+
+    if (i + 8 <= len) {
+        uint64_t mask64;
+        std::memcpy(&mask64, masking_key, 4);
+        std::memcpy(reinterpret_cast<uint8_t*>(&mask64) + 4, masking_key, 4);
+
+        for (; i + 8 <= len; i += 8) {
+            uint64_t* data64 = reinterpret_cast<uint64_t*>(ptr + i);
+            *data64 ^= mask64;
+        }
+    }
+
+    if (i + 4 <= len) {
+        uint32_t mask32;
+        std::memcpy(&mask32, masking_key, 4);
+        uint32_t* data32 = reinterpret_cast<uint32_t*>(ptr + i);
+        *data32 ^= mask32;
+        i += 4;
+    }
+
+    for (; i < len; ++i) {
+        ptr[i] ^= masking_key[i % 4];
+    }
+}
+
 class IovecCursor {
 public:
     IovecCursor(const iovec* iovecs, size_t iovec_count, size_t total_length)
@@ -221,132 +345,37 @@ WsFrameParser::fromIOVec(const struct iovec* iovecs, size_t iovec_count, WsFrame
 std::string WsFrameParser::toBytes(const WsFrame& frame, bool use_mask)
 {
     std::string result;
-    const uint64_t payload_len = frame.payload.size();
-    size_t header_len = 2;
-    if (payload_len >= 126 && payload_len <= 0xFFFF) {
-        header_len += 2;
-    } else if (payload_len > 0xFFFF) {
-        header_len += 8;
-    }
-    if (use_mask) {
-        header_len += 4;
-    }
-    result.reserve(header_len + static_cast<size_t>(payload_len));
-
-    // 第一个字节: FIN + RSV + Opcode
-    uint8_t byte1 = 0;
-    if (frame.header.fin) byte1 |= 0x80;
-    if (frame.header.rsv1) byte1 |= 0x40;
-    if (frame.header.rsv2) byte1 |= 0x20;
-    if (frame.header.rsv3) byte1 |= 0x10;
-    byte1 |= static_cast<uint8_t>(frame.header.opcode) & 0x0F;
-    result.push_back(byte1);
-
-    // 第二个字节: MASK + Payload length
-    uint8_t byte2 = 0;
-    if (use_mask) byte2 |= 0x80;
-
-    if (payload_len < 126) {
-        byte2 |= static_cast<uint8_t>(payload_len);
-        result.push_back(byte2);
-    } else if (payload_len <= 0xFFFF) {
-        byte2 |= 126;
-        result.push_back(byte2);
-        // 16位扩展长度（大端序）
-        result.push_back((payload_len >> 8) & 0xFF);
-        result.push_back(payload_len & 0xFF);
-    } else {
-        byte2 |= 127;
-        result.push_back(byte2);
-        // 64位扩展长度（大端序）
-        for (int i = 7; i >= 0; --i) {
-            result.push_back((payload_len >> (i * 8)) & 0xFF);
-        }
-    }
-
-    // 掩码密钥
-    uint8_t masking_key[4] = {0, 0, 0, 0};
-    if (use_mask) {
-        // 生成随机掩码
-        thread_local static std::random_device rd;
-        thread_local static std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, 255);
-        for (int i = 0; i < 4; ++i) {
-            masking_key[i] = dis(gen);
-            result.push_back(masking_key[i]);
-        }
-    }
-
-    // Payload数据
-    if (!use_mask) {
-        result.append(frame.payload);
-    } else {
-        std::string payload = frame.payload;
-        applyMask(payload, masking_key);
-        result += payload;
-    }
-
+    encodeInto(result, frame, use_mask);
     return result;
+}
+
+void WsFrameParser::encodeInto(std::string& out, const WsFrame& frame, bool use_mask)
+{
+    const uint64_t payload_len = frame.payload.size();
+    const size_t header_len = computeHeaderLength(payload_len, use_mask);
+    uint8_t masking_key[4] = {0, 0, 0, 0};
+
+    out.clear();
+    out.reserve(header_len + static_cast<size_t>(payload_len));
+    appendFrameHeader(out, frame, payload_len, use_mask, masking_key);
+    if (payload_len == 0) {
+        return;
+    }
+
+    const size_t payload_offset = out.size();
+    out.append(frame.payload.data(), frame.payload.size());
+    if (use_mask) {
+        applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
+    }
 }
 
 std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, uint8_t masking_key[4])
 {
     std::string result;
     const uint64_t payload_len = frame.payload.size();
-    size_t header_len = 2;
-    if (payload_len >= 126 && payload_len <= 0xFFFF) {
-        header_len += 2;
-    } else if (payload_len > 0xFFFF) {
-        header_len += 8;
-    }
-    if (use_mask) {
-        header_len += 4;
-    }
+    const size_t header_len = computeHeaderLength(payload_len, use_mask);
     result.reserve(header_len);
-
-    // 第一个字节: FIN + RSV + Opcode
-    uint8_t byte1 = 0;
-    if (frame.header.fin) byte1 |= 0x80;
-    if (frame.header.rsv1) byte1 |= 0x40;
-    if (frame.header.rsv2) byte1 |= 0x20;
-    if (frame.header.rsv3) byte1 |= 0x10;
-    byte1 |= static_cast<uint8_t>(frame.header.opcode) & 0x0F;
-    result.push_back(byte1);
-
-    // 第二个字节: MASK + Payload length
-    uint8_t byte2 = 0;
-    if (use_mask) byte2 |= 0x80;
-
-    if (payload_len < 126) {
-        byte2 |= static_cast<uint8_t>(payload_len);
-        result.push_back(byte2);
-    } else if (payload_len <= 0xFFFF) {
-        byte2 |= 126;
-        result.push_back(byte2);
-        // 16位扩展长度（大端序）
-        result.push_back((payload_len >> 8) & 0xFF);
-        result.push_back(payload_len & 0xFF);
-    } else {
-        byte2 |= 127;
-        result.push_back(byte2);
-        // 64位扩展长度（大端序）
-        for (int i = 7; i >= 0; --i) {
-            result.push_back((payload_len >> (i * 8)) & 0xFF);
-        }
-    }
-
-    // 掩码密钥
-    if (use_mask) {
-        // 生成随机掩码
-        thread_local static std::random_device rd;
-        thread_local static std::mt19937 gen(rd());
-        std::uniform_int_distribution<> dis(0, 255);
-        for (int i = 0; i < 4; ++i) {
-            masking_key[i] = dis(gen);
-            result.push_back(masking_key[i]);
-        }
-    }
-
+    appendFrameHeader(result, frame, payload_len, use_mask, masking_key);
     return result;
 }
 
@@ -357,74 +386,7 @@ WsFrame WsFrameParser::createCloseFrame(WsCloseCode code, const std::string& rea
 
 void WsFrameParser::applyMask(std::string& data, const uint8_t masking_key[4])
 {
-    size_t len = data.size();
-    if (len == 0) return;
-
-    uint8_t* ptr = reinterpret_cast<uint8_t*>(data.data());
-    size_t i = 0;
-
-#if defined(GALAY_WS_SIMD_NEON)
-    // ARM NEON 优化：一次处理 16 字节
-    if (len >= 16) {
-        // 构造 16 字节的掩码向量 (重复 4 次 4 字节掩码)
-        uint8_t mask_array[16];
-        for (int j = 0; j < 16; j++) {
-            mask_array[j] = masking_key[j % 4];
-        }
-        uint8x16_t mask_vec = vld1q_u8(mask_array);
-
-        // 处理 16 字节对齐的块
-        for (; i + 16 <= len; i += 16) {
-            uint8x16_t data_vec = vld1q_u8(ptr + i);
-            uint8x16_t result = veorq_u8(data_vec, mask_vec);
-            vst1q_u8(ptr + i, result);
-        }
-    }
-#elif defined(GALAY_WS_SIMD_X86)
-    // x86 SSE2 优化：一次处理 16 字节
-    if (len >= 16) {
-        // 构造 16 字节的掩码向量
-        uint8_t mask_array[16];
-        for (int j = 0; j < 16; j++) {
-            mask_array[j] = masking_key[j % 4];
-        }
-        __m128i mask_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_array));
-
-        // 处理 16 字节对齐的块
-        for (; i + 16 <= len; i += 16) {
-            __m128i data_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
-            __m128i result = _mm_xor_si128(data_vec, mask_vec);
-            _mm_storeu_si128(reinterpret_cast<__m128i*>(ptr + i), result);
-        }
-    }
-#endif
-
-    // 处理 8 字节块（使用 uint64_t）
-    if (i + 8 <= len) {
-        // 构造 8 字节掩码
-        uint64_t mask64;
-        std::memcpy(&mask64, masking_key, 4);
-        std::memcpy(reinterpret_cast<uint8_t*>(&mask64) + 4, masking_key, 4);
-
-        for (; i + 8 <= len; i += 8) {
-            uint64_t* data64 = reinterpret_cast<uint64_t*>(ptr + i);
-            *data64 ^= mask64;
-        }
-    }
-
-    // 处理 4 字节块（使用 uint32_t）
-    if (i + 4 <= len) {
-        uint32_t mask32;
-        std::memcpy(&mask32, masking_key, 4);
-        uint32_t* data32 = reinterpret_cast<uint32_t*>(ptr + i);
-        *data32 ^= mask32;
-        i += 4;
-    }
-
-    // 处理剩余字节
-    for (; i < len; ++i) {
-        ptr[i] ^= masking_key[i % 4];
-    }
+    applyMaskBytes(data.data(), data.size(), masking_key);
 }
 
 bool WsFrameParser::isValidUtf8(const std::string& data)

@@ -48,8 +48,8 @@ struct HttpServerConfig
     std::string host = "0.0.0.0";
     uint16_t port = 8080;
     int backlog = 128;
-    size_t io_scheduler_count = 0;
-    size_t compute_scheduler_count = 0;
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
     RuntimeAffinityConfig affinity;
 };
 
@@ -241,8 +241,8 @@ protected:
         }
 
         HTTP_LOG_INFO("[runtime] [start] [io={}] [compute={}]",
-                      m_config.io_scheduler_count == 0 ? "auto" : std::to_string(m_config.io_scheduler_count),
-                      m_config.compute_scheduler_count == 0 ? "auto" : std::to_string(m_config.compute_scheduler_count));
+                      m_config.io_scheduler_count == GALAY_RUNTIME_SCHEDULER_COUNT_AUTO ? "auto" : std::to_string(m_config.io_scheduler_count),
+                      m_config.compute_scheduler_count == GALAY_RUNTIME_SCHEDULER_COUNT_AUTO ? "auto" : std::to_string(m_config.compute_scheduler_count));
 
         m_runtime.start();
 
@@ -378,8 +378,8 @@ struct HttpsServerConfig
     std::string host = "0.0.0.0";
     uint16_t port = 443;
     int backlog = 128;
-    size_t io_scheduler_count = 0;
-    size_t compute_scheduler_count = 0;
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
     RuntimeAffinityConfig affinity;
     HttpReaderSetting reader_setting;
     HttpWriterSetting writer_setting;

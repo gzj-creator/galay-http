@@ -5,6 +5,7 @@
 #include "Http2Error.h"
 #include <cstdint>
 #include <cstring>
+#include <array>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -63,6 +64,14 @@ public:
                                                       bool end_stream = false,
                                                       bool end_headers = true);
     static std::unique_ptr<Http2RstStreamFrame> rstStream(uint32_t stream_id, Http2ErrorCode error);
+
+    static std::array<char, kHttp2FrameHeaderLength> dataHeaderBytes(uint32_t stream_id,
+                                                                     size_t payload_length,
+                                                                     bool end_stream = false);
+    static std::array<char, kHttp2FrameHeaderLength> headersHeaderBytes(uint32_t stream_id,
+                                                                        size_t header_block_length,
+                                                                        bool end_stream = false,
+                                                                        bool end_headers = true);
 
     // 直接构建序列化字节，避免热路径 frame 对象分配与二次拷贝
     static std::string dataBytes(uint32_t stream_id, std::string_view payload, bool end_stream = false);

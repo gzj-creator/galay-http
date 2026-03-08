@@ -125,6 +125,28 @@ void test_has_common_header()
     TEST_PASS("Has common header");
 }
 
+void test_server_side_common_header_lookup_api()
+{
+    std::cout << "\n=== Test: Server-side common header lookup API ===" << std::endl;
+
+    HeaderPair headers(HeaderPair::Mode::ServerSide);
+    headers.setCommonHeader(CommonHeaderIndex::Connection, "Upgrade");
+    headers.setCommonHeader(CommonHeaderIndex::Host, "example.com");
+
+    TEST_ASSERT(headers.hasKey("Connection"),
+                "Server-side hasKey should see fast-path Connection header");
+    TEST_ASSERT(headers.hasKey("connection"),
+                "Server-side hasKey should accept normalized Connection header");
+    TEST_ASSERT(headers.hasKey("Host"),
+                "Server-side hasKey should see fast-path Host header");
+    TEST_ASSERT(headers.getValue("Connection") == "Upgrade",
+                "Server-side getValue should return fast-path Connection header");
+    TEST_ASSERT(headers.getValue("host") == "example.com",
+                "Server-side getValue should return fast-path Host header");
+
+    TEST_PASS("Server-side common header lookup API");
+}
+
 void test_for_each_header()
 {
     std::cout << "\n=== Test: For each header ===" << std::endl;
@@ -410,6 +432,7 @@ int main()
     test_set_and_get_common_header();
     test_duplicate_header_merge();
     test_has_common_header();
+    test_server_side_common_header_lookup_api();
     test_for_each_header();
     test_for_each_header_empty();
     test_for_each_header_only_common();

@@ -16,6 +16,7 @@
 #include <optional>
 #include <coroutine>
 #include <utility>
+#include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
@@ -184,7 +185,7 @@ public:
                 return true;
             }
 
-            size_t bytes_read = result.value().size();
+            size_t bytes_read = result.value();
             if (bytes_read == 0) {
                 m_owner->setProtocolError("Connection closed");
                 return true;
@@ -223,7 +224,7 @@ public:
                     return true;
                 }
 
-                size_t bytes_read = result.value().size();
+                size_t bytes_read = result.value();
                 if (bytes_read == 0) {
                     m_owner->setProtocolError("Connection closed");
                     return true;
@@ -236,7 +237,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_upgrader->m_session->m_ring_buffer.getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(m_owner->m_upgrader->m_session->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -310,12 +311,17 @@ private:
 
     bool parseUpgradeResponse() {
         auto& session = *m_upgrader->m_session;
-        auto iovecs = session.m_ring_buffer.getReadIovecs();
+        auto iovecs = borrowReadIovecs(session.m_ring_buffer);
         if (iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_upgrade_response.fromIOVec(iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
         if (consumed > 0) {
             session.m_ring_buffer.consume(consumed);
         }
@@ -600,7 +606,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_upgrader->m_session->m_ring_buffer.getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(m_owner->m_upgrader->m_session->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -677,12 +683,17 @@ private:
 
     bool parseUpgradeResponse() {
         auto& session = *m_upgrader->m_session;
-        auto iovecs = session.m_ring_buffer.getReadIovecs();
+        auto iovecs = borrowReadIovecs(session.m_ring_buffer);
         if (iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_upgrade_response.fromIOVec(iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
         if (consumed > 0) {
             session.m_ring_buffer.consume(consumed);
         }

@@ -129,6 +129,14 @@ public:
     static std::string toBytes(const WsFrame& frame, bool use_mask = false);
 
     /**
+     * @brief 将WebSocket帧编码到复用缓冲区中
+     * @param out 输出缓冲区，函数会覆盖其现有内容
+     * @param frame 要编码的帧
+     * @param use_mask 是否使用掩码（客户端必须使用）
+     */
+    static void encodeInto(std::string& out, const WsFrame& frame, bool use_mask = false);
+
+    /**
      * @brief 生成WebSocket帧的header部分（用于writev优化）
      * @param frame 要编码的帧
      * @param use_mask 是否使用掩码

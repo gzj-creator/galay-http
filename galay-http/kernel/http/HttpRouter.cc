@@ -300,16 +300,16 @@ Coroutine relayRawUpstreamToDownstream(TcpSocket& upstream,
             co_return;
         }
 
-        const auto& bytes = recv_result.value();
-        if (bytes.size() == 0) {
+        const size_t bytes = recv_result.value();
+        if (bytes == 0) {
             ok = true;
             co_return;
         }
 
         size_t offset = 0;
-        while (offset < bytes.size()) {
-            const char* data = reinterpret_cast<const char*>(bytes.data() + offset);
-            auto send_result = co_await downstream.send(data, bytes.size() - offset);
+        while (offset < bytes) {
+            const char* data = buffer.data() + offset;
+            auto send_result = co_await downstream.send(data, bytes - offset);
             if (!send_result) {
                 err_msg = send_result.error().message();
                 co_return;

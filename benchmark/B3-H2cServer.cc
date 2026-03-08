@@ -9,6 +9,7 @@
 #include <iostream>
 #include <csignal>
 #include <atomic>
+#include <memory>
 
 using namespace galay::http2;
 using namespace galay::kernel;
@@ -17,34 +18,94 @@ static volatile bool g_running = true;
 static bool g_debug_log = false;
 static std::atomic<int> g_debug_logs{0};
 
+static const std::string& encodedEchoHeaders(size_t body_size) {
+    static const std::string kEncoded0 = [] {
+        HpackEncoder encoder;
+        return encoder.encodeStateless({
+            {":status", "200"},
+            {"content-type", "text/plain"},
+            {"content-length", "0"},
+        });
+    }();
+    static const std::string kEncoded128 = [] {
+        HpackEncoder encoder;
+        return encoder.encodeStateless({
+            {":status", "200"},
+            {"content-type", "text/plain"},
+            {"content-length", "128"},
+        });
+    }();
+
+    if (body_size == 0) {
+        return kEncoded0;
+    }
+    if (body_size == 128) {
+        return kEncoded128;
+    }
+
+    static thread_local std::string dynamic_headers;
+    HpackEncoder encoder;
+    dynamic_headers = encoder.encodeStateless({
+        {":status", "200"},
+        {"content-type", "text/plain"},
+        {"content-length", std::to_string(body_size)},
+    });
+    return dynamic_headers;
+}
+
+static std::shared_ptr<const std::string> sharedEncodedEchoHeaders(size_t body_size) {
+    static const auto kEncoded0 = std::make_shared<const std::string>(encodedEchoHeaders(0));
+    static const auto kEncoded128 = std::make_shared<const std::string>(encodedEchoHeaders(128));
+
+    if (body_size == 0) {
+        return kEncoded0;
+    }
+    if (body_size == 128) {
+        return kEncoded128;
+    }
+    return std::make_shared<const std::string>(encodedEchoHeaders(body_size));
+}
+
 void signalHandler(int) {
     g_running = false;
 }
 
-Coroutine handleStream(Http2Stream::ptr stream) {
-    // Echo 压测场景直接消费 StreamManager 已聚合的请求体，避免每帧 await/拷贝。
-    stream->setFrameQueueEnabled(false);
-    auto request_done = co_await stream->waitRequestComplete();
-    if (!request_done) {
-        co_return;
-    }
-    const std::string& body = stream->request().body;
+Coroutine handleActiveConn(Http2ConnContext& ctx) {
+    while (true) {
+        auto streams = co_await ctx.getActiveStreams(64);
+        if (!streams) {
+            break;
+        }
 
-    if (g_debug_log) {
-        int idx = g_debug_logs.fetch_add(1);
-        if (idx < 10) {
-            std::cerr << "[echo] recv body_len=" << body.size() << "\n";
+        for (auto& stream : *streams) {
+            auto events = stream->takeEvents();
+            if (!hasHttp2StreamEvent(events, Http2StreamEvent::RequestComplete)) {
+                continue;
+            }
+
+            const size_t body_size = stream->request().bodySize();
+            const size_t body_chunk_count = stream->request().bodyChunkCount();
+            auto response_headers = sharedEncodedEchoHeaders(body_size);
+
+            if (g_debug_log) {
+                int idx = g_debug_logs.fetch_add(1);
+                if (idx < 10) {
+                    std::cerr << "[echo] recv body_len=" << body_size << "\n";
+                }
+            }
+
+            if (body_chunk_count == 1) {
+                stream->sendEncodedHeadersAndData(
+                    std::move(response_headers), stream->request().takeSingleBodyChunk(), true);
+            } else if (body_chunk_count > 1) {
+                stream->sendEncodedHeadersAndDataChunks(
+                    std::string(*response_headers), stream->request().takeBodyChunks(), true);
+            } else {
+                stream->sendEncodedHeadersAndData(
+                    std::move(response_headers), std::string(), true);
+            }
         }
     }
-
-    // 构造响应（echo body）
-    stream->sendHeaders(
-        Http2Headers().status(200).contentType("text/plain").contentLength(body.size()),
-        body.empty(), true);
-    if (!body.empty()) {
-        stream->sendData(body, true);
-    }
-
     co_return;
 }
 
@@ -76,6 +137,7 @@ int main(int argc, char* argv[]) {
     std::cout << "========================================\n";
     std::cout << "Port: " << port << "\n";
     std::cout << "IO Threads: " << io_threads << "\n";
+    std::cout << "Configured Compute Threads: 0\n";
     std::cout << "Debug Log: " << (debug_log > 0 ? "ON" : "OFF") << "\n";
     std::cout << "Test command: ./build/benchmark/B4-H2cClient localhost " << port << " <connections> <requests>\n";
     std::cout << "Press Ctrl+C to stop\n";
@@ -92,11 +154,15 @@ int main(int argc, char* argv[]) {
             .computeSchedulerCount(0)
             .maxConcurrentStreams(1000)
             .initialWindowSize(65535)
+            .activeConnHandler(handleActiveConn)
             .build());
 
-        server.start(handleStream);
+        server.start();
 
         std::cout << "Server started successfully!\n";
+        std::cout << "Runtime Config: io=" << server.getRuntime().getIOSchedulerCount()
+                  << " compute=" << server.getRuntime().getComputeSchedulerCount()
+                  << " (configured io=" << io_threads << " compute=0)\n";
         std::cout << "Waiting for requests...\n\n";
 
         while (g_running) {

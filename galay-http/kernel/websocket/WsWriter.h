@@ -9,6 +9,7 @@
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
+#include <array>
 #include <coroutine>
 #include <optional>
 #include <string>
@@ -52,9 +53,10 @@ public:
     {
     public:
         explicit ProtocolWritevAwaitable(SendFrameAwaitableImpl* owner)
-            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), std::vector<iovec>{})
+            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), m_iovec_storage, 0)
             , m_owner(owner)
         {
+            syncIovecs();
         }
 
 #ifdef USE_IOURING
@@ -132,18 +134,21 @@ public:
 #endif
 
     private:
-#ifdef USE_IOURING
         void syncIovecs() {
-            const auto* src = m_owner->m_writer->getIovecsData();
-            const auto src_count = m_owner->m_writer->getIovecsCount();
-            m_iovecs.resize(src_count);
-            if (src != nullptr && src_count > 0) {
-                std::memcpy(m_iovecs.data(), src, src_count * sizeof(iovec));
-            }
-        }
+            const size_t iov_count = copyBoundedIovecs(
+                m_owner->m_writer->getIovecsData(),
+                m_owner->m_writer->getIovecsCount(),
+                m_iovec_storage);
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
 #endif
+        }
 
         SendFrameAwaitableImpl* m_owner;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     SendFrameAwaitableImpl(WsWriterImpl<SocketType>& writer, SocketType& socket)
@@ -340,7 +345,7 @@ private:
         if constexpr (is_tcp_socket_v<SocketType>) {
             prepareWritevBuffers(frame);
         } else {
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            WsFrameParser::encodeInto(m_buffer, frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
     }
@@ -349,7 +354,7 @@ private:
         if constexpr (is_tcp_socket_v<SocketType>) {
             prepareWritevBuffers(std::move(frame));
         } else {
-            m_buffer = WsFrameParser::toBytes(frame, m_setting.use_mask);
+            WsFrameParser::encodeInto(m_buffer, frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
         }
     }

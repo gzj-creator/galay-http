@@ -4,6 +4,7 @@
 #include "Http2Conn.h"
 #include "Http2StreamManager.h"
 #include "Http2Stream.h"
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http2/Http2Base.h"
 #include "galay-http/protoc/http2/Http2Frame.h"
 #include "galay-http/protoc/http/HttpHeader.h"
@@ -74,6 +75,11 @@ inline Coroutine runDefaultHttp1FallbackLoop(const char* log_tag,
 }
 
 /**
+ * @brief HTTP/2 流处理器类型（每个新流创建后 spawn handler(stream)）
+ */
+using Http2ConnectionHandler = Http2StreamHandler;
+
+/**
  * @brief h2c 服务器配置
  */
 struct H2cServerConfig
@@ -81,8 +87,8 @@ struct H2cServerConfig
     std::string host = "0.0.0.0";
     uint16_t port = 8080;
     int backlog = 128;
-    size_t io_scheduler_count = 0;
-    size_t compute_scheduler_count = 0;
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
     RuntimeAffinityConfig affinity;
 
     // HTTP/2 设置
@@ -101,6 +107,8 @@ struct H2cServerConfig
     std::chrono::milliseconds graceful_shutdown_timeout{5000};
     uint32_t flow_control_target_window = kDefaultInitialWindowSize;
     Http2FlowControlStrategy flow_control_strategy;
+    Http2ConnectionHandler stream_handler;
+    Http2ActiveConnHandler active_conn_handler;
 };
 
 class H2cServer;
@@ -126,6 +134,14 @@ public:
     H2cServerBuilder& flowControlTargetWindow(uint32_t v) { m_config.flow_control_target_window = v; return *this; }
     H2cServerBuilder& flowControlStrategy(Http2FlowControlStrategy v) {
         m_config.flow_control_strategy = std::move(v);
+        return *this;
+    }
+    H2cServerBuilder& streamHandler(Http2ConnectionHandler handler) {
+        m_config.stream_handler = std::move(handler);
+        return *this;
+    }
+    H2cServerBuilder& activeConnHandler(Http2ActiveConnHandler handler) {
+        m_config.active_conn_handler = std::move(handler);
         return *this;
     }
     H2cServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
@@ -171,7 +187,7 @@ inline bool looksLikeHttpMethod(const char* buf) {
  * @brief 从 RingBuffer 的 iovec 拷贝 n 字节到 buf（不 consume）
  */
 inline void peekRingBuffer(RingBuffer& rb, char* buf, size_t n) {
-    auto iovecs = rb.getReadIovecs();
+    auto iovecs = borrowReadIovecs(rb);
     size_t copied = 0;
     for (const auto& iov : iovecs) {
         size_t to_copy = std::min(iov.iov_len, n - copied);
@@ -187,18 +203,13 @@ inline void peekRingBuffer(RingBuffer& rb, char* buf, size_t n) {
 inline std::string drainRingBuffer(RingBuffer& rb) {
     std::string data;
     data.reserve(rb.readable());
-    auto iovecs = rb.getReadIovecs();
+    auto iovecs = borrowReadIovecs(rb);
     for (const auto& iov : iovecs) {
         data.append(static_cast<const char*>(iov.iov_base), iov.iov_len);
     }
     rb.consume(rb.readable());
     return data;
 }
-
-/**
- * @brief HTTP/2 流处理器类型（每个新流创建后 spawn handler(stream)）
- */
-using Http2ConnectionHandler = Http2StreamHandler;
 
 /**
  * @brief HTTP/1.1 降级处理器类型
@@ -218,7 +229,8 @@ public:
                                    .applyAffinity(config.affinity)
                                    .build())
         , m_config(config)
-        , m_handler(nullptr)
+        , m_stream_handler(config.stream_handler)
+        , m_active_conn_handler(config.active_conn_handler)
         , m_running(false)
     {
     }
@@ -230,8 +242,18 @@ public:
     H2cServer(const H2cServer&) = delete;
     H2cServer& operator=(const H2cServer&) = delete;
     
+    void start() {
+        startInternal();
+    }
+
     void start(Http2ConnectionHandler handler) {
-        m_handler = std::move(handler);
+        m_stream_handler = std::move(handler);
+        m_active_conn_handler = nullptr;
+        startInternal();
+    }
+
+    void start(Http2ActiveConnHandler handler) {
+        m_active_conn_handler = std::move(handler);
         startInternal();
     }
 
@@ -266,7 +288,7 @@ private:
             return false;
         }
 
-        if (!m_handler) {
+        if (!m_stream_handler && !m_active_conn_handler) {
             HTTP_LOG_ERROR("[handler] [missing]");
             return false;
         }
@@ -371,7 +393,11 @@ private:
             conn.initStreamManager();
             auto* mgr = conn.streamManager();
             HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
-            co_await mgr->start(m_handler).wait();
+            if (m_active_conn_handler) {
+                co_await mgr->start(m_active_conn_handler).wait();
+            } else {
+                co_await mgr->start(m_stream_handler).wait();
+            }
             HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
             co_await conn.close();
             break;
@@ -391,7 +417,8 @@ private:
     Coroutine readAtLeast(Http2ConnImpl<TcpSocket>& conn, size_t n) {
         auto& rb = conn.ringBuffer();
         while (rb.readable() < n) {
-            auto result = co_await conn.socket().readv(rb.getWriteIovecs());
+            auto write_iovecs = borrowWriteIovecs(rb);
+            auto result = co_await conn.socket().readv(write_iovecs.storage(), write_iovecs.size());
             if (!result || result.value() == 0) {
                 co_return;
             }
@@ -440,7 +467,8 @@ private:
 
             std::string header_data = drainRingBuffer(rb);
             while (header_data.find("\r\n\r\n") == std::string::npos && header_data.size() < 8192) {
-                auto result = co_await conn.socket().readv(rb.getWriteIovecs());
+                auto write_iovecs = borrowWriteIovecs(rb);
+                auto result = co_await conn.socket().readv(write_iovecs.storage(), write_iovecs.size());
                 if (!result || result.value() == 0) {
                     co_return;
                 }
@@ -555,7 +583,8 @@ private:
 private:
     Runtime m_runtime;
     H2cServerConfig m_config;
-    Http2ConnectionHandler m_handler;
+    Http2ConnectionHandler m_stream_handler;
+    Http2ActiveConnHandler m_active_conn_handler;
     Http1FallbackHandler m_http1_fallback;
     std::atomic<bool> m_running;
 };
@@ -571,8 +600,8 @@ struct H2ServerConfig
     std::string host = "0.0.0.0";
     uint16_t port = 9443;
     int backlog = 128;
-    size_t io_scheduler_count = 0;
-    size_t compute_scheduler_count = 0;
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
     RuntimeAffinityConfig affinity;
 
     // SSL 配置
@@ -598,6 +627,8 @@ struct H2ServerConfig
     std::chrono::milliseconds graceful_shutdown_timeout{5000};
     uint32_t flow_control_target_window = kDefaultInitialWindowSize;
     Http2FlowControlStrategy flow_control_strategy;
+    Http2ConnectionHandler stream_handler;
+    Http2ActiveConnHandler active_conn_handler;
 };
 
 class H2Server;
@@ -646,6 +677,14 @@ public:
         m_config.flow_control_strategy = std::move(v);
         return *this;
     }
+    H2ServerBuilder& streamHandler(Http2ConnectionHandler handler) {
+        m_config.stream_handler = std::move(handler);
+        return *this;
+    }
+    H2ServerBuilder& activeConnHandler(Http2ActiveConnHandler handler) {
+        m_config.active_conn_handler = std::move(handler);
+        return *this;
+    }
     H2Server build() const;
     H2ServerConfig buildConfig() const                { return m_config; }
 private:
@@ -664,7 +703,8 @@ public:
                                    .applyAffinity(config.affinity)
                                    .build())
         , m_config(config)
-        , m_handler(nullptr)
+        , m_stream_handler(config.stream_handler)
+        , m_active_conn_handler(config.active_conn_handler)
         , m_running(false)
         , m_ssl_ctx(galay::ssl::SslMethod::TLS_Server)
     {
@@ -677,8 +717,18 @@ public:
     H2Server(const H2Server&) = delete;
     H2Server& operator=(const H2Server&) = delete;
 
+    void start() {
+        startInternal();
+    }
+
     void start(Http2ConnectionHandler handler) {
-        m_handler = std::move(handler);
+        m_stream_handler = std::move(handler);
+        m_active_conn_handler = nullptr;
+        startInternal();
+    }
+
+    void start(Http2ActiveConnHandler handler) {
+        m_active_conn_handler = std::move(handler);
         startInternal();
     }
 
@@ -744,7 +794,7 @@ private:
             HTTP_LOG_WARN("[h2] [server] [already-running]");
             return false;
         }
-        if (!m_handler) {
+        if (!m_stream_handler && !m_active_conn_handler) {
             HTTP_LOG_ERROR("[h2] [handler] [missing]");
             return false;
         }
@@ -933,7 +983,11 @@ private:
         conn.initStreamManager();
         auto* mgr = conn.streamManager();
         HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
-        co_await mgr->start(m_handler).wait();
+        if (m_active_conn_handler) {
+            co_await mgr->start(m_active_conn_handler).wait();
+        } else {
+            co_await mgr->start(m_stream_handler).wait();
+        }
         HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
         co_await conn.close();
         co_return;
@@ -952,7 +1006,8 @@ private:
 private:
     Runtime m_runtime;
     H2ServerConfig m_config;
-    Http2ConnectionHandler m_handler;
+    Http2ConnectionHandler m_stream_handler;
+    Http2ActiveConnHandler m_active_conn_handler;
     std::function<Coroutine(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> m_http1_fallback;
     std::atomic<bool> m_running;
     galay::ssl::SslContext m_ssl_ctx;

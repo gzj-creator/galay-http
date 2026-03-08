@@ -241,6 +241,7 @@ int main(int argc, char* argv[]) {
     std::cout << "========================================" << std::endl;
     std::cout << "Port: " << port << std::endl;
     std::cout << "IO Threads: " << io_threads << std::endl;
+    std::cout << "Configured Compute Threads: 0" << std::endl;
     std::cout << "WebSocket endpoint: ws://localhost:" << port << "/ws" << std::endl;
     std::cout << "Press Ctrl+C to stop" << std::endl;
     std::cout << "========================================\n" << std::endl;
@@ -262,6 +263,9 @@ int main(int argc, char* argv[]) {
         server.start(handleHttpRequest);
 
         std::cout << "Server started successfully!\n" << std::endl;
+        std::cout << "Runtime Config: io=" << server.getRuntime().getIOSchedulerCount()
+                  << " compute=" << server.getRuntime().getComputeSchedulerCount()
+                  << " (configured io=" << io_threads << " compute=0)" << std::endl;
 
         std::thread stats_thread([] {
             uint64_t last_messages = 0;

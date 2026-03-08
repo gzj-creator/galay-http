@@ -13,6 +13,7 @@
 #include "galay-kernel/common/Buffer.h"
 #include <galay-utils/algorithm/Base64.hpp>
 #include "galay-http/protoc/http/HttpHeader.h"
+#include <array>
 #include <string>
 #include <optional>
 #include <expected>
@@ -21,6 +22,7 @@
 #include <random>
 #include <span>
 #include <type_traits>
+#include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/async/SslSocket.h"
@@ -208,10 +210,9 @@ public:
     {
     public:
         explicit UpgradeSendAwaitable(WsUpgradeAwaitableImpl* owner)
-            : galay::kernel::WritevIOContext(std::span<const struct iovec>())
+            : galay::kernel::WritevIOContext(m_iovec_storage, 0)
             , m_owner(owner)
         {
-            m_iovecs.reserve(1);
         }
 
         void resetBuffer(const char* buffer, size_t length) {
@@ -273,7 +274,7 @@ public:
                     return true;
                 }
 
-                auto result = galay::kernel::io::handleWritev(handle, m_iovecs.data(), iov_count);
+                auto result = galay::kernel::io::handleWritev(handle, m_iovec_storage.data(), iov_count);
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
                 }
@@ -297,7 +298,16 @@ public:
 
     private:
         void syncSendWindow() {
-            m_cursor.exportWindow(m_iovecs);
+            const size_t iov_count = copyBoundedIovecs(
+                m_cursor.data(),
+                m_cursor.count(),
+                m_iovec_storage);
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
         }
 
         int pendingIovCount() {
@@ -310,16 +320,16 @@ public:
 
         WsUpgradeAwaitableImpl* m_owner;
         IoVecCursor m_cursor;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     class UpgradeRecvAwaitable : public galay::kernel::ReadvIOContext
     {
     public:
         explicit UpgradeRecvAwaitable(WsUpgradeAwaitableImpl* owner)
-            : galay::kernel::ReadvIOContext(std::span<const struct iovec>())
+            : galay::kernel::ReadvIOContext(m_iovec_storage, 0)
             , m_owner(owner)
         {
-            m_iovecs.reserve(2);
         }
 
 #ifdef USE_IOURING
@@ -376,7 +386,7 @@ public:
                 }
 
                 auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovecs.data(),
+                                                             m_iovec_storage.data(),
                                                              static_cast<int>(m_iovecs.size()));
                 if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
                     return false;
@@ -399,16 +409,19 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            struct iovec write_iovecs[2];
-            const size_t iov_count = m_owner->m_upgrader->m_ring_buffer->getWriteIovecs(write_iovecs, 2);
-            if (iov_count == 0) {
-                return false;
-            }
-
-            return IoVecWindow::buildWindow(write_iovecs, iov_count, m_iovecs) > 0;
+            const size_t iov_count = m_owner->m_upgrader->m_ring_buffer->getWriteIovecs(
+                m_iovec_storage.data(), m_iovec_storage.size());
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
+            return compact_count > 0;
         }
 
         WsUpgradeAwaitableImpl* m_owner;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     explicit WsUpgradeAwaitableImpl(WsUpgraderImpl<TcpSocket>* upgrader)
@@ -470,12 +483,17 @@ private:
     }
 
     bool parseUpgradeResponse() {
-        auto read_iovecs = m_upgrader->m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_upgrader->m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_upgrade_response.fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_upgrader->m_ring_buffer->consume(consumed);
         }
@@ -890,7 +908,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_upgrader->m_ring_buffer->getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(*m_owner->m_upgrader->m_ring_buffer);
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -965,12 +983,17 @@ private:
     }
 
     bool parseUpgradeResponse() {
-        auto read_iovecs = m_upgrader->m_ring_buffer->getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(*m_upgrader->m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_upgrade_response.fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_upgrader->m_ring_buffer->consume(consumed);
         }

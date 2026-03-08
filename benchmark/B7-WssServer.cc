@@ -6,6 +6,7 @@
  */
 
 #include <chrono>
+#include <array>
 #include <csignal>
 #include <iostream>
 #include "galay-http/kernel/http/HttpServer.h"
@@ -27,28 +28,58 @@ void signalHandler(int) {
     g_running = false;
 }
 
+namespace {
+
+void compactConsumedPrefix(std::string& buffer, size_t& offset) {
+    if (offset == 0) {
+        return;
+    }
+    if (offset >= buffer.size()) {
+        buffer.clear();
+        offset = 0;
+        return;
+    }
+    if (offset >= 4096 || offset * 2 >= buffer.size()) {
+        buffer.erase(0, offset);
+        offset = 0;
+    }
+}
+
+void encodeServerFrame(std::string& out, WsFrame& frame) {
+    frame.header.mask = false;
+    frame.header.payload_length = frame.payload.size();
+    WsFrameParser::encodeInto(out, frame, false);
+}
+
+} // namespace
+
 /**
  * @brief 处理 WSS 连接（使用底层帧处理）
  */
 Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
     HTTP_LOG_DEBUG("[wss] [conn] [open]");
 
-    // 发送欢迎消息
-    WsFrame welcome_frame = WsFrameParser::createTextFrame("Welcome to WSS Benchmark Server!");
-    std::string welcome_data = WsFrameParser::toBytes(welcome_frame, false);
+    std::string send_buffer;
+    send_buffer.reserve(2048);
 
-    auto result = co_await socket.send(welcome_data.data(), welcome_data.size());
+    WsFrame welcome_frame = WsFrameParser::createTextFrame("Welcome to WSS Benchmark Server!");
+    encodeServerFrame(send_buffer, welcome_frame);
+
+    auto result = co_await socket.send(send_buffer.data(), send_buffer.size());
     if (!result) {
         HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", result.error().message());
         co_return;
     }
 
-    // 接收缓冲区
-    std::vector<char> buffer(8192);
+    std::array<char, 8192> buffer{};
     std::string accumulated;
+    accumulated.reserve(buffer.size() * 2);
+    size_t parse_offset = 0;
 
     // 消息循环
     while (true) {
+        compactConsumedPrefix(accumulated, parse_offset);
+
         auto recv_result = co_await socket.recv(buffer.data(), buffer.size());
         if (!recv_result) {
             HTTP_LOG_DEBUG("[wss] [recv-fail] [{}]", recv_result.error().message());
@@ -64,12 +95,16 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
         accumulated.append(buffer.data(), bytes_received);
 
         // 尝试解析帧
-        while (!accumulated.empty()) {
+        while (parse_offset < accumulated.size()) {
             WsFrame frame;
-            std::vector<iovec> iovecs;
-            iovecs.push_back({const_cast<char*>(accumulated.data()), accumulated.size()});
+            std::array<iovec, 1> iovecs{{
+                {
+                    .iov_base = const_cast<char*>(accumulated.data() + parse_offset),
+                    .iov_len = accumulated.size() - parse_offset,
+                }
+            }};
 
-            auto parse_result = WsFrameParser::fromIOVec(iovecs, frame, true);
+            auto parse_result = WsFrameParser::fromIOVec(iovecs.data(), iovecs.size(), frame, true);
             if (!parse_result) {
                 if (parse_result.error().code() == kWsIncomplete) {
                     break;  // 需要更多数据
@@ -79,14 +114,14 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
             }
 
             size_t consumed = parse_result.value();
-            accumulated.erase(0, consumed);
+            parse_offset += consumed;
 
             // 处理帧
             if (frame.header.opcode == WsOpcode::Close) {
                 HTTP_LOG_DEBUG("[wss] [close] [recv]");
                 WsFrame close_frame = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
-                std::string close_data = WsFrameParser::toBytes(close_frame, false);
-                auto result = co_await socket.send(close_data.data(), close_data.size());
+                encodeServerFrame(send_buffer, close_frame);
+                auto result = co_await socket.send(send_buffer.data(), send_buffer.size());
                 if (!result) {
                     HTTP_LOG_WARN("[close] [fail] [{}]", result.error().message());
                 }
@@ -94,23 +129,20 @@ Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
             }
             else if (frame.header.opcode == WsOpcode::Ping) {
                 HTTP_LOG_DEBUG("[wss] [ping] [recv] [pong] [send]");
-                WsFrame pong_frame = WsFrameParser::createPongFrame(frame.payload);
-                std::string pong_data = WsFrameParser::toBytes(pong_frame, false);
-                auto result = co_await socket.send(pong_data.data(), pong_data.size());
+                frame.header.opcode = WsOpcode::Pong;
+                encodeServerFrame(send_buffer, frame);
+                auto result = co_await socket.send(send_buffer.data(), send_buffer.size());
                 if (!result) {
                     HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
                 }
             }
             else if (frame.header.opcode == WsOpcode::Text || frame.header.opcode == WsOpcode::Binary) {
-                // 回显消息
-                WsFrame echo_frame = (frame.header.opcode == WsOpcode::Text)
-                    ? WsFrameParser::createTextFrame(frame.payload)
-                    : WsFrameParser::createBinaryFrame(frame.payload);
-                std::string echo_data = WsFrameParser::toBytes(echo_frame, false);
-
-                auto r = co_await socket.send(echo_data.data(), echo_data.size());
+                encodeServerFrame(send_buffer, frame);
+                auto r = co_await socket.send(send_buffer.data(), send_buffer.size());
                 if (!r) break;
             }
+
+            compactConsumedPrefix(accumulated, parse_offset);
         }
     }
 
@@ -208,6 +240,7 @@ int main(int argc, char* argv[]) {
     std::cout << "========================================\n";
     std::cout << "Port: " << port << "\n";
     std::cout << "IO Threads: " << io_threads << "\n";
+    std::cout << "Configured Compute Threads: 0\n";
     std::cout << "Cert: " << cert_path << "\n";
     std::cout << "Key:  " << key_path << "\n";
     std::cout << "WSS endpoint: wss://localhost:" << port << "/ws\n";
@@ -224,11 +257,15 @@ int main(int argc, char* argv[]) {
             .certPath(cert_path)
             .keyPath(key_path)
             .ioSchedulerCount(static_cast<size_t>(io_threads))
+            .computeSchedulerCount(0)
             .build());
 
         server.start(httpsHandler);
 
         std::cout << "Server started successfully!\n";
+        std::cout << "Runtime Config: io=" << server.getRuntime().getIOSchedulerCount()
+                  << " compute=" << server.getRuntime().getComputeSchedulerCount()
+                  << " (configured io=" << io_threads << " compute=0)\n";
         std::cout << "Waiting for requests...\n\n";
 
         // 等待停止信号

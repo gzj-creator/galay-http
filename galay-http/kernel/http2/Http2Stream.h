@@ -13,7 +13,12 @@
 #include <charconv>
 #include <memory>
 #include <optional>
+#include <array>
 #include <iterator>
+#include <type_traits>
+#include <functional>
+#include <utility>
+#include <sys/uio.h>
 
 namespace galay::http2
 {
@@ -24,12 +29,19 @@ class Http2StreamManagerImpl;
 template<typename SocketType>
 class Http2ConnImpl;
 
+class Http2ActiveStreamBatch;
+class Http2StreamPool;
+
 struct Http2OutgoingFrame {
     using Waiter = galay::kernel::AsyncWaiter<void>;
     using WaiterPtr = std::shared_ptr<Waiter>;
 
     Http2Frame::uptr frame;
     std::string serialized;
+    std::array<char, kHttp2FrameHeaderLength> header_bytes{};
+    std::string owned_payload;
+    std::shared_ptr<const std::string> shared_payload;
+    bool segmented_packet = false;
     WaiterPtr waiter;
 
     Http2OutgoingFrame() = default;
@@ -44,6 +56,270 @@ struct Http2OutgoingFrame {
         , waiter(std::move(w))
     {
     }
+
+    static Http2OutgoingFrame segmented(std::array<char, kHttp2FrameHeaderLength> header,
+                                        std::string payload,
+                                        WaiterPtr w = nullptr) {
+        Http2OutgoingFrame frame;
+        frame.header_bytes = std::move(header);
+        frame.owned_payload = std::move(payload);
+        frame.segmented_packet = true;
+        frame.waiter = std::move(w);
+        return frame;
+    }
+
+    static Http2OutgoingFrame segmentedShared(std::array<char, kHttp2FrameHeaderLength> header,
+                                              std::shared_ptr<const std::string> payload,
+                                              WaiterPtr w = nullptr) {
+        Http2OutgoingFrame frame;
+        frame.header_bytes = std::move(header);
+        frame.shared_payload = std::move(payload);
+        frame.segmented_packet = true;
+        frame.waiter = std::move(w);
+        return frame;
+    }
+
+    bool isSegmented() const {
+        return segmented_packet;
+    }
+
+    bool isEmpty() const {
+        return !segmented_packet && !frame && serialized.empty();
+    }
+
+    std::string flatten() const {
+        if (segmented_packet) {
+            std::string bytes;
+            bytes.reserve(header_bytes.size() + payloadSize());
+            bytes.append(header_bytes.data(), header_bytes.size());
+            if (const char* payload = payloadData(); payload != nullptr) {
+                bytes.append(payload, payloadSize());
+            }
+            return bytes;
+        }
+        if (!serialized.empty()) {
+            return serialized;
+        }
+        if (frame) {
+            return frame->serialize();
+        }
+        return {};
+    }
+
+    size_t exportIovecs(std::array<struct iovec, 2>& iovecs) const {
+        if (segmented_packet) {
+            iovecs[0] = {
+                .iov_base = const_cast<char*>(header_bytes.data()),
+                .iov_len = header_bytes.size(),
+            };
+            if (const char* payload = payloadData(); payload != nullptr && payloadSize() > 0) {
+                iovecs[1] = {
+                    .iov_base = const_cast<char*>(payload),
+                    .iov_len = payloadSize(),
+                };
+                return 2;
+            }
+            return 1;
+        }
+
+        if (!serialized.empty()) {
+            iovecs[0] = {
+                .iov_base = const_cast<char*>(serialized.data()),
+                .iov_len = serialized.size(),
+            };
+            return 1;
+        }
+
+        return 0;
+    }
+
+private:
+    const char* payloadData() const {
+        if (shared_payload) {
+            return shared_payload->data();
+        }
+        if (!owned_payload.empty()) {
+            return owned_payload.data();
+        }
+        return nullptr;
+    }
+
+    size_t payloadSize() const {
+        if (shared_payload) {
+            return shared_payload->size();
+        }
+        return owned_payload.size();
+    }
+};
+
+/**
+ * @brief HTTP/2 分块请求体
+ */
+struct Http2ChunkedBody
+{
+    bool empty() const { return m_total_bytes == 0; }
+    size_t size() const { return m_total_bytes; }
+    size_t chunkCount() const { return m_chunk_count; }
+
+    void clear() {
+        m_single_chunk.clear();
+        m_chunks.clear();
+        m_total_bytes = 0;
+        m_chunk_count = 0;
+        m_single_view_cache.clear();
+    }
+
+    void set(std::string data) {
+        clear();
+        append(std::move(data));
+    }
+
+    void append(const std::string& data) {
+        if (data.empty()) {
+            return;
+        }
+        m_total_bytes += data.size();
+        if (m_chunk_count == 0) {
+            m_single_chunk = data;
+            m_chunk_count = 1;
+            m_single_view_cache.clear();
+            return;
+        }
+
+        ensureChunkVector();
+        m_chunks.push_back(data);
+        ++m_chunk_count;
+        m_single_view_cache.clear();
+    }
+
+    void append(std::string_view data) {
+        if (data.empty()) {
+            return;
+        }
+        m_total_bytes += data.size();
+        if (m_chunk_count == 0) {
+            m_single_chunk.assign(data.data(), data.size());
+            m_chunk_count = 1;
+            m_single_view_cache.clear();
+            return;
+        }
+
+        ensureChunkVector();
+        m_chunks.emplace_back(data);
+        ++m_chunk_count;
+        m_single_view_cache.clear();
+    }
+
+    void append(std::string&& data) {
+        if (data.empty()) {
+            return;
+        }
+        m_total_bytes += data.size();
+        if (m_chunk_count == 0) {
+            m_single_chunk = std::move(data);
+            m_chunk_count = 1;
+            m_single_view_cache.clear();
+            return;
+        }
+
+        ensureChunkVector();
+        m_chunks.push_back(std::move(data));
+        ++m_chunk_count;
+        m_single_view_cache.clear();
+    }
+
+    const std::vector<std::string>& view() const {
+        if (m_chunk_count == 0 || !m_chunks.empty()) {
+            return m_chunks;
+        }
+
+        m_single_view_cache.clear();
+        m_single_view_cache.push_back(m_single_chunk);
+        return m_single_view_cache;
+    }
+
+    std::vector<std::string> takeChunks() {
+        if (m_chunk_count == 0) {
+            return {};
+        }
+
+        m_single_view_cache.clear();
+        m_total_bytes = 0;
+        m_chunk_count = 0;
+
+        if (!m_chunks.empty()) {
+            m_single_chunk.clear();
+            return std::exchange(m_chunks, {});
+        }
+
+        std::vector<std::string> out;
+        out.reserve(1);
+        out.push_back(std::move(m_single_chunk));
+        m_single_chunk.clear();
+        return out;
+    }
+
+    std::string coalesce() const {
+        if (m_chunk_count == 0) {
+            return {};
+        }
+
+        if (m_chunks.empty()) {
+            return m_single_chunk;
+        }
+
+        std::string out;
+        out.reserve(m_total_bytes);
+        for (const auto& chunk : m_chunks) {
+            out.append(chunk);
+        }
+        return out;
+    }
+
+    std::string takeCoalesced() {
+        if (m_chunk_count == 0) {
+            return {};
+        }
+
+        if (m_chunks.empty()) {
+            m_total_bytes = 0;
+            m_chunk_count = 0;
+            m_single_view_cache.clear();
+            return std::exchange(m_single_chunk, {});
+        }
+
+        auto out = coalesce();
+        clear();
+        return out;
+    }
+
+    std::string takeSingleChunk() {
+        if (m_chunk_count == 1 && m_chunks.empty()) {
+            m_total_bytes = 0;
+            m_chunk_count = 0;
+            m_single_view_cache.clear();
+            return std::exchange(m_single_chunk, {});
+        }
+        return takeCoalesced();
+    }
+
+    explicit operator std::string() const {
+        return coalesce();
+    }
+
+private:
+    void ensureChunkVector() {
+        if (m_chunk_count == 1 && m_chunks.empty()) {
+            m_chunks.reserve(2);
+            m_chunks.push_back(std::move(m_single_chunk));
+        }
+    }
+
+    std::string m_single_chunk;
+    std::vector<std::string> m_chunks;
+    size_t m_total_bytes = 0;
+    size_t m_chunk_count = 0;
+    mutable std::vector<std::string> m_single_view_cache;
 };
 
 /**
@@ -56,7 +332,7 @@ struct Http2Request
     std::string authority;
     std::string path;
     std::vector<Http2HeaderField> headers;
-    std::string body;
+    Http2ChunkedBody body;
     
     // 获取伪头部
     std::string getHeader(const std::string& name) const {
@@ -65,6 +341,23 @@ struct Http2Request
         }
         return "";
     }
+
+    void setBody(std::string data) { body.set(std::move(data)); }
+    void clear() {
+        method.clear();
+        scheme.clear();
+        authority.clear();
+        path.clear();
+        headers.clear();
+        body.clear();
+    }
+    size_t bodySize() const { return body.size(); }
+    size_t bodyChunkCount() const { return body.chunkCount(); }
+    const std::vector<std::string>& bodyChunks() const { return body.view(); }
+    std::vector<std::string> takeBodyChunks() { return body.takeChunks(); }
+    std::string coalescedBody() const { return body.coalesce(); }
+    std::string takeCoalescedBody() { return body.takeCoalesced(); }
+    std::string takeSingleBodyChunk() { return body.takeSingleChunk(); }
 };
 
 /**
@@ -88,11 +381,46 @@ struct Http2Response
     
     void setStatus(int code) { status = code; }
     void setBody(std::string data) { body = std::move(data); }
+    void clear() {
+        status = 200;
+        headers.clear();
+        body.clear();
+    }
 };
 
 /**
  * @brief HTTP/2 流
  */
+enum class Http2StreamEvent : uint32_t {
+    None = 0,
+    HeadersReady = 1u << 0,
+    DataArrived = 1u << 1,
+    RequestComplete = 1u << 2,
+    ResponseComplete = 1u << 3,
+    Reset = 1u << 4,
+    WindowUpdated = 1u << 5,
+};
+
+constexpr Http2StreamEvent operator|(Http2StreamEvent lhs, Http2StreamEvent rhs) noexcept {
+    using U = std::underlying_type_t<Http2StreamEvent>;
+    return static_cast<Http2StreamEvent>(static_cast<U>(lhs) | static_cast<U>(rhs));
+}
+
+constexpr Http2StreamEvent operator&(Http2StreamEvent lhs, Http2StreamEvent rhs) noexcept {
+    using U = std::underlying_type_t<Http2StreamEvent>;
+    return static_cast<Http2StreamEvent>(static_cast<U>(lhs) & static_cast<U>(rhs));
+}
+
+inline Http2StreamEvent& operator|=(Http2StreamEvent& lhs, Http2StreamEvent rhs) noexcept {
+    lhs = lhs | rhs;
+    return lhs;
+}
+
+constexpr bool hasHttp2StreamEvent(Http2StreamEvent events, Http2StreamEvent event) noexcept {
+    using U = std::underlying_type_t<Http2StreamEvent>;
+    return (static_cast<U>(events & event) != 0);
+}
+
 class Http2Stream
 {
 public:
@@ -155,6 +483,7 @@ public:
     
     // 头部块累积（用于 CONTINUATION）
     void appendHeaderBlock(const std::string& data) { m_header_block.append(data); }
+    void appendHeaderBlock(std::string_view data) { m_header_block.append(data.data(), data.size()); }
     const std::string& headerBlock() const { return m_header_block; }
     void clearHeaderBlock() { m_header_block.clear(); }
 
@@ -173,6 +502,7 @@ public:
     
     // 数据累积
     void appendData(const std::string& data) { m_request.body.append(data); }
+    void appendData(std::string&& data) { m_request.body.append(std::move(data)); }
     
     // 状态转换
     bool canReceiveHeaders() const {
@@ -212,6 +542,7 @@ public:
                 m_state = Http2StreamState::Closed;
             }
         }
+        notifyRetireIfClosed();
     }
     
     void onDataReceived(bool end_stream) {
@@ -223,6 +554,7 @@ public:
                 m_state = Http2StreamState::Closed;
             }
         }
+        notifyRetireIfClosed();
     }
     
     // 处理发送帧后的状态转换
@@ -240,6 +572,7 @@ public:
                 m_state = Http2StreamState::Closed;
             }
         }
+        notifyRetireIfClosed();
     }
     
     void onDataSent(bool end_stream) {
@@ -251,14 +584,17 @@ public:
                 m_state = Http2StreamState::Closed;
             }
         }
+        notifyRetireIfClosed();
     }
     
     void onRstStreamReceived() {
         m_state = Http2StreamState::Closed;
+        notifyRetireIfClosed();
     }
     
     void onRstStreamSent() {
         m_state = Http2StreamState::Closed;
+        notifyRetireIfClosed();
     }
 
     // ==================== 帧队列 ====================
@@ -292,6 +628,13 @@ public:
     void setGoAwayError(Http2GoAwayError error) { m_goaway_error = std::move(error); }
     bool hasGoAwayError() const { return m_goaway_error.has_value(); }
     const std::optional<Http2GoAwayError>& goAwayError() const { return m_goaway_error; }
+
+    Http2StreamEvent takeEvents() {
+        auto events = m_pending_events;
+        m_pending_events = Http2StreamEvent::None;
+        m_active_queued = false;
+        return events;
+    }
 
     /**
      * @brief 获取下一帧的 Awaitable
@@ -353,6 +696,14 @@ public:
         m_request.body.append(data);
     }
 
+    void appendRequestData(std::string&& data) {
+        m_request.body.append(std::move(data));
+    }
+
+    void appendRequestData(std::string_view data) {
+        m_request.body.append(data);
+    }
+
     void appendResponseData(const std::string& data) {
         m_response.body.append(data);
     }
@@ -399,11 +750,37 @@ public:
         sendHeadersInternal(headers, end_stream, end_headers, nullptr);
     }
 
+    void sendEncodedHeaders(const std::string& header_block,
+                            bool end_stream = false,
+                            bool end_headers = true) {
+        sendEncodedHeadersInternal(header_block, end_stream, end_headers, nullptr);
+    }
+
+    void sendEncodedHeaders(std::string&& header_block,
+                            bool end_stream = false,
+                            bool end_headers = true) {
+        sendEncodedHeadersInternal(std::move(header_block), end_stream, end_headers, nullptr);
+    }
+
+    void sendEncodedHeaders(std::shared_ptr<const std::string> header_block,
+                            bool end_stream = false,
+                            bool end_headers = true) {
+        sendEncodedHeadersInternal(std::move(header_block), end_stream, end_headers, nullptr);
+    }
+
     /**
      * @brief 发送 DATA 帧
      */
     void sendData(const std::string& data, bool end_stream = false) {
         sendDataInternal(data, end_stream, nullptr);
+    }
+
+    void sendData(std::string&& data, bool end_stream = false) {
+        sendDataInternal(std::move(data), end_stream, nullptr);
+    }
+
+    void sendData(std::shared_ptr<const std::string> data, bool end_stream = false) {
+        sendDataInternal(std::move(data), end_stream, nullptr);
     }
 
     /**
@@ -427,6 +804,43 @@ public:
         sendDataBatchInternal(chunks, end_stream, nullptr);
     }
 
+    void sendDataChunks(std::vector<std::string>&& chunks, bool end_stream = false) {
+        sendDataChunksInternal(std::move(chunks), end_stream, nullptr);
+    }
+
+    void sendHeadersAndData(const std::vector<Http2HeaderField>& headers,
+                            std::string data,
+                            bool end_headers = true) {
+        sendHeadersAndDataInternal(headers, std::move(data), end_headers, nullptr);
+    }
+
+    void sendHeadersAndDataChunks(const std::vector<Http2HeaderField>& headers,
+                                  std::vector<std::string>&& chunks,
+                                  bool end_headers = true) {
+        sendHeadersAndDataChunksInternal(headers, std::move(chunks), end_headers, nullptr);
+    }
+
+    void sendEncodedHeadersAndData(std::string header_block,
+                                   std::string data,
+                                   bool end_headers = true) {
+        sendEncodedHeadersAndDataInternal(
+            std::move(header_block), std::move(data), end_headers, nullptr);
+    }
+
+    void sendEncodedHeadersAndData(std::shared_ptr<const std::string> header_block,
+                                   std::string data,
+                                   bool end_headers = true) {
+        sendEncodedHeadersAndDataInternal(
+            std::move(header_block), std::move(data), end_headers, nullptr);
+    }
+
+    void sendEncodedHeadersAndDataChunks(std::string header_block,
+                                         std::vector<std::string>&& chunks,
+                                         bool end_headers = true) {
+        sendEncodedHeadersAndDataChunksInternal(
+            std::move(header_block), std::move(chunks), end_headers, nullptr);
+    }
+
     /**
      * @brief 帧优先 API：发送 HEADERS 并等待入队完成
      */
@@ -438,12 +852,48 @@ public:
         return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
+    ReplyAndWaitAwaitable replyEncodedHeaders(const std::string& header_block,
+                                             bool end_stream = false,
+                                             bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendEncodedHeadersInternal(header_block, end_stream, end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyEncodedHeaders(std::string&& header_block,
+                                             bool end_stream = false,
+                                             bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendEncodedHeadersInternal(std::move(header_block), end_stream, end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyEncodedHeaders(std::shared_ptr<const std::string> header_block,
+                                             bool end_stream = false,
+                                             bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendEncodedHeadersInternal(std::move(header_block), end_stream, end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
     /**
      * @brief 帧优先 API：发送 DATA 并等待入队完成
      */
     ReplyAndWaitAwaitable replyData(const std::string& data, bool end_stream = false) {
         auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
         sendDataInternal(data, end_stream, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyData(std::string&& data, bool end_stream = false) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendDataInternal(std::move(data), end_stream, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyData(std::shared_ptr<const std::string> data, bool end_stream = false) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendDataInternal(std::move(data), end_stream, waiter);
         return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
@@ -472,6 +922,56 @@ public:
                                          bool end_stream = false) {
         auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
         sendDataBatchInternal(chunks, end_stream, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyDataChunks(std::vector<std::string>&& chunks,
+                                          bool end_stream = false) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendDataChunksInternal(std::move(chunks), end_stream, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyHeadersAndData(const std::vector<Http2HeaderField>& headers,
+                                             std::string data,
+                                             bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendHeadersAndDataInternal(headers, std::move(data), end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyHeadersAndDataChunks(const std::vector<Http2HeaderField>& headers,
+                                                    std::vector<std::string>&& chunks,
+                                                    bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendHeadersAndDataChunksInternal(headers, std::move(chunks), end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyEncodedHeadersAndData(std::string header_block,
+                                                     std::string data,
+                                                     bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendEncodedHeadersAndDataInternal(
+            std::move(header_block), std::move(data), end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyEncodedHeadersAndData(std::shared_ptr<const std::string> header_block,
+                                                     std::string data,
+                                                     bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendEncodedHeadersAndDataInternal(
+            std::move(header_block), std::move(data), end_headers, waiter);
+        return ReplyAndWaitAwaitable(std::move(waiter));
+    }
+
+    ReplyAndWaitAwaitable replyEncodedHeadersAndDataChunks(std::string header_block,
+                                                           std::vector<std::string>&& chunks,
+                                                           bool end_headers = true) {
+        auto waiter = std::make_shared<Http2OutgoingFrame::Waiter>();
+        sendEncodedHeadersAndDataChunksInternal(
+            std::move(header_block), std::move(chunks), end_headers, waiter);
         return ReplyAndWaitAwaitable(std::move(waiter));
     }
 
@@ -541,6 +1041,10 @@ private:
         m_io_attached = true;
     }
 
+    void setRetireCallback(std::function<void(uint32_t)> callback) {
+        m_retire_callback = std::move(callback);
+    }
+
     uint32_t m_stream_id;
     Http2StreamState m_state;
     int32_t m_send_window;
@@ -558,6 +1062,8 @@ private:
     bool m_frame_queue_closed = false;
     bool m_frame_queue_enabled = true;
     std::optional<Http2GoAwayError> m_goaway_error;
+    Http2StreamEvent m_pending_events = Http2StreamEvent::None;
+    bool m_active_queued = false;
     galay::kernel::AsyncWaiter<void> m_request_waiter;
     galay::kernel::AsyncWaiter<void> m_response_waiter;
     bool m_request_completed = false;
@@ -574,11 +1080,60 @@ private:
     HpackEncoder* m_encoder = nullptr;
     HpackDecoder* m_decoder = nullptr;
     bool m_io_attached = false;
+    std::function<void(uint32_t)> m_retire_callback;
 
     template<typename SocketType>
     friend class Http2StreamManagerImpl;
     template<typename SocketType>
     friend class Http2ConnImpl;
+    friend class Http2StreamPool;
+    friend class Http2ActiveStreamBatch;
+
+    void notifyRetireIfClosed() {
+        if (m_state == Http2StreamState::Closed && m_retire_callback) {
+            m_retire_callback(m_stream_id);
+        }
+    }
+
+    void resetForReuse(uint32_t stream_id) {
+        m_stream_id = stream_id;
+        m_state = Http2StreamState::Idle;
+        m_send_window = kDefaultInitialWindowSize;
+        m_recv_window = kDefaultInitialWindowSize;
+        m_end_stream_received = false;
+        m_end_stream_sent = false;
+        m_end_headers_received = false;
+        m_header_block.clear();
+        m_decoded_headers.clear();
+        m_request.clear();
+        m_response.clear();
+
+        std::destroy_at(&m_frame_channel);
+        std::construct_at(&m_frame_channel);
+        m_frame_queue_closed = false;
+        m_frame_queue_enabled = true;
+        m_goaway_error.reset();
+        m_pending_events = Http2StreamEvent::None;
+        m_active_queued = false;
+
+        std::destroy_at(&m_request_waiter);
+        std::construct_at(&m_request_waiter);
+        std::destroy_at(&m_response_waiter);
+        std::construct_at(&m_response_waiter);
+        m_request_completed = false;
+        m_response_completed = false;
+
+        m_weight = 16;
+        m_stream_dependency = 0;
+        m_exclusive = false;
+
+        m_send_channel = nullptr;
+        m_send_queue = nullptr;
+        m_encoder = nullptr;
+        m_decoder = nullptr;
+        m_io_attached = false;
+        m_retire_callback = nullptr;
+    }
 
     void sendHeadersInternal(const std::vector<Http2HeaderField>& headers,
                              bool end_stream,
@@ -587,16 +1142,82 @@ private:
         if ((!m_send_queue && !m_send_channel) || !m_encoder) return;
 
         std::string header_block = m_encoder->encode(headers);
-        auto bytes = Http2FrameBuilder::headersBytes(m_stream_id,
-                                                     header_block,
-                                                     end_stream,
-                                                     end_headers);
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(m_stream_id,
+                                                                  header_block.size(),
+                                                                  end_stream,
+                                                                  end_headers);
 
         onHeadersSent(end_stream);
         if (m_send_channel) {
-            m_send_channel->send(Http2OutgoingFrame{std::move(bytes), waiter});
+            m_send_channel->send(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block), waiter));
         } else {
-            m_send_queue->push_back(Http2OutgoingFrame{std::move(bytes), waiter});
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block), waiter));
+        }
+    }
+
+    void sendEncodedHeadersInternal(const std::string& header_block,
+                                    bool end_stream,
+                                    bool end_headers,
+                                    const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) return;
+
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(m_stream_id,
+                                                                  header_block.size(),
+                                                                  end_stream,
+                                                                  end_headers);
+
+        onHeadersSent(end_stream);
+        if (m_send_channel) {
+            m_send_channel->send(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::string(header_block), waiter));
+        } else {
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::string(header_block), waiter));
+        }
+    }
+
+    void sendEncodedHeadersInternal(std::string&& header_block,
+                                    bool end_stream,
+                                    bool end_headers,
+                                    const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) return;
+
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(m_stream_id,
+                                                                  header_block.size(),
+                                                                  end_stream,
+                                                                  end_headers);
+
+        onHeadersSent(end_stream);
+        if (m_send_channel) {
+            m_send_channel->send(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block), waiter));
+        } else {
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block), waiter));
+        }
+    }
+
+    void sendEncodedHeadersInternal(std::shared_ptr<const std::string> header_block,
+                                    bool end_stream,
+                                    bool end_headers,
+                                    const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) return;
+
+        auto payload = header_block ? std::move(header_block) : emptySharedPayload();
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(m_stream_id,
+                                                                  payload->size(),
+                                                                  end_stream,
+                                                                  end_headers);
+
+        onHeadersSent(end_stream);
+        if (m_send_channel) {
+            m_send_channel->send(
+                Http2OutgoingFrame::segmentedShared(std::move(header_bytes), std::move(payload), waiter));
+        } else {
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmentedShared(std::move(header_bytes), std::move(payload), waiter));
         }
     }
 
@@ -605,17 +1226,62 @@ private:
                           const Http2OutgoingFrame::WaiterPtr& waiter) {
         if (!m_send_queue && !m_send_channel) return;
         if (m_send_window < static_cast<int32_t>(data.size())) return;
-
-        auto bytes = Http2FrameBuilder::dataBytes(m_stream_id, data, end_stream);
+        auto header_bytes = Http2FrameBuilder::dataHeaderBytes(m_stream_id, data.size(), end_stream);
 
         m_send_window -= static_cast<int32_t>(data.size());
         if (end_stream) {
             onDataSent(true);
         }
         if (m_send_channel) {
-            m_send_channel->send(Http2OutgoingFrame{std::move(bytes), waiter});
+            m_send_channel->send(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::string(data), waiter));
         } else {
-            m_send_queue->push_back(Http2OutgoingFrame{std::move(bytes), waiter});
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::string(data), waiter));
+        }
+    }
+
+    void sendDataInternal(std::string&& data,
+                          bool end_stream,
+                          const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) return;
+        if (m_send_window < static_cast<int32_t>(data.size())) return;
+
+        auto header_bytes = Http2FrameBuilder::dataHeaderBytes(m_stream_id, data.size(), end_stream);
+
+        m_send_window -= static_cast<int32_t>(data.size());
+        if (end_stream) {
+            onDataSent(true);
+        }
+        if (m_send_channel) {
+            m_send_channel->send(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(data), waiter));
+        } else {
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(data), waiter));
+        }
+    }
+
+    void sendDataInternal(std::shared_ptr<const std::string> data,
+                          bool end_stream,
+                          const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) return;
+
+        auto payload = data ? std::move(data) : emptySharedPayload();
+        if (m_send_window < static_cast<int32_t>(payload->size())) return;
+
+        auto header_bytes = Http2FrameBuilder::dataHeaderBytes(m_stream_id, payload->size(), end_stream);
+
+        m_send_window -= static_cast<int32_t>(payload->size());
+        if (end_stream) {
+            onDataSent(true);
+        }
+        if (m_send_channel) {
+            m_send_channel->send(
+                Http2OutgoingFrame::segmentedShared(std::move(header_bytes), std::move(payload), waiter));
+        } else {
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmentedShared(std::move(header_bytes), std::move(payload), waiter));
         }
     }
 
@@ -630,6 +1296,248 @@ private:
             m_send_channel->send(Http2OutgoingFrame{std::move(bytes), waiter});
         } else {
             m_send_queue->push_back(Http2OutgoingFrame{std::move(bytes), waiter});
+        }
+    }
+
+    static std::shared_ptr<const std::string> emptySharedPayload() {
+        static const auto payload = std::make_shared<const std::string>();
+        return payload;
+    }
+
+    static std::vector<Http2OutgoingFrame>& outgoingScratch(size_t min_capacity) {
+        static thread_local std::vector<Http2OutgoingFrame> scratch;
+        scratch.clear();
+        if (scratch.capacity() < min_capacity) {
+            scratch.reserve(min_capacity);
+        }
+        return scratch;
+    }
+
+    void sendHeadersAndDataInternal(const std::vector<Http2HeaderField>& headers,
+                                    std::string data,
+                                    bool end_headers,
+                                    const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if ((!m_send_queue && !m_send_channel) || !m_encoder) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        auto header_block = m_encoder->encode(headers);
+        sendEncodedHeadersAndDataInternal(std::move(header_block), std::move(data), end_headers, waiter);
+    }
+
+    void sendHeadersAndDataChunksInternal(const std::vector<Http2HeaderField>& headers,
+                                          std::vector<std::string>&& chunks,
+                                          bool end_headers,
+                                          const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if ((!m_send_queue && !m_send_channel) || !m_encoder) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        auto header_block = m_encoder->encode(headers);
+        sendEncodedHeadersAndDataChunksInternal(
+            std::move(header_block), std::move(chunks), end_headers, waiter);
+    }
+
+    void sendEncodedHeadersAndDataInternal(std::string&& header_block,
+                                           std::string&& data,
+                                           bool end_headers,
+                                           const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        const bool header_end_stream = data.empty();
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(
+            m_stream_id, header_block.size(), header_end_stream, end_headers);
+        onHeadersSent(header_end_stream);
+
+        const bool can_send_data =
+            !data.empty() && m_send_window >= static_cast<int32_t>(data.size());
+
+        if (m_send_channel) {
+            if (!can_send_data) {
+                m_send_channel->send(
+                    Http2OutgoingFrame::segmented(
+                        std::move(header_bytes), std::move(header_block), waiter));
+                return;
+            }
+
+            auto& outgoing = outgoingScratch(2);
+            outgoing.push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block)));
+
+            auto data_header = Http2FrameBuilder::dataHeaderBytes(m_stream_id, data.size(), true);
+            m_send_window -= static_cast<int32_t>(data.size());
+            onDataSent(true);
+            outgoing.push_back(
+                Http2OutgoingFrame::segmented(std::move(data_header), std::move(data)));
+            if (waiter) {
+                outgoing.back().waiter = waiter;
+            }
+            m_send_channel->sendBatch(std::move(outgoing));
+            return;
+        }
+
+        m_send_queue->push_back(
+            Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block)));
+
+        if (can_send_data) {
+            auto data_header = Http2FrameBuilder::dataHeaderBytes(m_stream_id, data.size(), true);
+            m_send_window -= static_cast<int32_t>(data.size());
+            onDataSent(true);
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(data_header), std::move(data)));
+        }
+
+        if (waiter) {
+            m_send_queue->back().waiter = waiter;
+        }
+    }
+
+    void sendEncodedHeadersAndDataInternal(std::shared_ptr<const std::string> header_block,
+                                           std::string&& data,
+                                           bool end_headers,
+                                           const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        auto payload = header_block ? std::move(header_block) : emptySharedPayload();
+        const bool header_end_stream = data.empty();
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(
+            m_stream_id, payload->size(), header_end_stream, end_headers);
+        onHeadersSent(header_end_stream);
+
+        const bool can_send_data =
+            !data.empty() && m_send_window >= static_cast<int32_t>(data.size());
+
+        if (m_send_channel) {
+            if (!can_send_data) {
+                m_send_channel->send(
+                    Http2OutgoingFrame::segmentedShared(
+                        std::move(header_bytes), std::move(payload), waiter));
+                return;
+            }
+
+            auto& outgoing = outgoingScratch(2);
+            outgoing.push_back(
+                Http2OutgoingFrame::segmentedShared(std::move(header_bytes), std::move(payload)));
+
+            auto data_header = Http2FrameBuilder::dataHeaderBytes(m_stream_id, data.size(), true);
+            m_send_window -= static_cast<int32_t>(data.size());
+            onDataSent(true);
+            outgoing.push_back(
+                Http2OutgoingFrame::segmented(std::move(data_header), std::move(data)));
+            if (waiter) {
+                outgoing.back().waiter = waiter;
+            }
+            m_send_channel->sendBatch(std::move(outgoing));
+            return;
+        }
+
+        m_send_queue->push_back(
+            Http2OutgoingFrame::segmentedShared(std::move(header_bytes), std::move(payload)));
+
+        if (can_send_data) {
+            auto data_header = Http2FrameBuilder::dataHeaderBytes(m_stream_id, data.size(), true);
+            m_send_window -= static_cast<int32_t>(data.size());
+            onDataSent(true);
+            m_send_queue->push_back(
+                Http2OutgoingFrame::segmented(std::move(data_header), std::move(data)));
+        }
+
+        if (waiter) {
+            m_send_queue->back().waiter = waiter;
+        }
+    }
+
+    void sendEncodedHeadersAndDataChunksInternal(std::string&& header_block,
+                                                 std::vector<std::string>&& chunks,
+                                                 bool end_headers,
+                                                 const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        if (chunks.size() == 1) {
+            sendEncodedHeadersAndDataInternal(
+                std::move(header_block), std::move(chunks.front()), end_headers, waiter);
+            return;
+        }
+
+        const bool header_end_stream = chunks.empty();
+        auto header_bytes = Http2FrameBuilder::headersHeaderBytes(
+            m_stream_id, header_block.size(), header_end_stream, end_headers);
+        onHeadersSent(header_end_stream);
+
+        if (m_send_channel) {
+            auto& outgoing = outgoingScratch(1 + chunks.size());
+            outgoing.push_back(
+                Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block)));
+
+            if (!chunks.empty()) {
+                for (size_t i = 0; i < chunks.size(); ++i) {
+                    auto& chunk = chunks[i];
+                    if (m_send_window < static_cast<int32_t>(chunk.size())) {
+                        continue;
+                    }
+
+                    const bool last = (i + 1 == chunks.size());
+                    auto data_header = Http2FrameBuilder::dataHeaderBytes(m_stream_id, chunk.size(), last);
+                    m_send_window -= static_cast<int32_t>(chunk.size());
+                    if (last) {
+                        onDataSent(true);
+                    }
+                    outgoing.push_back(
+                        Http2OutgoingFrame::segmented(std::move(data_header), std::move(chunk)));
+                }
+            }
+
+            if (waiter) {
+                outgoing.back().waiter = waiter;
+            }
+            m_send_channel->sendBatch(std::move(outgoing));
+            return;
+        }
+
+        m_send_queue->push_back(
+            Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(header_block)));
+
+        if (!chunks.empty()) {
+            for (size_t i = 0; i < chunks.size(); ++i) {
+                auto& chunk = chunks[i];
+                if (m_send_window < static_cast<int32_t>(chunk.size())) {
+                    continue;
+                }
+
+                const bool last = (i + 1 == chunks.size());
+                auto data_header = Http2FrameBuilder::dataHeaderBytes(m_stream_id, chunk.size(), last);
+                m_send_window -= static_cast<int32_t>(chunk.size());
+                if (last) {
+                    onDataSent(true);
+                }
+                m_send_queue->push_back(
+                    Http2OutgoingFrame::segmented(std::move(data_header), std::move(chunk)));
+            }
+        }
+
+        if (waiter) {
+            m_send_queue->back().waiter = waiter;
         }
     }
 
@@ -663,6 +1571,67 @@ private:
                     onDataSent(true);
                 }
                 outgoing.emplace_back(Http2FrameBuilder::dataBytes(m_stream_id, chunk, last));
+            }
+        }
+
+        if (outgoing.empty()) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        if (waiter) {
+            outgoing.back().waiter = waiter;
+        }
+
+        if (m_send_channel) {
+            m_send_channel->sendBatch(std::move(outgoing));
+        } else {
+            m_send_queue->insert(m_send_queue->end(),
+                                 std::make_move_iterator(outgoing.begin()),
+                                 std::make_move_iterator(outgoing.end()));
+        }
+    }
+
+    void sendDataChunksInternal(std::vector<std::string>&& chunks,
+                                bool end_stream,
+                                const Http2OutgoingFrame::WaiterPtr& waiter) {
+        if (!m_send_queue && !m_send_channel) {
+            if (waiter) {
+                waiter->notify();
+            }
+            return;
+        }
+
+        if (chunks.size() == 1) {
+            sendDataInternal(std::move(chunks.front()), end_stream, waiter);
+            return;
+        }
+
+        std::vector<Http2OutgoingFrame> outgoing;
+        outgoing.reserve(chunks.size() + (chunks.empty() && end_stream ? 1 : 0));
+
+        if (chunks.empty()) {
+            if (end_stream) {
+                onDataSent(true);
+                outgoing.emplace_back(Http2FrameBuilder::dataBytes(m_stream_id, std::string_view{}, true));
+            }
+        } else {
+            for (size_t i = 0; i < chunks.size(); ++i) {
+                auto& chunk = chunks[i];
+                if (m_send_window < static_cast<int32_t>(chunk.size())) {
+                    continue;
+                }
+
+                const bool last = end_stream && (i + 1 == chunks.size());
+                auto header_bytes = Http2FrameBuilder::dataHeaderBytes(m_stream_id, chunk.size(), last);
+                m_send_window -= static_cast<int32_t>(chunk.size());
+                if (last) {
+                    onDataSent(true);
+                }
+                outgoing.push_back(
+                    Http2OutgoingFrame::segmented(std::move(header_bytes), std::move(chunk)));
             }
         }
 
@@ -744,6 +1713,51 @@ private:
             std::make_move_iterator(outgoing.begin()),
             std::make_move_iterator(outgoing.end()));
     }
+};
+
+class Http2StreamPool
+{
+public:
+    Http2StreamPool()
+        : m_state(std::make_shared<State>())
+    {
+    }
+
+    Http2Stream::ptr acquire(uint32_t stream_id) {
+        Http2Stream* stream = nullptr;
+        if (!m_state->free_list.empty()) {
+            stream = m_state->free_list.back();
+            m_state->free_list.pop_back();
+            stream->resetForReuse(stream_id);
+        } else {
+            stream = new Http2Stream(stream_id);
+        }
+
+        auto state = m_state;
+        return Http2Stream::ptr(stream, [state = std::move(state)](Http2Stream* ptr) mutable {
+            if (!ptr) {
+                return;
+            }
+            state->free_list.push_back(ptr);
+        });
+    }
+
+    size_t available() const {
+        return m_state->free_list.size();
+    }
+
+private:
+    struct State {
+        ~State() {
+            for (auto* stream : free_list) {
+                delete stream;
+            }
+        }
+
+        std::vector<Http2Stream*> free_list;
+    };
+
+    std::shared_ptr<State> m_state;
 };
 
 } // namespace galay::http2

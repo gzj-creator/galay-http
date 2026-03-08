@@ -5174,6 +5174,24 @@ void HpackEncoder::encodeField(const Http2HeaderField& field, std::string& outpu
     }
 }
 
+void HpackEncoder::encodeFieldStateless(const Http2HeaderField& field, std::string& output)
+{
+    const auto& static_table = HpackStaticTable::instance();
+    auto [static_idx, static_name_only] = static_table.find(field.name, field.value);
+
+    if (static_idx > 0 && !static_name_only) {
+        encodeIndexed(static_idx, output);
+        return;
+    }
+
+    if (static_idx > 0) {
+        encodeLiteralWithoutIndexing(static_idx, field.value, output);
+        return;
+    }
+
+    encodeLiteralWithoutIndexing(field.name, field.value, output);
+}
+
 std::string HpackEncoder::encode(const std::vector<Http2HeaderField>& headers)
 {
     std::string output;
@@ -5190,6 +5208,18 @@ std::string HpackEncoder::encode(const std::vector<Http2HeaderField>& headers)
         encodeField(field, output);
     }
     
+    return output;
+}
+
+std::string HpackEncoder::encodeStateless(const std::vector<Http2HeaderField>& headers)
+{
+    std::string output;
+    output.reserve(headers.size() * 32);
+
+    for (const auto& field : headers) {
+        encodeFieldStateless(field, output);
+    }
+
     return output;
 }
 

@@ -16,6 +16,7 @@
 #include <coroutine>
 #include <map>
 #include <type_traits>
+#include <vector>
 
 namespace galay::http
 {
@@ -164,7 +165,7 @@ public:
                 return true;
             }
 
-            size_t recv_bytes = result.value().size();
+            size_t recv_bytes = result.value();
             if (recv_bytes == 0) {
                 m_owner->setRecvError(HttpError(kConnectionClose));
                 return true;
@@ -204,7 +205,7 @@ public:
                     return true;
                 }
 
-                size_t recv_bytes = result.value().size();
+                size_t recv_bytes = result.value();
                 if (recv_bytes == 0) {
                     m_owner->setRecvError(HttpError(kConnectionClose));
                     return true;
@@ -222,7 +223,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_session->getRingBuffer().getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(m_owner->m_session->getRingBuffer());
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -298,12 +299,17 @@ private:
     };
 
     bool parseResponseFromRingBuffer() {
-        auto read_iovecs = m_session->getRingBuffer().getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(m_session->getRingBuffer());
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response.fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_response.fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_session->getRingBuffer().consume(static_cast<size_t>(consumed));
         }
@@ -728,7 +734,7 @@ public:
 
     private:
         bool prepareRecvWindow() {
-            auto write_iovecs = m_owner->m_session->getRingBuffer().getWriteIovecs();
+            auto write_iovecs = borrowWriteIovecs(m_owner->m_session->getRingBuffer());
             if (write_iovecs.empty()) {
                 return false;
             }
@@ -789,12 +795,17 @@ public:
 
 private:
     bool parseResponseFromRingBuffer() {
-        auto read_iovecs = m_session->getRingBuffer().getReadIovecs();
+        auto read_iovecs = borrowReadIovecs(m_session->getRingBuffer());
         if (read_iovecs.empty()) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response.fromIOVec(read_iovecs);
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_response.fromIOVec(parse_iovecs);
         if (consumed > 0) {
             m_session->getRingBuffer().consume(static_cast<size_t>(consumed));
         }

@@ -12,6 +12,7 @@
 #include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
+#include <array>
 #include <coroutine>
 #include <optional>
 #include <string>
@@ -53,9 +54,10 @@ public:
     {
     public:
         explicit ProtocolWritevAwaitable(SendResponseWritevAwaitableImpl* owner)
-            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), owner->m_writer->getIovecsCopy())
+            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), m_iovec_storage, 0)
             , m_owner(owner)
         {
+            syncIovecs();
         }
 
 #ifdef USE_IOURING
@@ -133,10 +135,20 @@ public:
 
     private:
         void syncIovecs() {
-            m_owner->m_writer->copyIovecsTo(m_iovecs);
+            const size_t iov_count = copyBoundedIovecs(
+                m_owner->m_writer->getIovecsData(),
+                m_owner->m_writer->getIovecsCount(),
+                m_iovec_storage);
+            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
+            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
+#ifdef USE_IOURING
+            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
+            m_msg.msg_iovlen = m_iovecs.size();
+#endif
         }
 
         SendResponseWritevAwaitableImpl* m_owner;
+        std::array<struct iovec, 2> m_iovec_storage{};
     };
 
     SendResponseWritevAwaitableImpl(HttpWriterImpl<SocketType>& writer, SocketType& socket)

@@ -18,6 +18,15 @@ using namespace galay::async;
 
 using BatchParseResult = std::expected<std::vector<Http2Frame::uptr>, Http2ErrorCode>;
 
+std::string flattenHeaderAndPayload(const std::array<char, kHttp2FrameHeaderLength>& header,
+                                    std::string_view payload) {
+    std::string bytes;
+    bytes.reserve(header.size() + payload.size());
+    bytes.append(header.data(), header.size());
+    bytes.append(payload.data(), payload.size());
+    return bytes;
+}
+
 // Helper: serialize a PING frame (8 bytes payload)
 std::vector<uint8_t> buildPingFrame(uint64_t opaque_data) {
     std::vector<uint8_t> frame(9 + 8);
@@ -202,6 +211,37 @@ int main() {
     }
 
     std::cout << "[T37] All scenarios PASS\n";
+
+    // ========== Scenario 5.5: segmented builder bytes equivalence ==========
+    {
+        std::cout << "[T37] Scenario 5.5: segmented builder bytes equivalence\n";
+
+        static_assert(requires {
+            { Http2FrameBuilder::dataHeaderBytes(7, 5, true) }
+                -> std::same_as<std::array<char, kHttp2FrameHeaderLength>>;
+        }, "Http2FrameBuilder must expose dataHeaderBytes(stream_id, payload_len, end_stream)");
+
+        static_assert(requires {
+            { Http2FrameBuilder::headersHeaderBytes(3, 11, false, true) }
+                -> std::same_as<std::array<char, kHttp2FrameHeaderLength>>;
+        }, "Http2FrameBuilder must expose headersHeaderBytes(stream_id, header_block_len, end_stream, end_headers)");
+
+        const std::string payload = "hello";
+        const auto data_header = Http2FrameBuilder::dataHeaderBytes(7, payload.size(), true);
+        const auto data_bytes = Http2FrameBuilder::dataBytes(7, payload, true);
+        assert(flattenHeaderAndPayload(data_header, payload) == data_bytes &&
+               "Segmented DATA header bytes must match legacy full-frame bytes");
+
+        const std::string header_block = "header-block";
+        const auto headers_header =
+            Http2FrameBuilder::headersHeaderBytes(3, header_block.size(), false, true);
+        const auto headers_bytes =
+            Http2FrameBuilder::headersBytes(3, header_block, false, true);
+        assert(flattenHeaderAndPayload(headers_header, header_block) == headers_bytes &&
+               "Segmented HEADERS header bytes must match legacy full-frame bytes");
+
+        std::cout << "[T37] Scenario 5.5 PASS: segmented header bytes match legacy builders\n";
+    }
 
     // ========== NEW: Batch awaitable contract tests ==========
     std::cout << "\n[T37] Starting batch awaitable contract tests\n";

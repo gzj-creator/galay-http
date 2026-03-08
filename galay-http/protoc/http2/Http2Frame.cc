@@ -7,6 +7,21 @@ namespace galay::http2
 
 namespace {
 
+std::array<char, kHttp2FrameHeaderLength> buildFrameHeaderBytes(Http2FrameType type,
+                                                                uint8_t flags,
+                                                                uint32_t stream_id,
+                                                                uint32_t payload_length)
+{
+    std::array<char, kHttp2FrameHeaderLength> bytes{};
+    Http2FrameHeader header;
+    header.length = payload_length;
+    header.type = type;
+    header.flags = flags;
+    header.stream_id = stream_id;
+    header.serialize(reinterpret_cast<uint8_t*>(bytes.data()));
+    return bytes;
+}
+
 std::string buildFrameBytes(Http2FrameType type,
                             uint8_t flags,
                             uint32_t stream_id,
@@ -107,6 +122,34 @@ std::unique_ptr<Http2RstStreamFrame> Http2FrameBuilder::rstStream(uint32_t strea
     frame->header().stream_id = stream_id;
     frame->setErrorCode(error);
     return frame;
+}
+
+std::array<char, kHttp2FrameHeaderLength> Http2FrameBuilder::dataHeaderBytes(uint32_t stream_id,
+                                                                              size_t payload_length,
+                                                                              bool end_stream)
+{
+    uint8_t flags = 0;
+    if (end_stream) {
+        flags |= Http2FrameFlags::kEndStream;
+    }
+    return buildFrameHeaderBytes(
+        Http2FrameType::Data, flags, stream_id, static_cast<uint32_t>(payload_length));
+}
+
+std::array<char, kHttp2FrameHeaderLength> Http2FrameBuilder::headersHeaderBytes(uint32_t stream_id,
+                                                                                 size_t header_block_length,
+                                                                                 bool end_stream,
+                                                                                 bool end_headers)
+{
+    uint8_t flags = 0;
+    if (end_stream) {
+        flags |= Http2FrameFlags::kEndStream;
+    }
+    if (end_headers) {
+        flags |= Http2FrameFlags::kEndHeaders;
+    }
+    return buildFrameHeaderBytes(
+        Http2FrameType::Headers, flags, stream_id, static_cast<uint32_t>(header_block_length));
 }
 
 std::string Http2FrameBuilder::dataBytes(uint32_t stream_id,

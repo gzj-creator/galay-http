@@ -145,6 +145,7 @@ public:
 
     // 编码头部列表
     std::string encode(const std::vector<Http2HeaderField>& headers);
+    std::string encodeStateless(const std::vector<Http2HeaderField>& headers);
 
     // 编码单个头部字段
     void encodeField(const Http2HeaderField& field, std::string& output);
@@ -176,6 +177,7 @@ private:
     // 编码永不索引的字面头部字段
     void encodeLiteralNeverIndexed(size_t name_index, const std::string& value, std::string& output);
     void encodeLiteralNeverIndexed(const std::string& name, const std::string& value, std::string& output);
+    void encodeFieldStateless(const Http2HeaderField& field, std::string& output);
 
     HpackDynamicTable m_dynamic_table;
     bool m_use_huffman = false;  // 是否使用 Huffman 编码

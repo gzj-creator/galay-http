@@ -88,7 +88,7 @@ public:
                 return true;
             }
 
-            size_t recv_bytes = result.value().size();
+            size_t recv_bytes = result.value();
             if (recv_bytes == 0) {
                 m_owner->setParseError(WsError(kWsConnectionClosed, "Connection closed by peer"));
                 return true;
@@ -128,7 +128,7 @@ public:
                     return true;
                 }
 
-                size_t recv_bytes = result.value().size();
+                size_t recv_bytes = result.value();
                 if (recv_bytes == 0) {
                     m_owner->setParseError(WsError(kWsConnectionClosed, "Connection closed by peer"));
                     return true;
@@ -551,7 +551,7 @@ public:
                 return true;
             }
 
-            size_t recv_bytes = result.value().size();
+            size_t recv_bytes = result.value();
             if (recv_bytes == 0) {
                 m_owner->setParseError(WsError(kWsConnectionClosed, "Connection closed by peer"));
                 return true;
@@ -591,7 +591,7 @@ public:
                     return true;
                 }
 
-                size_t recv_bytes = result.value().size();
+                size_t recv_bytes = result.value();
                 if (recv_bytes == 0) {
                     m_owner->setParseError(WsError(kWsConnectionClosed, "Connection closed by peer"));
                     return true;

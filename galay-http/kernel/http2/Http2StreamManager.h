@@ -60,6 +60,217 @@ struct PendingAction {
  */
 using Http2StreamHandler = std::function<Coroutine(Http2Stream::ptr)>;
 
+class Http2ActiveStreamBatch {
+public:
+    void mark(const Http2Stream::ptr& stream, Http2StreamEvent events) {
+        if (!stream || events == Http2StreamEvent::None) {
+            return;
+        }
+        stream->m_pending_events |= events;
+        if (stream->m_active_queued) {
+            return;
+        }
+        stream->m_active_queued = true;
+        m_ready.push_back(stream);
+    }
+
+    std::vector<Http2Stream::ptr> takeReady() {
+        std::vector<Http2Stream::ptr> ready;
+        ready.swap(m_ready);
+        return ready;
+    }
+
+    bool empty() const {
+        return m_ready.empty();
+    }
+
+private:
+    std::vector<Http2Stream::ptr> m_ready;
+};
+
+class Http2ActiveStreamMailbox {
+public:
+    using Batch = std::vector<Http2Stream::ptr>;
+    using BatchResult = std::optional<Batch>;
+
+    class RecvBatchAwaitable {
+    public:
+        RecvBatchAwaitable(Http2ActiveStreamMailbox* mailbox, size_t max_count)
+            : m_mailbox(mailbox)
+            , m_max_count(std::max<size_t>(max_count, 1))
+        {
+        }
+
+        bool await_ready() const noexcept {
+            return m_mailbox->m_closed || !m_mailbox->m_batches.empty();
+        }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) noexcept {
+            if (m_mailbox->m_closed || !m_mailbox->m_batches.empty()) {
+                return false;
+            }
+            m_mailbox->m_waiterHandle = handle;
+            m_mailbox->m_hasWaiter = true;
+            return true;
+        }
+
+        BatchResult await_resume() {
+            return m_mailbox->popBatch(m_max_count);
+        }
+
+    private:
+        Http2ActiveStreamMailbox* m_mailbox;
+        size_t m_max_count;
+    };
+
+    void sendBatch(Batch&& batch) {
+        if (m_closed || batch.empty()) {
+            return;
+        }
+        m_batches.push_back(std::move(batch));
+        wakeWaiter();
+    }
+
+    RecvBatchAwaitable recvBatch(
+        size_t max_count = galay::kernel::UnsafeChannel<Http2Stream::ptr>::DEFAULT_BATCH_SIZE) {
+        return RecvBatchAwaitable(this, max_count);
+    }
+
+    void close() {
+        if (m_closed) {
+            return;
+        }
+        m_closed = true;
+        wakeWaiter();
+    }
+
+    void reset() {
+        m_batches.clear();
+        m_closed = false;
+        m_hasWaiter = false;
+        m_waiterHandle = {};
+    }
+
+private:
+    friend class RecvBatchAwaitable;
+
+    BatchResult popBatch(size_t max_count) {
+        if (m_batches.empty()) {
+            if (m_closed) {
+                return std::nullopt;
+            }
+            return Batch{};
+        }
+
+        auto& front = m_batches.front();
+        if (front.size() <= max_count) {
+            Batch batch = std::move(front);
+            m_batches.pop_front();
+            return batch;
+        }
+
+        Batch batch;
+        batch.reserve(max_count);
+        auto split = front.begin() + static_cast<std::ptrdiff_t>(max_count);
+        std::move(front.begin(), split, std::back_inserter(batch));
+        front.erase(front.begin(), split);
+        return batch;
+    }
+
+    void wakeWaiter() {
+        if (!m_hasWaiter) {
+            return;
+        }
+        m_hasWaiter = false;
+        auto handle = m_waiterHandle;
+        m_waiterHandle = {};
+        if (handle) {
+            auto& waiter = handle.promise().coroutineRef();
+            if (waiter.belongScheduler()) {
+                waiter.resume();
+                return;
+            }
+            handle.resume();
+        }
+    }
+
+    std::deque<Batch> m_batches;
+    bool m_closed = false;
+    bool m_hasWaiter = false;
+    std::coroutine_handle<Coroutine::promise_type> m_waiterHandle;
+};
+
+class Http2ConnContext {
+public:
+    using ActiveStreamBatch = std::optional<std::vector<Http2Stream::ptr>>;
+
+    class GetActiveStreamsAwaitable {
+    public:
+        GetActiveStreamsAwaitable(Http2ConnContext* ctx, size_t max_count)
+            : m_ctx(ctx)
+            , m_recv_awaitable(ctx->m_mailbox->recvBatch(max_count))
+        {
+        }
+
+        bool await_ready() const noexcept {
+            return m_ctx->m_closed || m_recv_awaitable.await_ready();
+        }
+
+        template<typename Handle>
+        bool await_suspend(Handle handle) {
+            if (m_ctx->m_closed) {
+                return false;
+            }
+            return m_recv_awaitable.await_suspend(handle);
+        }
+
+        ActiveStreamBatch await_resume() {
+            if (m_ctx->m_closed) {
+                return std::nullopt;
+            }
+
+            auto result = m_recv_awaitable.await_resume();
+            if (!result) {
+                m_ctx->m_closed = true;
+                return std::nullopt;
+            }
+            return std::move(result.value());
+        }
+
+    private:
+        Http2ConnContext* m_ctx;
+        Http2ActiveStreamMailbox::RecvBatchAwaitable m_recv_awaitable;
+    };
+
+    explicit Http2ConnContext(Http2ActiveStreamMailbox& mailbox)
+        : m_mailbox(&mailbox)
+    {
+    }
+
+    Http2ConnContext(const Http2ConnContext&) = delete;
+    Http2ConnContext& operator=(const Http2ConnContext&) = delete;
+    Http2ConnContext(Http2ConnContext&&) = delete;
+    Http2ConnContext& operator=(Http2ConnContext&&) = delete;
+
+    auto getActiveStreams(
+        size_t max_count = galay::kernel::UnsafeChannel<Http2Stream::ptr>::DEFAULT_BATCH_SIZE) {
+        return GetActiveStreamsAwaitable(this, max_count);
+    }
+
+    bool isClosed() const {
+        return m_closed;
+    }
+
+private:
+    friend class GetActiveStreamsAwaitable;
+
+    Http2ActiveStreamMailbox* m_mailbox;
+    bool m_closed = false;
+};
+
+using Http2ActiveConnHandler = std::function<Coroutine(Http2ConnContext&)>;
+
 /**
  * @brief HTTP/2 流管理器
  *
@@ -72,6 +283,11 @@ template<typename SocketType>
 class Http2StreamManagerImpl
 {
 public:
+    struct BackgroundLoops {
+        Coroutine writer;
+        Coroutine monitor;
+    };
+
     class StartInBackgroundAwaitable
         : public galay::kernel::TimeoutSupport<StartInBackgroundAwaitable>
     {
@@ -86,12 +302,15 @@ public:
 
         template<typename Handle>
         bool await_suspend(Handle handle) {
-            if (!m_started) {
-                m_started = true;
-                m_wait_result.emplace(
-                    m_manager->startInBackgroundOnce(std::move(m_handler)).wait());
+            if (m_started) {
+                return false;
             }
-            return m_wait_result->await_suspend(handle);
+            m_started = true;
+            auto* scheduler = handle.promise().getCoroutine().belongScheduler();
+            if (scheduler) {
+                m_manager->startWithScheduler(scheduler, std::move(m_handler));
+            }
+            return false;
         }
 
         StartInBackgroundAwaitable& wait() & { return *this; }
@@ -103,7 +322,6 @@ public:
         Http2StreamManagerImpl* m_manager;
         Http2StreamHandler m_handler;
         bool m_started = false;
-        std::optional<galay::kernel::WaitResult> m_wait_result;
     };
 
     class ShutdownAwaitable
@@ -122,7 +340,7 @@ public:
         bool await_suspend(Handle handle) {
             if (!m_started) {
                 m_started = true;
-                m_wait_result.emplace(m_manager->shutdown(m_error).wait());
+                m_wait_result.emplace(m_manager->shutdownImpl(m_error).wait());
             }
             return m_wait_result->await_suspend(handle);
         }
@@ -142,6 +360,7 @@ public:
     Http2StreamManagerImpl(Http2ConnImpl<SocketType>& conn)
         : m_conn(conn)
         , m_running(false)
+        , m_send_channel(galay::kernel::UnsafeChannelWakeMode::Deferred)
     {
     }
 
@@ -154,46 +373,27 @@ public:
      * - Writer: 从 send channel 接收数据并写入 socket
      */
     Coroutine start(Http2StreamHandler handler) {
-        m_started = true;
-        m_running = true;
-        m_draining_handlers.store(false, std::memory_order_release);
-        m_reject_new_streams = false;
-        m_last_frame_recv_at = std::chrono::steady_clock::now();
-        m_waiting_ping_ack = false;
-
-        // 初始化自动分配的 stream ID
-        if (m_next_local_stream_id == 0) {
-            m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
-        }
-        m_conn.reserveStreams(
-            static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
-
-        // spawn writer 协程（后台运行），保存句柄用于等待结束
-        Coroutine writer = writerLoop();
-        co_await spawn(writer);
-
-        // 后台监控：PING 心跳 + SETTINGS ACK 超时
-        Coroutine monitor = monitorLoop();
-        co_await spawn(monitor);
-        m_writer_ready.notify();
-
-        // reader 协程在当前协程中运行
+        prepareForStart(false);
+        auto loops = createBackgroundLoops();
+        co_await startBackgroundLoops(loops).wait();
         co_await readerLoop(std::move(handler)).wait();
+        co_await finishForegroundRun(loops).wait();
+        co_return;
+    }
 
-        // reader 退出后，等待所有 handler 完成，避免 stream 使用已销毁的 manager
-        m_draining_handlers.store(true, std::memory_order_release);
-        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
-            co_await m_handler_waiter.wait();
-        }
+    Coroutine start(Http2ActiveConnHandler handler) {
+        prepareForStart(true);
+        auto loops = createBackgroundLoops();
+        co_await startBackgroundLoops(loops).wait();
 
-        m_running = false;
+        Http2ConnContext ctx(m_active_stream_mailbox);
+        m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
+        Coroutine active_handler = runActiveHandler(std::move(handler), &ctx);
+        co_await spawn(active_handler);
 
-        // reader 退出后，发送关闭信号给 writer，并等待其退出
-        m_send_channel.send(Http2OutgoingFrame{});
-        co_await writer.wait();
-        co_await monitor.wait();
-
-        m_stop_waiter.notify();
+        co_await readerLoop(nullptr).wait();
+        co_await finishForegroundRun(loops).wait();
+        co_await active_handler.wait();
         co_return;
     }
 
@@ -244,21 +444,10 @@ public:
      *          不需要协程上下文，可从 CustomAwaitable::await_resume() 等普通函数调用。
      */
     void startWithScheduler(galay::kernel::Scheduler* scheduler, Http2StreamHandler handler) {
-        m_started = true;
-        m_running = true;
-        m_draining_handlers.store(false, std::memory_order_release);
-        m_reject_new_streams = false;
-        m_last_frame_recv_at = std::chrono::steady_clock::now();
-        m_waiting_ping_ack = false;
-
-        if (m_next_local_stream_id == 0) {
-            m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
-        }
-        m_conn.reserveStreams(
-            static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
-
+        prepareForStart(false);
         scheduler->spawn(writerLoop());
         scheduler->spawn(monitorLoop());
+        m_writer_ready.notify();
         scheduler->spawn(readerLoopThenCleanup(std::move(handler)));
     }
 
@@ -276,7 +465,12 @@ public:
      * @brief 优雅关闭：发送 GOAWAY、关闭连接、等待 StreamManager 停止
      * @details 替代手动的 sendGoaway + conn.close() + waitStopped() 序列
      */
-    Coroutine shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
+    ShutdownAwaitable shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
+        return ShutdownAwaitable(this, error);
+    }
+
+private:
+    Coroutine shutdownImpl(Http2ErrorCode error = Http2ErrorCode::NoError) {
         if (!m_started) co_return;
 
         if (m_running) {
@@ -340,21 +534,61 @@ public:
                 stream->closeFrameQueue();
             });
 
-            // close() 设置 m_closing=true 并关闭 socket。
-            // readerLoop 的 readFramesBatch() 在 await_ready() 中检测到 closing，
-            // 不再挂起，直接返回错误，readerLoop 退出。
-            co_await m_conn.close();
+            // 先只触发 transport shutdown，保留现有 awaitable，
+            // 让 readerLoop 从 readFramesBatch() 正常收到 closing/peer-closed 并退出。
+            m_conn.initiateClose();
             if (m_running) {
                 co_await waitStopped();
             }
+            // readerLoop/Writer 全部退出后再真正 close fd，避免提前移除底层 READ/CUSTOM awaitable。
+            co_await m_conn.close();
         }
         co_return;
     }
 
-private:
-    Coroutine startInBackgroundOnce(Http2StreamHandler handler) {
-        co_await spawn(start(std::move(handler)));
-        co_await m_writer_ready.wait();
+    void prepareForStart(bool active_conn_mode) {
+        m_started = true;
+        m_running = true;
+        m_active_conn_mode = active_conn_mode;
+        m_active_stream_queue_closed = false;
+        m_active_stream_mailbox.reset();
+        m_draining_handlers.store(false, std::memory_order_release);
+        m_reject_new_streams = false;
+        m_last_frame_recv_at = std::chrono::steady_clock::now();
+        m_waiting_ping_ack = false;
+
+        if (m_next_local_stream_id == 0) {
+            m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
+        }
+        m_conn.reserveStreams(
+            static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
+    }
+
+    BackgroundLoops createBackgroundLoops() {
+        return BackgroundLoops{
+            .writer = writerLoop(),
+            .monitor = monitorLoop(),
+        };
+    }
+
+    Coroutine startBackgroundLoops(BackgroundLoops& loops) {
+        co_await spawn(loops.writer);
+        co_await spawn(loops.monitor);
+        m_writer_ready.notify();
+        co_return;
+    }
+
+    Coroutine finishForegroundRun(BackgroundLoops& loops) {
+        m_draining_handlers.store(true, std::memory_order_release);
+        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
+            co_await m_handler_waiter.wait();
+        }
+
+        m_running = false;
+        m_send_channel.send(Http2OutgoingFrame{});
+        co_await loops.writer.wait();
+        co_await loops.monitor.wait();
+        m_stop_waiter.notify();
         co_return;
     }
 
@@ -410,6 +644,100 @@ private:
         // GOAWAY（无论收到还是发出）不退出：GOAWAY 只表示不再有新流，
         // 已有流的帧仍需继续读取直到连接关闭（RFC 9113 §6.8）。
         while (true) {
+            if constexpr (!is_ssl_socket_v<SocketType>) {
+                if (m_active_conn_mode && !m_conn.isClient()) {
+                    auto frame_views_result = co_await m_conn.readFrameViewsBatch();
+
+                    if (!frame_views_result) {
+                        if (m_conn.isClosing() || m_conn.isPeerClosed()) {
+                            HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
+                                          m_conn.isPeerClosed() ? "peer-closed" : "closing",
+                                          m_conn.lastReadError());
+                            break;
+                        }
+                        if (frame_views_result.error() == Http2ErrorCode::NoError) {
+                            continue;
+                        }
+                        if (frame_views_result.error() == Http2ErrorCode::ProtocolError &&
+                            (m_conn.isPeerClosed() || m_conn.isClosing())) {
+                            HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
+                                          m_conn.isPeerClosed() ? "peer-closed" : "closing",
+                                          m_conn.lastReadError());
+                            break;
+                        }
+                        if (m_conn.lastReadError().empty()) {
+                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
+                                          http2ErrorCodeToString(frame_views_result.error()));
+                        } else {
+                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
+                                          http2ErrorCodeToString(frame_views_result.error()),
+                                          m_conn.lastReadError());
+                        }
+                        enqueueGoaway(frame_views_result.error());
+                        break;
+                    }
+
+                    bool exit_loop = false;
+                    auto& frame_views = *frame_views_result;
+                    for (auto& frame_view : frame_views) {
+                        const uint32_t stream_id = frame_view.streamId();
+                        m_last_frame_recv_at = std::chrono::steady_clock::now();
+
+                        HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv-raw] [type={}] [stream={}] [flags=0x{:02x}]",
+                                      http2FrameTypeToString(frame_view.header.type),
+                                      stream_id,
+                                      frame_view.header.flags);
+
+                        if (m_conn.isExpectingContinuation()) {
+                            if (!frame_view.isContinuation() ||
+                                stream_id != m_conn.continuationStreamId()) {
+                                enqueueGoaway(Http2ErrorCode::ProtocolError);
+                                exit_loop = true;
+                                break;
+                            }
+                        }
+
+                        if (frame_view.isConnectionFrame()) {
+                            auto frame = materializeFrameView(frame_view);
+                            if (!frame) {
+                                enqueueGoaway(frame.error());
+                                exit_loop = true;
+                                break;
+                            }
+                            handleConnectionFrame(std::move(*frame));
+                            continue;
+                        }
+
+                        if (tryDispatchServerActiveFrameView(std::move(frame_view))) {
+                            continue;
+                        }
+
+                        auto frame = materializeFrameView(frame_view);
+                        if (!frame) {
+                            enqueueGoaway(frame.error());
+                            exit_loop = true;
+                            break;
+                        }
+                        dispatchStreamFrame(std::move(*frame));
+                    }
+
+                    processPendingActions();
+                    flushActiveStreams();
+
+                    while (!m_pending_spawns.empty()) {
+                        auto stream = m_pending_spawns.top();
+                        m_pending_spawns.pop();
+                        m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
+                        co_await spawn(runHandler(handler, stream));
+                    }
+
+                    if (exit_loop) {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
             auto frames_result = co_await m_conn.readFramesBatch();
 
             if (!frames_result) {
@@ -441,6 +769,7 @@ private:
                 break;
             }
 
+            bool exit_loop = false;
             auto& frames = *frames_result;
             for (auto& frame : frames) {
                 uint32_t stream_id = frame->streamId();
@@ -453,7 +782,8 @@ private:
                 if (m_conn.isExpectingContinuation()) {
                     if (!frame->isContinuation() || stream_id != m_conn.continuationStreamId()) {
                         enqueueGoaway(Http2ErrorCode::ProtocolError);
-                        goto exit_loop;
+                        exit_loop = true;
+                        break;
                     }
                 }
 
@@ -470,6 +800,7 @@ private:
 
             // 处理 dispatchStreamFrame 中标记的待处理动作
             processPendingActions();
+            flushActiveStreams();
 
             // spawn 待处理的流 handler
             while (!m_pending_spawns.empty()) {
@@ -478,13 +809,16 @@ private:
                 m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
                 co_await spawn(runHandler(handler, stream));
             }
-        }
 
-    exit_loop:
+            if (exit_loop) {
+                break;
+            }
+        }
         // 关闭所有流的帧队列
         m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
             stream->closeFrameQueue();
         });
+        closeActiveStreamQueue();
 
         co_return;
     }
@@ -493,6 +827,18 @@ private:
         co_await handler(stream).wait();
         // 流处理完毕，从连接的流表中移除，释放 max_concurrent_streams 配额
         m_conn.removeStream(stream->streamId());
+        int remaining = m_active_handlers.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (remaining == 0 && m_draining_handlers.load(std::memory_order_acquire)) {
+            m_handler_waiter.notify();
+        }
+        co_return;
+    }
+
+    Coroutine runActiveHandler(Http2ActiveConnHandler handler, Http2ConnContext* ctx) {
+        co_await handler(*ctx).wait();
+        if (m_running && !m_conn.isClosing()) {
+            m_conn.initiateClose();
+        }
         int remaining = m_active_handlers.fetch_sub(1, std::memory_order_acq_rel) - 1;
         if (remaining == 0 && m_draining_handlers.load(std::memory_order_acquire)) {
             m_handler_waiter.notify();
@@ -555,12 +901,14 @@ private:
      * @details 使用 writev 批量发送多个帧，减少系统调用和内存拷贝
      */
     Coroutine writerLoop() {
-        // 预分配序列化缓冲区和 iovec 数组，避免每次循环分配
-        std::vector<std::string> frame_buffers;
-        std::vector<iovec> iovecs;
+        // 预分配待发送包和 iovec 数组，避免每次循环分配
+        std::vector<Http2OutgoingFrame> outgoing_batch;
+        std::vector<std::string> flattened_buffers;
+        IoVecWriteState write_state;
         std::vector<Http2OutgoingFrame::WaiterPtr> waiters;
-        frame_buffers.reserve(64);
-        iovecs.reserve(64);
+        outgoing_batch.reserve(64);
+        flattened_buffers.reserve(64);
+        write_state.reserve(64);
         waiters.reserve(64);
 
         while (true) {
@@ -570,14 +918,14 @@ private:
                 break;
             }
 
-            frame_buffers.clear();
-            iovecs.clear();
+            outgoing_batch.clear();
+            flattened_buffers.clear();
+            write_state.clear();
             waiters.clear();
 
-            // 先批量序列化，再构建 iovec，避免 vector 扩容导致 data() 指针失效。
             bool has_shutdown = false;
             auto collect_item = [&](Http2OutgoingFrame&& item) {
-                if (!item.frame && item.serialized.empty()) {
+                if (item.isEmpty()) {
                     // 收到关闭信号，先发送已有数据再退出
                     HTTP_LOG_DEBUG("[stream-mgr] [writer] [shutdown]");
                     has_shutdown = true;
@@ -586,11 +934,7 @@ private:
                 if (item.waiter) {
                     waiters.push_back(std::move(item.waiter));
                 }
-                if (!item.serialized.empty()) {
-                    frame_buffers.push_back(std::move(item.serialized));
-                } else {
-                    frame_buffers.push_back(item.frame->serialize());
-                }
+                outgoing_batch.push_back(std::move(item));
             };
 
             collect_item(std::move(item_result.value()));
@@ -603,26 +947,37 @@ private:
                 collect_item(std::move(next.value()));
             }
 
-            if (!frame_buffers.empty()) {
-                iovecs.reserve(frame_buffers.size());
-                for (auto& buffer : frame_buffers) {
-                    iovecs.push_back({
-                        .iov_base = buffer.data(),
-                        .iov_len = buffer.size()
-                    });
+            if (!outgoing_batch.empty()) {
+                flattened_buffers.reserve(outgoing_batch.size());
+                write_state.reserve(outgoing_batch.size() * 2);
+                for (auto& item : outgoing_batch) {
+                    if (item.frame) {
+                        flattened_buffers.push_back(item.frame->serialize());
+                        auto& buffer = flattened_buffers.back();
+                        write_state.append({
+                            .iov_base = buffer.data(),
+                            .iov_len = buffer.size()
+                        });
+                        continue;
+                    }
+
+                    std::array<struct iovec, 2> iovecs{};
+                    const size_t count = item.exportIovecs(iovecs);
+                    if (count == 0) {
+                        continue;
+                    }
+                    for (size_t i = 0; i < count; ++i) {
+                        write_state.append(iovecs[i]);
+                    }
                 }
             }
 
-            if (!iovecs.empty()) {
+            if (!write_state.empty()) {
                 if constexpr (requires(SocketType& socket, std::vector<iovec>& vec) { socket.writev(vec); }) {
                     // 支持 writev 的 socket（如 TcpSocket）：一次批量发送
-                    IoVecCursor write_cursor(iovecs);
-                    std::vector<iovec> submit_iovecs;
-                    submit_iovecs.reserve(iovecs.size());
-
-                    while (!write_cursor.empty()) {
-                        write_cursor.exportWindow(submit_iovecs);
-                        auto result = co_await m_conn.socket().writev(submit_iovecs);
+                    while (!write_state.empty()) {
+                        auto result = co_await m_conn.socket().writev(
+                            std::span<const struct iovec>(write_state.data(), write_state.count()));
                         if (!result) {
                             if (m_conn.isClosing() || m_conn.isPeerClosed() ||
                                 m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
@@ -648,7 +1003,7 @@ private:
                             co_return;
                         }
 
-                        if (write_cursor.advance(written) != written) {
+                        if (write_state.advance(written) != written) {
                             HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-advance-mismatch]");
                             for (auto& waiter : waiters) {
                                 if (waiter) {
@@ -657,10 +1012,15 @@ private:
                             }
                             co_return;
                         }
+                }
+            } else {
+                    // 不支持 writev 的 socket（如 SslSocket）：按包串行 flatten 后 send
+                    flattened_buffers.clear();
+                    flattened_buffers.reserve(outgoing_batch.size());
+                    for (const auto& item : outgoing_batch) {
+                        flattened_buffers.push_back(item.flatten());
                     }
-                } else {
-                    // 不支持 writev 的 socket（如 SslSocket）：按帧串行 send
-                    for (const auto& buffer : frame_buffers) {
+                    for (const auto& buffer : flattened_buffers) {
                         size_t offset = 0;
                         while (offset < buffer.size()) {
                             auto result = co_await m_conn.socket().send(buffer.data() + offset, buffer.size() - offset);
@@ -791,239 +1151,445 @@ private:
     /**
      * @brief 分发流级帧到对应 Http2Stream 的帧队列
      */
+    void enqueueGoawayAction(Http2ErrorCode error) {
+        m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, error});
+    }
+
+    void enqueueRstStreamAction(uint32_t stream_id, Http2ErrorCode error) {
+        m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, error});
+    }
+
+    void enqueueWindowUpdateAction(uint32_t stream_id, uint32_t increment) {
+        m_pending_actions.push_back({
+            PendingAction::Type::SendWindowUpdate, stream_id, Http2ErrorCode::NoError, increment});
+    }
+
+    Http2Stream::ptr findAttachedStream(uint32_t stream_id) {
+        if (m_hot_stream && m_hot_stream->streamId() == stream_id) {
+            return m_hot_stream;
+        }
+        auto stream = m_conn.getStream(stream_id);
+        attachStreamIO(stream);
+        rememberHotStream(stream);
+        return stream;
+    }
+
+    Http2Stream::ptr findOrCreateHeadersStream(uint32_t stream_id) {
+        auto stream = findAttachedStream(stream_id);
+        if (stream) {
+            return stream;
+        }
+
+        if (m_conn.isClient()) {
+            HTTP_LOG_WARN("[stream-mgr] [client] [headers] [unknown-stream={}]", stream_id);
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return nullptr;
+        }
+
+        if (m_reject_new_streams ||
+            (m_conn.isGoawaySent() && m_conn.goawayLastStreamId() != kMaxStreamId)) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::RefusedStream);
+            return nullptr;
+        }
+        if (stream_id <= m_conn.lastPeerStreamId()) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return nullptr;
+        }
+        if (m_conn.streamCount() >= m_conn.localSettings().max_concurrent_streams) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::RefusedStream);
+            return nullptr;
+        }
+
+        stream = createStreamInternal(stream_id);
+        m_conn.setLastPeerStreamId(stream_id);
+        return stream;
+    }
+
+    void decodeBufferedHeaders(const Http2Stream::ptr& stream) {
+        auto fields = m_conn.decoder().decode(stream->headerBlock());
+        if (fields) {
+            stream->setDecodedHeaders(std::move(fields.value()));
+        }
+        stream->clearHeaderBlock();
+        m_conn.setExpectingContinuation(false);
+    }
+
+    void completeReceivedHeaders(const Http2Stream::ptr& stream, bool end_stream) {
+        decodeBufferedHeaders(stream);
+
+        if (m_conn.isClient()) {
+            stream->consumeDecodedHeadersAsResponse();
+            auto events = Http2StreamEvent::HeadersReady;
+            if (end_stream) {
+                stream->markResponseCompleted();
+                events |= Http2StreamEvent::ResponseComplete;
+            }
+            markStreamActive(stream, events);
+            return;
+        }
+
+        stream->consumeDecodedHeadersAsRequest();
+        auto events = Http2StreamEvent::HeadersReady;
+        if (end_stream) {
+            stream->markRequestCompleted();
+            events |= Http2StreamEvent::RequestComplete;
+        }
+        if (m_active_conn_mode) {
+            markStreamActive(stream, events);
+        } else {
+            queueStreamHandler(stream);
+        }
+    }
+
+    void applyRecvWindowUpdate(const Http2Stream::ptr& stream, uint32_t stream_id, size_t data_size) {
+        auto update = m_conn.evaluateRecvWindowUpdate(stream->recvWindow(), data_size);
+        if (update.conn_increment > 0) {
+            enqueueWindowUpdateAction(0, update.conn_increment);
+            m_conn.adjustConnRecvWindow(static_cast<int32_t>(update.conn_increment));
+        }
+        if (update.stream_increment > 0) {
+            enqueueWindowUpdateAction(stream_id, update.stream_increment);
+            stream->adjustRecvWindow(static_cast<int32_t>(update.stream_increment));
+        }
+    }
+
+    void appendStreamDataAndMarkEvents(const Http2Stream::ptr& stream, Http2DataFrame* data) {
+        auto events = Http2StreamEvent::DataArrived;
+        if (m_conn.isClient()) {
+            stream->appendResponseData(data->data());
+            if (data->isEndStream()) {
+                stream->markResponseCompleted();
+                events |= Http2StreamEvent::ResponseComplete;
+            }
+        } else {
+            if (m_active_conn_mode) {
+                stream->appendRequestData(std::move(data->data()));
+            } else {
+                stream->appendRequestData(data->data());
+            }
+            if (data->isEndStream()) {
+                stream->markRequestCompleted();
+                events |= Http2StreamEvent::RequestComplete;
+            }
+        }
+        markStreamActive(stream, events);
+    }
+
+    void appendStreamDataAndMarkEvents(const Http2Stream::ptr& stream,
+                                       std::string_view data,
+                                       bool end_stream) {
+        auto events = Http2StreamEvent::DataArrived;
+        if (m_conn.isClient()) {
+            stream->appendResponseData(std::string(data));
+            if (end_stream) {
+                stream->markResponseCompleted();
+                events |= Http2StreamEvent::ResponseComplete;
+            }
+        } else {
+            stream->appendRequestData(data);
+            if (end_stream) {
+                stream->markRequestCompleted();
+                events |= Http2StreamEvent::RequestComplete;
+            }
+        }
+        markStreamActive(stream, events);
+    }
+
+    std::expected<Http2Frame::uptr, Http2ErrorCode> materializeFrameView(
+        const Http2RawFrameView& frame_view) {
+        auto bytes = frame_view.bytes();
+        return Http2FrameParser::parseFrame(
+            reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size());
+    }
+
+    bool handleRawHeadersFrameView(const Http2RawFrameView& frame_view, uint32_t stream_id) {
+        if ((frame_view.header.flags & Http2FrameFlags::kPadded) != 0 ||
+            (frame_view.header.flags & Http2FrameFlags::kPriority) != 0) {
+            return false;
+        }
+
+        auto stream = findOrCreateHeadersStream(stream_id);
+        if (!stream) {
+            return true;
+        }
+
+        if (!stream->canReceiveHeaders()) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::StreamClosed);
+            return true;
+        }
+
+        const bool end_headers = frame_view.endHeaders();
+        const bool end_stream = frame_view.endStream();
+        stream->onHeadersReceived(end_stream);
+        stream->appendHeaderBlock(frame_view.payload());
+
+        if (end_headers) {
+            completeReceivedHeaders(stream, end_stream);
+        } else {
+            m_conn.setExpectingContinuation(true, stream_id);
+        }
+
+        tryRetireClientStream(stream);
+        return true;
+    }
+
+    bool handleRawContinuationFrameView(const Http2RawFrameView& frame_view, uint32_t stream_id) {
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return true;
+        }
+
+        stream->appendHeaderBlock(frame_view.payload());
+
+        if (frame_view.endHeaders()) {
+            completeReceivedHeaders(stream, stream->isEndStreamReceived());
+        }
+
+        return true;
+    }
+
+    bool handleRawDataFrameView(const Http2RawFrameView& frame_view, uint32_t stream_id) {
+        if ((frame_view.header.flags & Http2FrameFlags::kPadded) != 0) {
+            return false;
+        }
+
+        if (stream_id == 0) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return true;
+        }
+
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::StreamClosed);
+            return true;
+        }
+        if (!stream->canReceiveData()) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::StreamClosed);
+            return true;
+        }
+
+        const auto payload = frame_view.payload();
+        const int32_t data_size = static_cast<int32_t>(payload.size());
+        stream->onDataReceived(frame_view.endStream());
+
+        m_conn.adjustConnRecvWindow(-data_size);
+        stream->adjustRecvWindow(-data_size);
+        applyRecvWindowUpdate(stream, stream_id, payload.size());
+        appendStreamDataAndMarkEvents(stream, payload, frame_view.endStream());
+
+        tryRetireClientStream(stream);
+        return true;
+    }
+
+    bool tryDispatchServerActiveFrameView(Http2RawFrameView&& frame_view) {
+        if (!m_active_conn_mode || m_conn.isClient()) {
+            return false;
+        }
+
+        const uint32_t stream_id = frame_view.streamId();
+
+        if (frame_view.isHeaders()) {
+            return handleRawHeadersFrameView(frame_view, stream_id);
+        }
+
+        if (frame_view.isContinuation()) {
+            return handleRawContinuationFrameView(frame_view, stream_id);
+        }
+
+        if (frame_view.isData()) {
+            return handleRawDataFrameView(frame_view, stream_id);
+        }
+
+        return false;
+    }
+
+    void handleHeadersFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        auto stream = findOrCreateHeadersStream(stream_id);
+        if (!stream) {
+            return;
+        }
+
+        if (!stream->canReceiveHeaders()) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::StreamClosed);
+            return;
+        }
+
+        auto* hdrs = frame->asHeaders();
+        if (hdrs->hasPriority()) {
+            stream->setPriority(hdrs->exclusive(), hdrs->streamDependency(), hdrs->weight());
+        }
+
+        const bool end_headers = hdrs->isEndHeaders();
+        const bool end_stream = hdrs->isEndStream();
+        stream->onHeadersReceived(end_stream);
+        stream->appendHeaderBlock(hdrs->headerBlock());
+
+        if (end_headers) {
+            completeReceivedHeaders(stream, end_stream);
+        } else {
+            m_conn.setExpectingContinuation(true, stream_id);
+        }
+
+        pushStreamFrameIfNeeded(stream, std::move(frame));
+        tryRetireClientStream(stream);
+    }
+
+    void handleContinuationFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return;
+        }
+
+        auto* cont = frame->asContinuation();
+        stream->appendHeaderBlock(cont->headerBlock());
+
+        if (cont->isEndHeaders()) {
+            completeReceivedHeaders(stream, stream->isEndStreamReceived());
+        }
+
+        pushStreamFrameIfNeeded(stream, std::move(frame));
+    }
+
+    void handleDataFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        if (stream_id == 0) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return;
+        }
+
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::StreamClosed);
+            return;
+        }
+        if (!stream->canReceiveData()) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::StreamClosed);
+            return;
+        }
+
+        auto* data = frame->asData();
+        const int32_t data_size = static_cast<int32_t>(data->data().size());
+        stream->onDataReceived(data->isEndStream());
+
+        m_conn.adjustConnRecvWindow(-data_size);
+        stream->adjustRecvWindow(-data_size);
+        applyRecvWindowUpdate(stream, stream_id, data->data().size());
+        appendStreamDataAndMarkEvents(stream, data);
+
+        pushStreamFrameIfNeeded(stream, std::move(frame));
+        tryRetireClientStream(stream);
+    }
+
+    void handlePriorityFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            return;
+        }
+
+        auto* prio = frame->asPriority();
+        stream->setPriority(prio->exclusive(), prio->streamDependency(), prio->weight());
+    }
+
+    void handleRstStreamFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        if (stream_id == 0) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return;
+        }
+
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            return;
+        }
+
+        stream->onRstStreamReceived();
+        HTTP_LOG_DEBUG("[stream-mgr] [stream] [rst] [id={}] [err={}]",
+                      stream_id, http2ErrorCodeToString(frame->asRstStream()->errorCode()));
+        markStreamActive(stream, Http2StreamEvent::Reset);
+        pushStreamFrameIfNeeded(stream, std::move(frame));
+        stream->markRequestCompleted();
+        stream->markResponseCompleted();
+        stream->closeFrameQueue();
+        tryRetireClientStream(stream);
+    }
+
+    void handleWindowUpdateFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        auto stream = findAttachedStream(stream_id);
+        if (!stream) {
+            return;
+        }
+
+        auto* wu = frame->asWindowUpdate();
+        const uint32_t increment = wu->windowSizeIncrement();
+        if (increment == 0) {
+            enqueueRstStreamAction(stream_id, Http2ErrorCode::ProtocolError);
+            return;
+        }
+
+        stream->adjustSendWindow(increment);
+        markStreamActive(stream, Http2StreamEvent::WindowUpdated);
+        pushStreamFrameIfNeeded(stream, std::move(frame));
+    }
+
+    void handlePushPromiseFrame(Http2Frame::uptr frame, uint32_t stream_id) {
+        if (!m_conn.isClient()) {
+            enqueueGoawayAction(Http2ErrorCode::ProtocolError);
+            return;
+        }
+
+        auto* pp = frame->asPushPromise();
+        const uint32_t promised_id = pp->promisedStreamId();
+        auto promised_stream = findAttachedStream(promised_id);
+        if (!promised_stream) {
+            promised_stream = createStreamInternal(promised_id);
+            promised_stream->setState(Http2StreamState::ReservedRemote);
+        }
+
+        pushStreamFrameIfNeeded(promised_stream, std::move(frame));
+        if (!m_active_conn_mode) {
+            queueStreamHandler(promised_stream);
+        }
+    }
+
     void dispatchStreamFrame(Http2Frame::uptr frame) {
-        uint32_t stream_id = frame->streamId();
+        const uint32_t stream_id = frame->streamId();
 
         if (stream_id == 0) {
             return;
         }
 
-        // HEADERS 帧
         if (frame->isHeaders()) {
-            auto stream = m_conn.getStream(stream_id);
-            attachStreamIO(stream);
-            if (!stream) {
-                if (m_conn.isClient()) {
-                    HTTP_LOG_WARN("[stream-mgr] [client] [headers] [unknown-stream={}]", stream_id);
-                    m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
-                    return;
-                }
-                // 服务端模式：对端发起的新请求
-                if (m_reject_new_streams ||
-                    (m_conn.isGoawaySent() && m_conn.goawayLastStreamId() != kMaxStreamId)) {
-                    m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::RefusedStream});
-                    return;
-                }
-                if (stream_id <= m_conn.lastPeerStreamId()) {
-                    m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
-                    return;
-                }
-                if (m_conn.streamCount() >= m_conn.localSettings().max_concurrent_streams) {
-                    m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::RefusedStream});
-                    return;
-                }
-                stream = createStreamInternal(stream_id);
-                m_conn.setLastPeerStreamId(stream_id);
-            }
-
-            if (!stream->canReceiveHeaders()) {
-                m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::StreamClosed});
-                return;
-            }
-
-            auto* hdrs = frame->asHeaders();
-            if (hdrs->hasPriority()) {
-                stream->setPriority(hdrs->exclusive(), hdrs->streamDependency(), hdrs->weight());
-            }
-
-            bool end_headers = hdrs->isEndHeaders();
-            bool end_stream = hdrs->isEndStream();
-            stream->onHeadersReceived(end_stream);
-            stream->appendHeaderBlock(hdrs->headerBlock());
-
-            if (end_headers) {
-                // HPACK 解码必须在 readerLoop 中按帧到达顺序执行，
-                // 不能延迟到各 handler 协程中并发解码（动态表会错乱）
-                auto fields = m_conn.decoder().decode(stream->headerBlock());
-                if (fields) {
-                    stream->setDecodedHeaders(std::move(fields.value()));
-                }
-                stream->clearHeaderBlock();
-                m_conn.setExpectingContinuation(false);
-                if (m_conn.isClient()) {
-                    stream->consumeDecodedHeadersAsResponse();
-                    if (end_stream) {
-                        stream->markResponseCompleted();
-                    }
-                } else {
-                    stream->consumeDecodedHeadersAsRequest();
-                    if (end_stream) {
-                        stream->markRequestCompleted();
-                    }
-                    // 服务端：新请求就绪，spawn handler
-                    queueStreamHandler(stream);
-                }
-            } else {
-                m_conn.setExpectingContinuation(true, stream_id);
-            }
-            stream->pushFrame(std::move(frame));
-            tryRetireClientStream(stream);
+            handleHeadersFrame(std::move(frame), stream_id);
             return;
         }
 
-        // CONTINUATION 帧
         if (frame->isContinuation()) {
-            auto stream = m_conn.getStream(stream_id);
-            attachStreamIO(stream);
-            if (!stream) {
-                m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
-                return;
-            }
-
-            auto* cont = frame->asContinuation();
-            bool end_headers = cont->isEndHeaders();
-            stream->appendHeaderBlock(cont->headerBlock());
-
-            if (end_headers) {
-                auto fields = m_conn.decoder().decode(stream->headerBlock());
-                if (fields) {
-                    stream->setDecodedHeaders(std::move(fields.value()));
-                }
-                stream->clearHeaderBlock();
-                m_conn.setExpectingContinuation(false);
-                if (m_conn.isClient()) {
-                    stream->consumeDecodedHeadersAsResponse();
-                } else {
-                    stream->consumeDecodedHeadersAsRequest();
-                    queueStreamHandler(stream);
-                }
-            }
-            stream->pushFrame(std::move(frame));
+            handleContinuationFrame(std::move(frame), stream_id);
             return;
         }
 
-        // DATA 帧
         if (frame->isData()) {
-            if (stream_id == 0) {
-                m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
-                return;
-            }
-
-            auto stream = m_conn.getStream(stream_id);
-            attachStreamIO(stream);
-            if (!stream) {
-                m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::StreamClosed});
-                return;
-            }
-
-            if (!stream->canReceiveData()) {
-                m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::StreamClosed});
-                return;
-            }
-
-            auto* data = frame->asData();
-            stream->onDataReceived(data->isEndStream());
-            int32_t data_size = static_cast<int32_t>(data->data().size());
-
-            // 流量控制
-            m_conn.adjustConnRecvWindow(-data_size);
-            stream->adjustRecvWindow(-data_size);
-
-            // 标记需要发送 WINDOW_UPDATE（策略可配置）
-            auto update = m_conn.evaluateRecvWindowUpdate(stream->recvWindow(), data->data().size());
-            if (update.conn_increment > 0) {
-                m_pending_actions.push_back({
-                    PendingAction::Type::SendWindowUpdate, 0, Http2ErrorCode::NoError, update.conn_increment});
-                m_conn.adjustConnRecvWindow(static_cast<int32_t>(update.conn_increment));
-            }
-            if (update.stream_increment > 0) {
-                m_pending_actions.push_back({
-                    PendingAction::Type::SendWindowUpdate, stream_id, Http2ErrorCode::NoError, update.stream_increment});
-                stream->adjustRecvWindow(static_cast<int32_t>(update.stream_increment));
-            }
-
-            if (m_conn.isClient()) {
-                stream->appendResponseData(data->data());
-                if (data->isEndStream()) {
-                    stream->markResponseCompleted();
-                }
-            } else {
-                stream->appendRequestData(data->data());
-                if (data->isEndStream()) {
-                    stream->markRequestCompleted();
-                }
-            }
-
-            stream->pushFrame(std::move(frame));
-            tryRetireClientStream(stream);
+            handleDataFrame(std::move(frame), stream_id);
             return;
         }
 
-        // PRIORITY 帧
         if (frame->isPriority()) {
-            auto stream = m_conn.getStream(stream_id);
-            attachStreamIO(stream);
-            if (stream) {
-                auto* prio = frame->asPriority();
-                stream->setPriority(prio->exclusive(), prio->streamDependency(), prio->weight());
-            }
+            handlePriorityFrame(std::move(frame), stream_id);
             return;
         }
 
-        // RST_STREAM 帧
         if (frame->isRstStream()) {
-            if (stream_id == 0) {
-                m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
-                return;
-            }
-            auto stream = m_conn.getStream(stream_id);
-            attachStreamIO(stream);
-            if (stream) {
-                stream->onRstStreamReceived();
-                HTTP_LOG_DEBUG("[stream-mgr] [stream] [rst] [id={}] [err={}]",
-                              stream_id, http2ErrorCodeToString(frame->asRstStream()->errorCode()));
-                stream->pushFrame(std::move(frame));
-                stream->markRequestCompleted();
-                stream->markResponseCompleted();
-                stream->closeFrameQueue();
-                tryRetireClientStream(stream);
-            }
+            handleRstStreamFrame(std::move(frame), stream_id);
             return;
         }
 
-        // WINDOW_UPDATE on stream > 0
         if (frame->isWindowUpdate()) {
-            auto stream = m_conn.getStream(stream_id);
-            attachStreamIO(stream);
-            if (stream) {
-                auto* wu = frame->asWindowUpdate();
-                uint32_t increment = wu->windowSizeIncrement();
-                if (increment == 0) {
-                    m_pending_actions.push_back({PendingAction::Type::SendRstStream, stream_id, Http2ErrorCode::ProtocolError});
-                    return;
-                }
-                stream->adjustSendWindow(increment);
-                stream->pushFrame(std::move(frame));
-            }
+            handleWindowUpdateFrame(std::move(frame), stream_id);
             return;
         }
 
-        // PUSH_PROMISE
         if (frame->isPushPromise()) {
-            if (!m_conn.isClient()) {
-                m_pending_actions.push_back({PendingAction::Type::SendGoaway, 0, Http2ErrorCode::ProtocolError});
-                return;
-            }
-            auto* pp = frame->asPushPromise();
-            uint32_t promised_id = pp->promisedStreamId();
-            auto promised_stream = m_conn.getStream(promised_id);
-            attachStreamIO(promised_stream);
-            if (!promised_stream) {
-                promised_stream = createStreamInternal(promised_id);
-                promised_stream->setState(Http2StreamState::ReservedRemote);
-            }
-            promised_stream->pushFrame(std::move(frame));
-            queueStreamHandler(promised_stream);
+            handlePushPromiseFrame(std::move(frame), stream_id);
             return;
         }
 
@@ -1088,6 +1654,40 @@ private:
         m_pending_spawns.push(stream);
     }
 
+    void markStreamActive(const Http2Stream::ptr& stream, Http2StreamEvent events) {
+        if (!m_active_conn_mode) {
+            return;
+        }
+        m_active_batch.mark(stream, events);
+    }
+
+    void closeActiveStreamQueue() {
+        if (!m_active_conn_mode || m_active_stream_queue_closed) {
+            return;
+        }
+        m_active_stream_queue_closed = true;
+        m_active_stream_mailbox.close();
+    }
+
+    void pushStreamFrameIfNeeded(const Http2Stream::ptr& stream, Http2Frame::uptr frame) {
+        if (!stream) {
+            return;
+        }
+        if (m_active_conn_mode) {
+            return;
+        }
+        stream->pushFrame(std::move(frame));
+    }
+
+    void flushActiveStreams() {
+        if (!m_active_conn_mode || m_active_batch.empty()) {
+            return;
+        }
+
+        auto ready = m_active_batch.takeReady();
+        m_active_stream_mailbox.sendBatch(std::move(ready));
+    }
+
     void tryRetireClientStream(const Http2Stream::ptr& stream) {
         if (!stream || !m_conn.isClient()) {
             return;
@@ -1102,8 +1702,18 @@ private:
     }
 
     Http2Stream::ptr createStreamInternal(uint32_t stream_id) {
-        auto stream = m_conn.createStream(stream_id);
+        Http2Stream::ptr stream;
+        if constexpr (!is_ssl_socket_v<SocketType>) {
+            if (m_active_conn_mode && !m_conn.isClient()) {
+                stream = m_conn.createStream(stream_id, m_stream_pool.acquire(stream_id));
+            } else {
+                stream = m_conn.createStream(stream_id);
+            }
+        } else {
+            stream = m_conn.createStream(stream_id);
+        }
         attachStreamIO(stream);
+        rememberHotStream(stream);
         return stream;
     }
 
@@ -1118,6 +1728,27 @@ private:
             return;
         }
         stream->attachIO(&m_send_channel, encoder, decoder);
+        if (m_active_conn_mode && !m_conn.isClient()) {
+            stream->setRetireCallback([this](uint32_t stream_id) {
+                clearHotStream(stream_id);
+                m_conn.removeStream(stream_id);
+            });
+        } else {
+            stream->setRetireCallback(nullptr);
+        }
+    }
+
+    void rememberHotStream(const Http2Stream::ptr& stream) {
+        if (!stream || !m_active_conn_mode || m_conn.isClient()) {
+            return;
+        }
+        m_hot_stream = stream;
+    }
+
+    void clearHotStream(uint32_t stream_id) {
+        if (m_hot_stream && m_hot_stream->streamId() == stream_id) {
+            m_hot_stream.reset();
+        }
     }
 
     Http2ConnImpl<SocketType>& m_conn;
@@ -1129,11 +1760,17 @@ private:
     std::atomic<int> m_active_handlers{0};
     std::atomic<bool> m_draining_handlers{false};
     galay::kernel::AsyncWaiter<void> m_handler_waiter;
+    Http2Stream::ptr m_hot_stream;
     bool m_reject_new_streams = false;
     std::chrono::steady_clock::time_point m_last_frame_recv_at{};
     std::chrono::steady_clock::time_point m_last_ping_sent_at{};
     std::array<uint8_t, 8> m_last_ping_payload{};
     bool m_waiting_ping_ack = false;
+    bool m_active_conn_mode = false;
+    bool m_active_stream_queue_closed = false;
+    Http2ActiveStreamBatch m_active_batch;
+    Http2ActiveStreamMailbox m_active_stream_mailbox;
+    Http2StreamPool m_stream_pool;
 
     // 发送通道：空指针表示关闭信号
     UnsafeChannel<Http2OutgoingFrame> m_send_channel;
