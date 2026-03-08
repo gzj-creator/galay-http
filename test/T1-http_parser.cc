@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstring>
 #include <vector>
+#include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
 #include "galay-http/protoc/http/HttpError.h"
@@ -41,6 +42,14 @@ static int g_failed = 0;
         g_passed++; \
     } while(0)
 
+static std::vector<struct iovec> readIovecs(const RingBuffer& buffer)
+{
+    auto borrowed = borrowReadIovecs(buffer);
+    std::vector<struct iovec> iovecs;
+    IoVecWindow::buildWindow(borrowed, iovecs);
+    return iovecs;
+}
+
 // ============ HttpRequest 测试 ============
 
 void test_request_complete_in_one_shot()
@@ -58,7 +67,7 @@ void test_request_complete_in_one_shot()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -86,7 +95,7 @@ void test_request_header_partial()
                         "Host: example";
     buffer.write(part1);
 
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request.fromIOVec(iovecs1);
 
     TEST_ASSERT(err1 == kNoError, "Should not error on partial header");
@@ -101,7 +110,7 @@ void test_request_header_partial()
                         "\r\n";
     buffer.write(part2);
 
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request.fromIOVec(iovecs2);
 
     TEST_ASSERT(err2 == kNoError, "Should parse without error");
@@ -129,7 +138,7 @@ void test_request_body_partial()
                         "12345";  // 只有5字节，需要20字节
     buffer.write(part1);
 
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request.fromIOVec(iovecs1);
 
     TEST_ASSERT(err1 == kNoError, "Should not error on partial body");
@@ -142,7 +151,7 @@ void test_request_body_partial()
     std::string part2 = "67890abcde";  // 再10字节
     buffer.write(part2);
 
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request.fromIOVec(iovecs2);
 
     TEST_ASSERT(err2 == kNoError, "Should not error");
@@ -155,7 +164,7 @@ void test_request_body_partial()
     std::string part3 = "fghij";  // 最后5字节
     buffer.write(part3);
 
-    auto iovecs3 = buffer.getReadIovecs();
+    auto iovecs3 = readIovecs(buffer);
     auto [err3, consumed3] = request.fromIOVec(iovecs3);
 
     TEST_ASSERT(err3 == kNoError, "Should parse without error");
@@ -192,7 +201,7 @@ void test_request_multiple_complete()
 
     // 解析第一个请求
     HttpRequest request1;
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request1.fromIOVec(iovecs1);
 
     TEST_ASSERT(err1 == kNoError, "Should parse first request");
@@ -203,7 +212,7 @@ void test_request_multiple_complete()
 
     // 解析第二个请求
     HttpRequest request2;
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request2.fromIOVec(iovecs2);
 
     TEST_ASSERT(err2 == kNoError, "Should parse second request");
@@ -214,7 +223,7 @@ void test_request_multiple_complete()
 
     // 解析第三个请求
     HttpRequest request3;
-    auto iovecs3 = buffer.getReadIovecs();
+    auto iovecs3 = readIovecs(buffer);
     auto [err3, consumed3] = request3.fromIOVec(iovecs3);
 
     TEST_ASSERT(err3 == kNoError, "Should parse third request");
@@ -246,7 +255,7 @@ void test_request_complete_and_partial()
 
     // 解析第一个完整请求
     HttpRequest request1;
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request1.fromIOVec(iovecs1);
 
     TEST_ASSERT(err1 == kNoError, "Should parse first request");
@@ -257,7 +266,7 @@ void test_request_complete_and_partial()
 
     // 尝试解析第二个不完整请求
     HttpRequest request2;
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request2.fromIOVec(iovecs2);
 
     TEST_ASSERT(err2 == kNoError, "Should not error on partial");
@@ -272,7 +281,7 @@ void test_request_complete_and_partial()
                        "\r\n";
     buffer.write(rest);
 
-    auto iovecs3 = buffer.getReadIovecs();
+    auto iovecs3 = readIovecs(buffer);
     auto [err3, consumed3] = request2.fromIOVec(iovecs3);
 
     TEST_ASSERT(err3 == kNoError, "Should parse completed request");
@@ -298,7 +307,7 @@ void test_request_no_body()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -322,7 +331,7 @@ void test_request_with_query_params()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -347,7 +356,7 @@ void test_request_reset()
                        "\r\n";
     buffer.write(req1);
 
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request.fromIOVec(iovecs1);
 
     TEST_ASSERT(request.isComplete(), "First request should be complete");
@@ -365,7 +374,7 @@ void test_request_reset()
                        "abc";
     buffer.write(req2);
 
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request.fromIOVec(iovecs2);
 
     TEST_ASSERT(request.isComplete(), "Second request should be complete");
@@ -393,7 +402,7 @@ void test_response_complete_in_one_shot()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = response.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -417,7 +426,7 @@ void test_response_header_partial()
                         "Content-Type: text/";
     buffer.write(part1);
 
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = response.fromIOVec(iovecs1);
 
     TEST_ASSERT(err1 == kNoError, "Should not error on partial");
@@ -433,7 +442,7 @@ void test_response_header_partial()
                         "Not Found";
     buffer.write(part2);
 
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = response.fromIOVec(iovecs2);
 
     TEST_ASSERT(err2 == kNoError, "Should parse without error");
@@ -456,7 +465,7 @@ void test_response_body_partial()
                         "0123456789";  // 只有10字节
     buffer.write(part1);
 
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = response.fromIOVec(iovecs1);
 
     TEST_ASSERT(err1 == kNoError, "Should not error");
@@ -469,7 +478,7 @@ void test_response_body_partial()
     std::string part2(90, 'x');  // 剩余90字节
     buffer.write(part2);
 
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = response.fromIOVec(iovecs2);
 
     TEST_ASSERT(err2 == kNoError, "Should parse without error");
@@ -505,7 +514,7 @@ void test_response_multiple_complete()
 
     // 解析第一个响应
     HttpResponse response1;
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = response1.fromIOVec(iovecs1);
 
     TEST_ASSERT(response1.isComplete(), "First response should be complete");
@@ -515,7 +524,7 @@ void test_response_multiple_complete()
 
     // 解析第二个响应
     HttpResponse response2;
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = response2.fromIOVec(iovecs2);
 
     TEST_ASSERT(response2.isComplete(), "Second response should be complete");
@@ -525,7 +534,7 @@ void test_response_multiple_complete()
 
     // 解析第三个响应
     HttpResponse response3;
-    auto iovecs3 = buffer.getReadIovecs();
+    auto iovecs3 = readIovecs(buffer);
     auto [err3, consumed3] = response3.fromIOVec(iovecs3);
 
     TEST_ASSERT(response3.isComplete(), "Third response should be complete");
@@ -551,7 +560,7 @@ void test_response_no_status_text()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = response.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -577,7 +586,7 @@ void test_request_bad_format()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kBadRequest, "Should return bad request error");
@@ -598,7 +607,7 @@ void test_response_invalid_status_code()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = response.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kHttpCodeInvalid, "Should return invalid code error");
@@ -620,7 +629,7 @@ void test_request_unsupported_version()
 
     buffer.write(raw);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kVersionNotSupport, "Should return version not support error");
@@ -649,7 +658,7 @@ void test_ringbuffer_wrap_around()
     buffer.write(req);
 
     HttpRequest request;
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
 
     // 验证iovec数量（环绕时应该是2个）
     TEST_ASSERT(iovecs.size() >= 1, "Should have at least 1 iovec");
@@ -682,7 +691,7 @@ void test_ringbuffer_header_split_across_wrap()
     buffer.write(req);
 
     HttpRequest request;
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
 
     auto [err, consumed] = request.fromIOVec(iovecs);
 
@@ -716,7 +725,7 @@ void test_ringbuffer_body_split_across_wrap()
     buffer.write(body);
 
     HttpRequest request;
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
 
     auto [err, consumed] = request.fromIOVec(iovecs);
 
@@ -743,7 +752,7 @@ void test_header_exactly_at_boundary()
 
     buffer.write(req);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -767,7 +776,7 @@ void test_body_exactly_content_length()
 
     buffer.write(req);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -794,7 +803,7 @@ void test_incremental_single_byte()
     for (size_t i = 0; i < req.size(); ++i) {
         buffer.write(std::string(1, req[i]));
 
-        auto iovecs = buffer.getReadIovecs();
+        auto iovecs = readIovecs(buffer);
         auto [err, consumed] = request.fromIOVec(iovecs);
 
         TEST_ASSERT(err == kNoError, "Should not error during incremental parse");
@@ -826,7 +835,7 @@ void test_large_body()
 
     buffer.write(req);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -850,7 +859,7 @@ void test_empty_header_value()
 
     buffer.write(req);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -884,21 +893,21 @@ void test_multiple_requests_with_partial_last()
 
     // 解析第一个
     HttpRequest request1;
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request1.fromIOVec(iovecs1);
     TEST_ASSERT(request1.isComplete(), "First should be complete");
     buffer.consume(consumed1);
 
     // 解析第二个
     HttpRequest request2;
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request2.fromIOVec(iovecs2);
     TEST_ASSERT(request2.isComplete(), "Second should be complete");
     buffer.consume(consumed2);
 
     // 解析第三个（不完整）
     HttpRequest request3;
-    auto iovecs3 = buffer.getReadIovecs();
+    auto iovecs3 = readIovecs(buffer);
     auto [err3, consumed3] = request3.fromIOVec(iovecs3);
     TEST_ASSERT(err3 == kNoError, "Should not error");
     TEST_ASSERT(consumed3 == static_cast<ssize_t>(req3_partial.length()), "Should return consumed bytes for partial request");
@@ -910,7 +919,7 @@ void test_multiple_requests_with_partial_last()
     std::string remaining(93, 'X');
     buffer.write(remaining);
 
-    auto iovecs4 = buffer.getReadIovecs();
+    auto iovecs4 = readIovecs(buffer);
     auto [err4, consumed4] = request3.fromIOVec(iovecs4);
     TEST_ASSERT(request3.isComplete(), "Third should now be complete");
 
@@ -931,7 +940,7 @@ void test_zero_content_length()
 
     buffer.write(req);
 
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -953,7 +962,7 @@ void test_header_split_in_middle_of_crlf()
                         "Host: localhost\r";
     buffer.write(part1);
 
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request.fromIOVec(iovecs1);
     TEST_ASSERT(consumed1 == static_cast<ssize_t>(part1.length()), "Should consume partial bytes");
 
@@ -964,7 +973,7 @@ void test_header_split_in_middle_of_crlf()
                         "\r\n";
     buffer.write(part2);
 
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request.fromIOVec(iovecs2);
     TEST_ASSERT(request.isComplete(), "Request should be complete");
 
@@ -986,25 +995,25 @@ void test_body_split_multiple_times()
 
     // 分多次写入body
     buffer.write("12345");  // 5字节
-    auto iovecs1 = buffer.getReadIovecs();
+    auto iovecs1 = readIovecs(buffer);
     auto [err1, consumed1] = request.fromIOVec(iovecs1);
     TEST_ASSERT(!request.isComplete(), "Should not be complete");
     buffer.consume(consumed1);  // 消费已解析的数据
 
     buffer.write("67890");  // 再5字节
-    auto iovecs2 = buffer.getReadIovecs();
+    auto iovecs2 = readIovecs(buffer);
     auto [err2, consumed2] = request.fromIOVec(iovecs2);
     TEST_ASSERT(!request.isComplete(), "Should not be complete");
     buffer.consume(consumed2);  // 消费已解析的数据
 
     buffer.write("abcdefghij");  // 再10字节
-    auto iovecs3 = buffer.getReadIovecs();
+    auto iovecs3 = readIovecs(buffer);
     auto [err3, consumed3] = request.fromIOVec(iovecs3);
     TEST_ASSERT(!request.isComplete(), "Should not be complete");
     buffer.consume(consumed3);  // 消费已解析的数据
 
     buffer.write("klmnopqrst");  // 最后10字节
-    auto iovecs4 = buffer.getReadIovecs();
+    auto iovecs4 = readIovecs(buffer);
     auto [err4, consumed4] = request.fromIOVec(iovecs4);
     TEST_ASSERT(request.isComplete(), "Should be complete");
     TEST_ASSERT(request.getBodyStr() == "1234567890abcdefghijklmnopqrst", "Body should match");
@@ -1027,7 +1036,7 @@ void test_request_lowercase_content_length()
                       "\r\n" + body;
 
     buffer.write(raw);
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = request.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -1053,7 +1062,7 @@ void test_response_chunked_case_insensitive()
                       "0\r\n\r\n";
 
     buffer.write(raw);
-    auto iovecs = buffer.getReadIovecs();
+    auto iovecs = readIovecs(buffer);
     auto [err, consumed] = response.fromIOVec(iovecs);
 
     TEST_ASSERT(err == kNoError, "Should parse without error");
@@ -1106,7 +1115,7 @@ void test_header_case_config_switch()
                           "hOsT: example.com\r\n"
                           "\r\n";
         buffer.write(raw);
-        auto [err, consumed] = request.fromIOVec(buffer.getReadIovecs());
+        auto [err, consumed] = request.fromIOVec(readIovecs(buffer));
 
         TEST_ASSERT(err == kNoError, "Parse should succeed");
         TEST_ASSERT(consumed == static_cast<ssize_t>(raw.size()), "Should consume full request");

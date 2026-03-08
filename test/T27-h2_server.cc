@@ -59,8 +59,8 @@ Coroutine handleStream(Http2Stream::ptr stream) {
 
 int main(int argc, char* argv[]) {
     uint16_t port = 9443;
-    std::string cert_path = "test.crt";
-    std::string key_path = "test.key";
+    std::string cert_path = "test/test.crt";
+    std::string key_path = "test/test.key";
 
     if (argc > 1) port = static_cast<uint16_t>(std::atoi(argv[1]));
     if (argc > 2) cert_path = argv[2];

@@ -51,7 +51,7 @@ Coroutine handleStream(Http2Stream::ptr stream) {
             .server("Galay-H2c-Echo/1.0").contentLength(req.body.size()),
         req.body.empty());
     if (!req.body.empty()) {
-        co_await stream->replyData(req.body, true);
+        co_await stream->replyData(req.takeSingleBodyChunk(), true);
     }
 
     co_return;

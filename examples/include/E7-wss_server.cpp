@@ -293,8 +293,8 @@ wscat -n -c wss://localhost:8443/ws
 
 int main(int argc, char* argv[]) {
     int port = 8443;
-    std::string cert_path = "test.crt";
-    std::string key_path = "test.key";
+    std::string cert_path = "test/test.crt";
+    std::string key_path = "test/test.key";
 
     if (argc > 1) port = std::atoi(argv[1]);
     if (argc > 2) cert_path = argv[2];

@@ -43,7 +43,7 @@ Coroutine handleStream(Http2Stream::ptr stream) {
 
     HTTP_LOG_INFO("[h2] [req] [{}] [{}] [stream={}]", req.method, req.path, stream->streamId());
 
-    std::string body = req.body.empty() ? "Echo: (empty)" : ("Echo: " + req.body);
+    std::string body = req.body.empty() ? "Echo: (empty)" : ("Echo: " + req.coalescedBody());
     co_await stream->replyHeader(
         Http2Headers()
             .status(200)
@@ -59,8 +59,8 @@ Coroutine handleStream(Http2Stream::ptr stream) {
 
 int main(int argc, char* argv[]) {
     int port = 9443;
-    std::string cert_path = "test.crt";
-    std::string key_path = "test.key";
+    std::string cert_path = "test/test.crt";
+    std::string key_path = "test/test.key";
 
     if (argc > 1) port = std::atoi(argv[1]);
     if (argc > 2) cert_path = argv[2];

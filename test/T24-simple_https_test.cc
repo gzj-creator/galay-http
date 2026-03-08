@@ -132,7 +132,7 @@ int main() {
     std::cout << "成功: " << g_success << ", 失败: " << g_fail << std::endl;
     std::cout << "==========================================" << std::endl;
 
-    return 0;
+    return g_fail.load() == 0 && g_success.load() == 20 ? 0 : 1;
 }
 
 #else

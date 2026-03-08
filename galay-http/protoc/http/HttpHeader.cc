@@ -345,6 +345,25 @@ namespace galay::http
 
     HttpErrorCode HeaderPair::removeHeaderPair(const std::string& key)
     {
+        if (m_mode == Mode::ServerSide) {
+            std::string normalized;
+            if (!hasUpperAscii(key)) {
+                normalized = key;
+            } else {
+                normalized = toLowerAscii(key);
+            }
+
+            CommonHeaderIndex idx = matchCommonHeader(normalized);
+            if (idx != CommonHeaderIndex::NotCommon) {
+                const size_t i = static_cast<size_t>(idx);
+                if (m_commonHeaderPresent.test(i)) {
+                    m_commonHeaders[i].clear();
+                    m_commonHeaderPresent.reset(i);
+                    return kNoError;
+                }
+            }
+        }
+
         auto it = findHeaderPairIter(m_mode, m_headerPairs, key);
         if (it == m_headerPairs.end()) {
             return kHeaderPairNotExist;
@@ -356,12 +375,22 @@ namespace galay::http
     HttpErrorCode HeaderPair::addHeaderPairIfNotExist(const std::string& key, const std::string& value)
     {
         if (m_mode == Mode::ServerSide) {
+            std::string normalized;
             if (!hasUpperAscii(key)) {
-                auto [it, inserted] = m_headerPairs.try_emplace(key, value);
-                (void)it;
-                return inserted ? kNoError : kHeaderPairExist;
+                normalized = key;
+            } else {
+                normalized = toLowerAscii(key);
             }
-            std::string normalized = toLowerAscii(key);
+
+            CommonHeaderIndex idx = matchCommonHeader(normalized);
+            if (idx != CommonHeaderIndex::NotCommon) {
+                if (hasCommonHeader(idx)) {
+                    return kHeaderPairExist;
+                }
+                setCommonHeader(idx, value);
+                return kNoError;
+            }
+
             auto [it, inserted] = m_headerPairs.try_emplace(std::move(normalized), value);
             (void)it;
             return inserted ? kNoError : kHeaderPairExist;

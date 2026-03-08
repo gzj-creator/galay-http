@@ -110,7 +110,7 @@ Coroutine keepAliveRequests(int conn_id, int requests_per_conn) {
     co_return;
 }
 
-void runKeepAliveTest(Runtime& rt, int total_requests, int connections, const std::string& test_name) {
+bool runKeepAliveTest(Runtime& rt, int total_requests, int connections, const std::string& test_name) {
     g_success = 0;
     g_fail = 0;
     g_completed = 0;
@@ -146,6 +146,8 @@ void runKeepAliveTest(Runtime& rt, int total_requests, int connections, const st
     std::cout << "成功率: " << success_rate << "%" << std::endl;
     std::cout << "耗时: " << duration_ms << "ms" << std::endl;
     std::cout << "QPS: " << qps << std::endl;
+
+    return g_fail.load() == 0 && g_success.load() == total_requests;
 }
 
 int main() {
@@ -157,20 +159,22 @@ int main() {
     Runtime rt = RuntimeBuilder().ioSchedulerCount(4).computeSchedulerCount(0).build();
     rt.start();
 
+    bool all_ok = true;
+
     // 测试1: 单连接 100 请求
-    runKeepAliveTest(rt, 100, 1, "测试1: 单连接 100请求");
+    all_ok = runKeepAliveTest(rt, 100, 1, "测试1: 单连接 100请求") && all_ok;
 
     // 测试2: 10连接 各100请求
-    runKeepAliveTest(rt, 1000, 10, "测试2: 10连接 各100请求");
+    all_ok = runKeepAliveTest(rt, 1000, 10, "测试2: 10连接 各100请求") && all_ok;
 
     // 测试3: 20连接 各100请求
-    runKeepAliveTest(rt, 2000, 20, "测试3: 20连接 各100请求");
+    all_ok = runKeepAliveTest(rt, 2000, 20, "测试3: 20连接 各100请求") && all_ok;
 
     // 测试4: 50连接 各100请求
-    runKeepAliveTest(rt, 5000, 50, "测试4: 50连接 各100请求");
+    all_ok = runKeepAliveTest(rt, 5000, 50, "测试4: 50连接 各100请求") && all_ok;
 
     // 测试5: 100连接 各100请求
-    runKeepAliveTest(rt, 10000, 100, "测试5: 100连接 各100请求");
+    all_ok = runKeepAliveTest(rt, 10000, 100, "测试5: 100连接 各100请求") && all_ok;
 
     rt.stop();
 
@@ -178,7 +182,7 @@ int main() {
     std::cout << "压测完成" << std::endl;
     std::cout << "==========================================" << std::endl;
 
-    return 0;
+    return all_ok ? 0 : 1;
 }
 
 #else

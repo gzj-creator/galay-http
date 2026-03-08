@@ -147,6 +147,56 @@ void test_server_side_common_header_lookup_api()
     TEST_PASS("Server-side common header lookup API");
 }
 
+void test_server_side_remove_common_header()
+{
+    std::cout << "\n=== Test: Server-side remove common header ===" << std::endl;
+
+    HeaderPair headers(HeaderPair::Mode::ServerSide);
+    headers.setCommonHeader(CommonHeaderIndex::Host, "example.com");
+    headers.setCommonHeader(CommonHeaderIndex::Connection, "close");
+
+    TEST_ASSERT(headers.removeHeaderPair("Host") == kNoError,
+                "Removing fast-path Host header should succeed");
+    TEST_ASSERT(headers.removeHeaderPair("connection") == kNoError,
+                "Removing fast-path Connection header should succeed");
+    TEST_ASSERT(!headers.hasKey("Host"),
+                "Removed fast-path Host header should not remain visible");
+    TEST_ASSERT(!headers.hasKey("connection"),
+                "Removed fast-path Connection header should not remain visible");
+    TEST_ASSERT(headers.getValue("Host").empty(),
+                "Removed fast-path Host header should not return a value");
+    TEST_ASSERT(headers.getValue("connection").empty(),
+                "Removed fast-path Connection header should not return a value");
+
+    std::string serialized = headers.toString();
+    TEST_ASSERT(serialized.find("host:") == std::string::npos,
+                "Serialized headers should not contain removed Host");
+    TEST_ASSERT(serialized.find("connection:") == std::string::npos,
+                "Serialized headers should not contain removed Connection");
+
+    TEST_PASS("Server-side remove common header");
+}
+
+void test_server_side_add_if_not_exist_respects_common_header()
+{
+    std::cout << "\n=== Test: Server-side add-if-not-exist respects common header ===" << std::endl;
+
+    HeaderPair headers(HeaderPair::Mode::ServerSide);
+    headers.setCommonHeader(CommonHeaderIndex::ContentLength, "9");
+
+    TEST_ASSERT(headers.addHeaderPairIfNotExist("Content-Length", "9") == kHeaderPairExist,
+                "Fast-path Content-Length should be treated as existing");
+
+    std::string serialized = headers.toString();
+    size_t first = serialized.find("content-length:");
+    TEST_ASSERT(first != std::string::npos,
+                "Serialized headers should contain Content-Length");
+    TEST_ASSERT(serialized.find("content-length:", first + 1) == std::string::npos,
+                "Serialized headers should not duplicate Content-Length");
+
+    TEST_PASS("Server-side add-if-not-exist respects common header");
+}
+
 void test_for_each_header()
 {
     std::cout << "\n=== Test: For each header ===" << std::endl;
@@ -433,6 +483,8 @@ int main()
     test_duplicate_header_merge();
     test_has_common_header();
     test_server_side_common_header_lookup_api();
+    test_server_side_remove_common_header();
+    test_server_side_add_if_not_exist_respects_common_header();
     test_for_each_header();
     test_for_each_header_empty();
     test_for_each_header_only_common();

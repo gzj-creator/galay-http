@@ -96,8 +96,8 @@ int main() {
         HttpsServer server(HttpsServerBuilder()
             .host("0.0.0.0")
             .port(8443)
-            .certPath("test.crt")
-            .keyPath("test.key")
+            .certPath("test/test.crt")
+            .keyPath("test/test.key")
             .ioSchedulerCount(8)
             .computeSchedulerCount(0)
             .build());

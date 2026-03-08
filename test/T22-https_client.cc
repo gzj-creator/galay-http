@@ -15,6 +15,10 @@ using namespace galay::kernel;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 
+static std::atomic<bool> g_done{false};
+static std::atomic<bool> g_success{false};
+static std::atomic<bool> g_failed{false};
+
 Coroutine testHttpsClient() {
     std::cout << "=== HTTPS Client Test ===" << std::endl;
 
@@ -28,6 +32,8 @@ Coroutine testHttpsClient() {
         auto connect_result = co_await client.connect("https://localhost:8443/");
         if (!connect_result) {
             std::cerr << "Connect failed: " << connect_result.error().message() << std::endl;
+            g_failed = true;
+            g_done = true;
             co_return;
         }
         std::cout << "TCP connection established" << std::endl;
@@ -37,7 +43,9 @@ Coroutine testHttpsClient() {
         auto handshake_result = co_await client.handshake();
         if (!handshake_result) {
             std::cerr << "SSL handshake failed: " << handshake_result.error().message() << std::endl;
+            g_failed = true;
             co_await client.close();
+            g_done = true;
             co_return;
         }
         std::cout << "SSL handshake completed" << std::endl;
@@ -56,7 +64,9 @@ Coroutine testHttpsClient() {
             auto send_result = co_await writer.sendRequest(request);
             if (!send_result) {
                 std::cerr << "Send failed: " << send_result.error().message() << std::endl;
+                g_failed = true;
                 co_await client.close();
+                g_done = true;
                 co_return;
             }
             if (send_result.value()) break;
@@ -82,6 +92,7 @@ Coroutine testHttpsClient() {
                 if (static_cast<int>(response.header().code()) != 0) {
                     std::cout << "Partial response received before connection closed" << std::endl;
                 }
+                g_failed = true;
                 break;
             }
             if (recv_result.value()) {
@@ -97,13 +108,21 @@ Coroutine testHttpsClient() {
         std::cout << "  Body length: " << response.getBodyStr().size() << std::endl;
         std::cout << "  Body: " << response.getBodyStr() << std::endl;
 
+        if (response.isComplete() && static_cast<int>(response.header().code()) == 200) {
+            g_success = true;
+        } else {
+            g_failed = true;
+        }
+
         co_await client.close();
         std::cout << "=== HTTPS Client Test Completed ===" << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "Exception: " << e.what() << std::endl;
+        g_failed = true;
     }
 
+    g_done = true;
     co_return;
 }
 
@@ -127,11 +146,13 @@ int main() {
     scheduler->spawn(testHttpsClient());
 
     // 等待测试完成
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    while (!g_done) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
 
     rt.stop();
 
-    return 0;
+    return g_success.load() && !g_failed.load() ? 0 : 1;
 }
 
 #else

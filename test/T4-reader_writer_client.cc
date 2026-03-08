@@ -159,12 +159,12 @@ Coroutine testClient(int test_id, std::string path) {
             break;
         }
 
-        auto& bytes = recvResult.value();
-        if (bytes.size() == 0) {
+        const size_t bytes = recvResult.value();
+        if (bytes == 0) {
             break;
         }
 
-        response.append(bytes.c_str(), bytes.size());
+        response.append(buffer, bytes);
 
         if (!header_ready) {
             header_ready = parseExpectedResponseSize(response, expected_size);
