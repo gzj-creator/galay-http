@@ -1,0 +1,16 @@
+out
+out/
+._*
+__MACOSX
+verify/build
+verify/build/
+src/*/build
+src/*/build/
+src/*/build-*
+src/*/cmake-build-*
+src/*/.git
+src/*/.git/
+src/*/.claude
+src/*/.claude/
+src/*/.worktrees
+src/*/.worktrees/
