@@ -3,6 +3,7 @@ set -euo pipefail
 
 readonly REPO_ROOT=/src
 readonly BUILD_ROOT=/tmp/galay-sdk-build
+readonly GALAY_DISABLE_IOURING="${GALAY_DISABLE_IOURING:-ON}"
 
 mkdir -p "${BUILD_ROOT}"
 
@@ -40,7 +41,7 @@ build_repo galay-utils \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_TESTS=OFF \
     -DBUILD_MODULE_TESTS=OFF \
-    -DDISABLE_IOURING=OFF
+    -DDISABLE_IOURING="${GALAY_DISABLE_IOURING}"
 
 build_repo galay-kernel \
     -DBUILD_TESTS=OFF \
@@ -48,7 +49,7 @@ build_repo galay-kernel \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_SHARED_LIBS=ON \
     -DENABLE_CPP23_MODULES=OFF \
-    -DDISABLE_IOURING=OFF
+    -DDISABLE_IOURING="${GALAY_DISABLE_IOURING}"
 
 build_repo galay-ssl \
     -DBUILD_TESTS=OFF \
@@ -56,7 +57,7 @@ build_repo galay-ssl \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_MODULE_EXAMPLES=OFF \
-    -DDISABLE_IOURING=OFF
+    -DDISABLE_IOURING="${GALAY_DISABLE_IOURING}"
 
 build_repo galay-http \
     -DBUILD_TESTS=OFF \
@@ -71,7 +72,7 @@ build_repo galay-rpc \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_MODULE_EXAMPLES=OFF \
     -DGALAY_RPC_INSTALL_MODULE_INTERFACE=OFF \
-    -DDISABLE_IOURING=OFF
+    -DDISABLE_IOURING="${GALAY_DISABLE_IOURING}"
 
 build_repo galay-mcp \
     -DBUILD_TESTS=OFF \
@@ -85,7 +86,7 @@ build_repo galay-redis \
     -DBUILD_EXAMPLES=OFF \
     -DGALAY_REDIS_ENABLE_IMPORT_COMPILATION=OFF \
     -DGALAY_REDIS_INSTALL_MODULE_INTERFACE=OFF \
-    -DDISABLE_IOURING=OFF
+    -DDISABLE_IOURING="${GALAY_DISABLE_IOURING}"
 
 build_repo galay-mysql \
     -DGALAY_MYSQL_BUILD_TESTS=OFF \
