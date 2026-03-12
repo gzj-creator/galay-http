@@ -1,8 +1,11 @@
-# HTTP/2 性能瓶颈分析报告
+# [历史档案] HTTP/2 性能瓶颈分析报告
 
-## 性能现状
+> 档案状态：本页保存一次历史性能分析快照，其中的 RPS、火焰图样本与对比结论未在 2026-03-10 文档修复中重新复现。
+> 使用规则：本页仅作调优背景材料；当前 benchmark target、运行命令和“是否为现行结论”的判断，以 `docs/05-性能测试.md` 为准。
 
-### RPS 对比
+## 历史快照
+
+### 当时采样的 RPS 对比
 - **Galay H2**: 56,700 RPS (落后 Go 28.3%, 落后 Rust 29.7%)
 - **Go H2**: 79,080 RPS
 - **Rust H2**: 80,610 RPS
@@ -13,12 +16,12 @@
 - **Go H2**: 15,905 samples (仅 36% 的样本数)
 - **Rust H2**: 63,399 samples (仅 14.5% 的样本数)
 
-**关键发现**: Galay 的样本数是 Go 的 2.8 倍，是 Rust 的 6.9 倍！
+**历史观察**: Galay 的样本数是 Go 的 2.8 倍，是 Rust 的 6.9 倍！
 这说明 Galay 在相同时间内执行了更多的函数调用，存在严重的 CPU 效率问题。
 
 ---
 
-## 核心瓶颈分析
+## 历史瓶颈分析
 
 ### 1. 协程调度开销过高 (最严重)
 
@@ -181,7 +184,7 @@ headers.reserve(16);  // 大多数请求 < 16 个 header
 **方案 B: 缓存常见 Header 的 HPACK 编码**
 ```cpp
 // 缓存常见 header 的编码结果
-static const auto cached_content_type_json = 
+static const auto cached_content_type_json =
     hpackEncode(":content-type", "application/json");
 
 // 直接使用缓存
@@ -258,14 +261,14 @@ SSL_write(ssl, buffer);
 ```cpp
 class Http2FramePool {
     std::vector<std::unique_ptr<Http2Frame>> pool;
-    
+
     Http2Frame* acquire() {
         if (pool.empty()) return new Http2Frame();
         auto frame = pool.back().release();
         pool.pop_back();
         return frame;
     }
-    
+
     void release(Http2Frame* frame) {
         frame->reset();
         pool.emplace_back(frame);

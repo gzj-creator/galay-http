@@ -1,271 +1,153 @@
 # Galay-HTTP
 
-高性能 **C++23** 协程 HTTP/WebSocket/HTTP2 库，构建于 `galay-kernel` 与 `galay-utils` 之上。
+高性能 `C++23` 协程 HTTP / WebSocket / HTTP/2 库，构建于 `galay-kernel` 之上。
 
-## 特性
+## 协议与支持边界
 
-- C++23 协程异步模型：统一 `co_await` 风格
-- HTTP/1.1：客户端、服务端、Router、静态文件挂载
-- WebSocket：`ws` / `wss`
-- HTTP/2：`h2c`（cleartext）
-- TLS：`https` / `wss`（启用 `GALAY_HTTP_ENABLE_SSL`）
-- C++23 命名模块：`galay.http` / `galay.http2` / `galay.websocket`
+下表以真实公开头、`examples/CMakeLists.txt`、`test/CMakeLists.txt` 与 `benchmark/CMakeLists.txt` 为准：
+
+| 能力 | 公开入口 | 构建条件 | 真实示例 / 测试 | 边界说明 |
+| --- | --- | --- | --- | --- |
+| HTTP/1.1 服务端 | `galay-http/kernel/http/HttpServer.h` | 默认启用 | `E1-EchoServer`、`E11-StaticServer`、`E12-HttpProxy` / `T5-http_server`、`T14-static_file_transfer_modes`、`T15-range_etag_server`、`T26-proxy_try_files_e2_e` | 标准明文 HTTP 服务面。 |
+| HTTP/1.1 客户端 | `galay-http/kernel/http/HttpClient.h` | 默认启用 | `E2-EchoClient` / `T6-http_client_awaitable`、`T7-http_client_awaitable_edge_cases`、`T16-http_client_timeout` | `HttpClient::connect()` 只接受 `http://`。 |
+| HTTPS | `galay-http/kernel/http/HttpServer.h`、`galay-http/kernel/http/HttpClient.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E5-HttpsServer`、`E6-HttpsClient` / `T21-https_server`、`T22-https_client`、`T23-https_stress_test`、`T24-simple_https_test` | `HttpsClient` 需要 `connect(url)` 之后显式 `co_await handshake()`。 |
+| WebSocket 客户端 (`ws`) | `galay-http/kernel/websocket/WsClient.h`、`galay-http/kernel/websocket/WsSession.h` | 默认启用 | `E4-WebsocketClient` / `T19-ws_client`、`T20-websocket_client` | 使用 `WsClient::connect()` 后通过 `session.upgrade()` 完成协议升级。 |
+| WebSocket 服务端 (`ws`) | `galay-http/kernel/http/HttpServer.h` + `galay-http/kernel/websocket/WsSession.h` | 默认启用 | `E3-WebsocketServer` / `T18-ws_server` | 仓库没有独立的 `WsServer` 公共类，服务端模式通过 HTTP Upgrade 组合实现。 |
+| WSS 客户端 | `galay-http/kernel/websocket/WsClient.h`、`galay-http/kernel/websocket/WsSession.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E8-WssClient` | `WssClient` 需要 `connect()` 后显式 `handshake()`，再 `session.upgrade()`。 |
+| WSS 服务端模式 | `galay-http/kernel/http/HttpServer.h` + `galay-http/kernel/websocket/WsUpgrade.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E7-WssServer` | 当前仓库没有独立 `WssServer` 公共类；`E7` 通过 `HttpsServer` + 手动帧处理工作，原因是示例注释明确指出 `SslSocket` 缺少 `readv` 支撑。 |
+| HTTP/2 cleartext (`h2c`) | `galay-http/kernel/http2/Http2Server.h`、`galay-http/kernel/http2/H2cClient.h` | 默认启用 | `E9-H2cEchoServer`、`E10-H2cEchoClient` / `T25-h2c_server`、`T25-h2c_client`、`T44-h2c_client_shutdown`、`T54-h2c_server_fast_path` | 客户端序列是 `connect(host, port)` → `upgrade(path)` → `get/post`。 |
+| HTTP/2 over TLS (`h2`) | `galay-http/kernel/http2/Http2Server.h`、`galay-http/kernel/http2/H2Client.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E13-H2EchoServer`、`E14-H2EchoClient` / `T27-h2_server`、`T28-h2_client`、`T29-h2_error_model` 至 `T56-h2_stream_pool` | `H2Client::connect(host, port)` 内部完成 TCP 连接、TLS 握手、ALPN=`h2` 校验与 preface 发送。 |
+| C++23 模块目标 | `galay-http/module/*.cppm` | `-DBUILD_MODULE_EXAMPLES=ON`、CMake `>= 3.28`、`Ninja`/`Visual Studio`、非 `AppleClang` | `galay-http-modules` | 这里构建的是模块库 target，不是额外的示例二进制。 |
 
 ## 文档导航
 
-完整文档位于 `docs/` 目录，建议按以下顺序阅读：
+`docs/` 的真实文件与阅读顺序如下：
 
-1. [快速开始](docs/01-快速开始.md) - 安装、编译、运行第一个示例
-2. [架构设计](docs/02-架构设计.md) - 理解设计理念和核心架构
-3. [API 文档](docs/03-API文档.md) - 完整的 API 参考手册
-4. [示例代码](docs/04-示例代码.md) - 常见使用场景的代码示例
-5. [高级主题](docs/05-高级主题.md) - 性能优化、中间件、安全性
-6. [常见问题](docs/06-常见问题.md) - 常见问题解答
-7. [性能测试](docs/07-性能测试.md) - 性能测试数据和基准测试
+1. [00-快速开始](docs/00-快速开始.md)
+2. [01-架构设计](docs/01-架构设计.md)
+3. [02-API参考](docs/02-API参考.md)
+4. [03-使用指南](docs/03-使用指南.md)
+5. [04-示例代码](docs/04-示例代码.md)
+6. [05-性能测试](docs/05-性能测试.md)
+7. [06-高级主题](docs/06-高级主题.md)
+8. [07-常见问题](docs/07-常见问题.md)
 
-更多详情请查看 [文档目录](docs/README.md)。
+文档总入口见 `docs/README.md`。
 
 ## 构建要求
 
-- CMake 3.22+
-- C++23 编译器（GCC 11+ / Clang 14+ / AppleClang 15+）
+- CMake `>= 3.22`
+- `C++23` 编译器
 - `spdlog`
 - `galay-kernel`
-- `galay-utils`
-- 可选：`galay-ssl` + OpenSSL（启用 TLS 时）
+- 启用 TLS 时额外需要 `galay-ssl` 与 OpenSSL
 
-## 依赖安装（macOS / Homebrew）
+默认选项由根 `CMakeLists.txt` 定义：
 
-```bash
-brew install cmake spdlog
-# 仅在开启 TLS 时需要
-brew install openssl
-```
+- `BUILD_TESTS=ON`
+- `BUILD_BENCHMARKS=ON`
+- `BUILD_EXAMPLES=ON`
+- `BUILD_MODULE_EXAMPLES=ON`
+- `GALAY_HTTP_ENABLE_SSL=OFF`
+- `GALAY_HTTP_DISABLE_FRAMEWORK_LOG=OFF`
 
-## 依赖安装（Ubuntu / Debian）
+## 构建命令
 
-```bash
-sudo apt-get update
-sudo apt-get install -y cmake g++ libspdlog-dev
-# 仅在开启 TLS 时需要
-sudo apt-get install -y libssl-dev
-```
-
-## 拉取源码（统一联调推荐）
+### 基础构建
 
 ```bash
-git clone https://github.com/gzj-creator/galay-kernel.git
-git clone https://github.com/gzj-creator/galay-utils.git
-git clone https://github.com/gzj-creator/galay-http.git
-# 可选：启用 TLS 时一并拉取
-git clone https://github.com/gzj-creator/galay-ssl.git
-```
-
-## 构建
-
-```bash
-mkdir -p build
-cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --parallel
-```
-
-## 常用 CMake 选项
-
-```cmake
-option(GALAY_HTTP_ENABLE_SSL "Enable SSL/TLS support (requires galay-ssl)" OFF)
-option(BUILD_MODULE_EXAMPLES "Build C++23 module(import/export) support target" ON)
-option(GALAY_HTTP_DISABLE_FRAMEWORK_LOG "Compile out framework logs (WS/HTTP/HTTPS/WSS/H2C/H2)" OFF)
-```
-
-> `BUILD_MODULE_EXAMPLES` 需要 CMake `>= 3.28` 且推荐 `Ninja`/`Visual Studio` 生成器。  
-> 当前 AppleClang 环境会自动关闭模块目标，避免构建失败。
-
-### 编译期关闭框架日志
-
-当你做性能压测时，建议直接在编译期裁剪框架日志（覆盖 `WS/HTTP/HTTPS/WSS/H2C/H2`）：
-
-```bash
-cmake -S . -B build-perf \
+cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
-  -DGALAY_HTTP_DISABLE_FRAMEWORK_LOG=ON
-cmake --build build-perf --parallel
+  -DBUILD_EXAMPLES=ON \
+  -DBUILD_TESTS=ON \
+  -DBUILD_BENCHMARKS=ON \
+  -DBUILD_MODULE_EXAMPLES=OFF
+cmake --build build --parallel
 ```
 
-说明：
+### TLS 构建
 
-- 该开关会定义 `GALAY_HTTP_DISABLE_ALL_LOG`，并将 `SPDLOG_ACTIVE_LEVEL` 设为 `SPDLOG_LEVEL_OFF`。
-- 日志调用点在编译阶段被裁剪，不再产生格式化/输出开销。
+当你需要 `https` / `wss` / `h2` 相关 API、示例、测试或 benchmark 时：
 
-## 模块接口
-
-项目提供 3 个命名模块接口文件：
-
-- `galay-http/module/galay.http.cppm`
-- `galay-http/module/galay.http2.cppm`
-- `galay-http/module/galay.websocket.cppm`
-
-`import` 示例：
-
-```cpp
-import galay.http;
-import galay.http2;
-import galay.websocket;
+```bash
+cmake -S . -B build-ssl \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DGALAY_HTTP_ENABLE_SSL=ON \
+  -DBUILD_EXAMPLES=ON \
+  -DBUILD_TESTS=ON \
+  -DBUILD_BENCHMARKS=ON \
+  -DBUILD_MODULE_EXAMPLES=OFF
+cmake --build build-ssl --parallel
 ```
 
-### 模块支持更新（2026-02）
+### 模块目标
 
-本次模块接口已统一为：
-
-- `module;`
-- `#include "galay-http/module/ModulePrelude.hpp"`
-- `export module ...;`
-- `export { #include ... }`
-
-对应文件：
-
-- `galay-http/module/galay.http.cppm`
-- `galay-http/module/galay.http2.cppm`
-- `galay-http/module/galay.websocket.cppm`
-- `galay-http/module/ModulePrelude.hpp`
-
-推荐构建（Clang 20 + Ninja）：
+`BUILD_MODULE_EXAMPLES` 实际控制的是 `galay-http-modules` 目标：
 
 ```bash
 cmake -S . -B build-mod -G Ninja \
-  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@20/bin/clang++ \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_MODULE_EXAMPLES=ON \
   -DGALAY_HTTP_ENABLE_SSL=OFF
 cmake --build build-mod --target galay-http-modules --parallel
 ```
 
-## Example（精简）
+## 示例与验证入口
 
-只保留核心示例：协议 Echo + 静态服务器 + Proxy。
+### 真实示例 target
 
-### Echo 示例
+所有示例 target 由 `examples/CMakeLists.txt` 显式定义，源码全部位于 `examples/include/`：
 
-- `E1-EchoServer` / `E2-EchoClient`：HTTP Echo
-- `E3-WebsocketServer` / `E4-WebsocketClient`：WebSocket Echo
-- `E5-HttpsServer` / `E6-HttpsClient`：HTTPS Echo（SSL）
-- `E7-WssServer` / `E8-WssClient`：WSS Echo（SSL）
-- `E9-H2cEchoServer` / `E10-H2cEchoClient`：H2c Echo
+- 明文：`E1-EchoServer`、`E2-EchoClient`、`E3-WebsocketServer`、`E4-WebsocketClient`、`E9-H2cEchoServer`、`E10-H2cEchoClient`、`E11-StaticServer`、`E12-HttpProxy`
+- TLS：`E5-HttpsServer`、`E6-HttpsClient`、`E7-WssServer`、`E8-WssClient`、`E13-H2EchoServer`、`E14-H2EchoClient`
 
-### 其他核心示例
+完整映射、源码路径、运行命令与关联测试见 `docs/04-示例代码.md`。
 
-- `E11-StaticServer`：静态文件服务器
-- `E12-HttpProxy`：HTTP 反向代理（支持和 `mount` 集成）
-
-## 快速运行
-
-### HTTP Echo
+### 常用运行命令
 
 ```bash
-# 终端 1
+# HTTP echo
 ./build/examples/E1-EchoServer 8080
-
-# 终端 2
 ./build/examples/E2-EchoClient http://127.0.0.1:8080/echo "hello"
-```
 
-### WebSocket Echo
-
-```bash
-# 终端 1
-./build/examples/E3-WebsocketServer
-
-# 终端 2
-./build/examples/E4-WebsocketClient ws://127.0.0.1:8080/ws
-```
-
-### H2c Echo
-
-```bash
-# 终端 1
+# h2c echo
 ./build/examples/E9-H2cEchoServer 9080
-
-# 终端 2
 ./build/examples/E10-H2cEchoClient 127.0.0.1 9080
+
+# HTTPS / h2
+./build-ssl/examples/E5-HttpsServer 8443 test/test.crt test/test.key
+./build-ssl/examples/E6-HttpsClient https://127.0.0.1:8443/
+./build-ssl/examples/E13-H2EchoServer 9443 test/test.crt test/test.key
+./build-ssl/examples/E14-H2EchoClient 127.0.0.1 9443
 ```
 
-### HTTP/2 新用法（h2 / h2c）
+### 正确的测试 target 名
 
-`h2` 与 `h2c` 已统一为 frame-first 流接口，推荐按帧驱动消费：
-
-```cpp
-auto stream = client.get("/");
-while (true) {
-    auto frame_result = co_await stream->getFrame();
-    if (!frame_result || !frame_result.value()) break;
-    auto frame = std::move(frame_result.value());
-    if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
-        break;
-    }
-}
-auto& resp = stream->response();
-```
-
-服务端响应建议使用：
-
-```cpp
-co_await stream->replyHeader(Http2Headers().status(200), false);
-co_await stream->replyData("ok", true);
-```
-
-最小回归命令（h2c + h2）：
+`test/CMakeLists.txt` 会直接把 `test/*.cc` 文件名去掉扩展名作为 target，因此大小写与分隔符必须和文件名一致：
 
 ```bash
-cmake --build build --target T25-H2cServer T25-H2cClient --parallel 4
-cmake --build build-ssl --target T27-H2Server T28-H2Client --parallel 4
+cmake --build build --target T25-h2c_server T25-h2c_client --parallel 4
+cmake --build build-ssl --target T21-https_server T22-https_client T27-h2_server T28-h2_client --parallel 4
 ```
 
-### 静态文件服务
+### 正确的 benchmark target 名
+
+`benchmark/CMakeLists.txt` 同样直接使用 `benchmark/*.cc` 文件名作为 target：
 
 ```bash
-./build/examples/E11-StaticServer 8090 ./html
-# 打开 http://127.0.0.1:8090/
+cmake --build build --target B1-HttpServer B11-H2cMuxClient B15-HeaderParsing --parallel 4
+cmake --build build-ssl --target B12-H2Server B13-H2Client B14-HttpsServer --parallel 4
 ```
 
-### 反向代理
-
-```bash
-# upstream
-./build/examples/E1-EchoServer 8080
-
-# proxy + mount (listen=8081, upstream=127.0.0.1:8080, /static -> ./html)
-./build/examples/E12-HttpProxy 8081 127.0.0.1 8080 /static ./html dynamic
-
-# request through proxy (falls back to upstream)
-curl -X POST http://127.0.0.1:8081/echo -d "via proxy"
-
-# request local static file (served by mount, not proxied)
-curl http://127.0.0.1:8081/static/ResumeDownload.html
-```
-
-参数说明（`E12-HttpProxy`）：
-
-```text
-E12-HttpProxy [listen_port] [upstream_host] [upstream_port]
-             [mount_prefix] [mount_dir] [mount_mode]
-
-mount_mode: dynamic(默认) | hard | nginx(try_files)
-关闭 mount: mount_prefix 或 mount_dir 传 none/off
-```
-
-## 项目结构
+## 目录结构
 
 ```text
 galay-http/
-├── galay-http/
-│   ├── kernel/        # http / http2 / websocket 核心实现
-│   ├── protoc/        # 协议数据结构（http/http2/websocket）
-│   ├── utils/         # builder / logger / utils
-│   └── module/        # C++23 命名模块接口
-├── examples/
-│   ├── common/        # 示例公共配置
-│   └── include/       # 示例实现（E1~E12）
-├── test/              # 测试（T*）
-├── benchmark/         # 压测（B*）
-└── docs/              # 主文档 + 测试/压测文档
+├── galay-http/         # 公开头与库实现
+├── examples/           # 示例源码与示例 CMake target
+├── test/               # 测试源码与测试 CMake target
+├── benchmark/          # benchmark 源码与 benchmark CMake target
+└── docs/               # 主文档
 ```
 
 ## 许可证

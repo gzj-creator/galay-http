@@ -1,41 +1,29 @@
 # 文档导航
 
-欢迎使用 Galay-HTTP 文档。建议按以下顺序阅读：
+本仓库文档以如下真相来源优先级维护：
 
-## 入门指南
+1. 公开头与导出 target
+2. 实现行为
+3. `examples/`
+4. `test/`
+5. `benchmark/`
+6. Markdown 文档
 
-1. [快速开始](01-快速开始.md) - 安装、编译、运行第一个示例
-2. [架构设计](02-架构设计.md) - 理解 Galay-HTTP 的设计理念和核心架构
+## 规范阅读顺序
 
-## 核心文档
+1. [00-快速开始](00-快速开始.md) - 安装依赖、配置构建、跑通第一个 HTTP / h2c / TLS 示例
+2. [01-架构设计](01-架构设计.md) - 库的目录组织、协程/Runtime 结构与协议分层
+3. [02-API参考](02-API参考.md) - 当前公开头对应的公共类型、builder 与生命周期语义
+4. [03-使用指南](03-使用指南.md) - 协议支持矩阵、TLS 调用顺序、h2/h2c 差异与已知限制
+5. [04-示例代码](04-示例代码.md) - 每个真实示例 target 的源码路径、运行命令、依赖条件与关联测试
+6. [05-性能测试](05-性能测试.md) - 每个真实 benchmark target 的源码路径、运行命令与“历史/当前”状态说明
+7. [06-高级主题](06-高级主题.md) - 高级构建与运行话题
+8. [07-常见问题](07-常见问题.md) - 常见故障排查
 
-3. [API 文档](03-API文档.md) - 完整的 API 参考手册
-4. [示例代码](04-示例代码.md) - 常见使用场景的代码示例
+## 按场景查阅
 
-## 进阶内容
-
-5. [高级主题](05-高级主题.md) - 性能优化、中间件、安全性等高级话题
-6. [常见问题](06-常见问题.md) - 常见问题解答
-
-## 性能测试
-
-7. [性能测试](07-性能测试.md) - 性能测试数据和基准测试
-
-## 快速链接
-
-- [GitHub 仓库](https://github.com/gzj-creator/galay-http)
-- [问题反馈](https://github.com/gzj-creator/galay-http/issues)
-- [示例代码目录](../examples/)
-
-## 相关项目
-
-- [galay-kernel](https://github.com/gzj-creator/galay-kernel) - 协程运行时
-- [galay-utils](https://github.com/gzj-creator/galay-utils) - 工具库
-- [galay-ssl](https://github.com/gzj-creator/galay-ssl) - TLS 支持
-- [galay-mysql](https://github.com/gzj-creator/galay-mysql) - MySQL 客户端
-
-## 文档更新
-
-最后更新：2026-02-24
-
-如有文档问题或建议，欢迎提交 Issue 或 PR。
+- 想先编译并验证仓库：看 `00-快速开始.md`
+- 想确认某个公共 API 是否还存在：看 `02-API参考.md`
+- 想确认协议能力边界：看 `03-使用指南.md`
+- 想找真实可运行示例：看 `04-示例代码.md`
+- 想找 benchmark 二进制和命令：看 `05-性能测试.md`
