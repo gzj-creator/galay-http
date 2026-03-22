@@ -37,7 +37,44 @@ struct ActiveClientGuard {
     ~ActiveClientGuard() { active_clients.fetch_sub(1); }
 };
 
-Coroutine handleResponse(Http2Stream::ptr stream) {
+struct BatchBarrier {
+    void addOne() {
+        remaining.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void completeOne() {
+        if (remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            done.notify();
+        }
+    }
+
+    bool hasPending() const {
+        return remaining.load(std::memory_order_acquire) > 0;
+    }
+
+    std::atomic<int> remaining{0};
+    AsyncWaiter<void> done;
+};
+
+struct BatchBarrierGuard {
+    explicit BatchBarrierGuard(std::shared_ptr<BatchBarrier> barrier)
+        : m_barrier(std::move(barrier))
+    {
+    }
+
+    ~BatchBarrierGuard() {
+        if (m_barrier) {
+            m_barrier->completeOne();
+        }
+    }
+
+private:
+    std::shared_ptr<BatchBarrier> m_barrier;
+};
+
+Task<void> handleResponse(Http2Stream::ptr stream, std::shared_ptr<BatchBarrier> barrier) {
+    BatchBarrierGuard guard(std::move(barrier));
+
     bool finished = false;
     while (!finished) {
         auto batch_result = co_await stream->getFrames(16);
@@ -72,11 +109,11 @@ Coroutine handleResponse(Http2Stream::ptr stream) {
     co_return;
 }
 
-Coroutine runClient(int id,
-                    const std::string& host,
-                    uint16_t port,
-                    int requests_per_client,
-                    int streams_per_batch) {
+Task<void> runClient(int id,
+                     const std::string& host,
+                     uint16_t port,
+                     int requests_per_client,
+                     int streams_per_batch) {
     (void)id;
     ActiveClientGuard guard;
 
@@ -102,8 +139,7 @@ Coroutine runClient(int id,
     streams_per_batch = std::max(1, streams_per_batch);
     for (int sent = 0; sent < requests_per_client; ) {
         const int batch = std::min(streams_per_batch, requests_per_client - sent);
-        std::vector<Coroutine> waiters;
-        waiters.reserve(batch);
+        auto barrier = std::make_shared<BatchBarrier>();
 
         for (int i = 0; i < batch; ++i) {
             auto stream = client.post("/echo", kEchoPayload, "text/plain");
@@ -112,12 +148,12 @@ Coroutine runClient(int id,
                 fail_count++;
                 continue;
             }
-            waiters.push_back(handleResponse(stream));
-            co_await spawn(waiters.back());
+            barrier->addOne();
+            co_await startDetachedTask(handleResponse(stream, barrier));
         }
 
-        for (auto& waiter : waiters) {
-            co_await waiter.wait();
+        if (barrier->hasPending()) {
+            co_await barrier->done.wait();
         }
 
         sent += batch;
@@ -160,7 +196,7 @@ void runBenchmark(const std::string& host,
 
     for (int i = 0; i < concurrent_clients; i++) {
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduleCoroutine(scheduler, runClient(i, host, port, requests_per_client, streams_per_batch));
+        scheduleTask(scheduler, runClient(i, host, port, requests_per_client, streams_per_batch));
     }
 
     std::cout << "压测进行中";

@@ -17,7 +17,7 @@ static std::atomic<bool> g_client_done{false};
 static std::atomic<int> g_successful_rounds{0};
 static std::atomic<int> g_active_deliveries{0};
 
-Coroutine activeConnHandler(Http2ConnContext& ctx) {
+Task<void> activeConnHandler(Http2ConnContext& ctx) {
     while (true) {
         auto streams = co_await ctx.getActiveStreams(16);
         if (!streams) {
@@ -49,7 +49,7 @@ Coroutine activeConnHandler(Http2ConnContext& ctx) {
     co_return;
 }
 
-Coroutine runClient(uint16_t port) {
+Task<void> runClient(uint16_t port) {
     H2cClient client(H2cClientBuilder().build());
 
     auto connect_result = co_await client.connect("127.0.0.1", port);
@@ -123,20 +123,17 @@ int main() {
 
     Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     runtime.start();
-    auto* scheduler = runtime.getNextIOScheduler();
-    if (!scheduler) {
-        std::cerr << "[T46] missing IO scheduler\n";
-        server.stop();
-        return 1;
-    }
-
-    scheduleCoroutine(scheduler, runClient(port));
+    auto join = runtime.spawn(runClient(port));
 
     for (int i = 0; i < 120; ++i) {
         if (g_client_done.load(std::memory_order_acquire)) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    if (g_client_done.load(std::memory_order_acquire)) {
+        join.join();
     }
 
     runtime.stop();

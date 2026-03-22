@@ -35,7 +35,7 @@ Http2ConnectionCore::TimerEvent Http2ConnectionCore::checkTimers(std::chrono::st
     return TimerEvent::None;
 }
 
-galay::kernel::Coroutine Http2ConnectionCore::run()
+galay::kernel::Task<void> Http2ConnectionCore::run()
 {
     H2DispatcherConnectionState dispatch_state;
     H2OutboundBudget budget;

@@ -56,7 +56,7 @@ void encodeServerFrame(std::string& out, WsFrame& frame) {
 /**
  * @brief 处理 WSS 连接（使用底层帧处理）
  */
-Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
+Task<void> handleWssConnection(galay::ssl::SslSocket& socket) {
     HTTP_LOG_DEBUG("[wss] [conn] [open]");
 
     std::string send_buffer;
@@ -155,7 +155,7 @@ cleanup:
 /**
  * @brief HTTPS 请求处理器（处理 WSS 升级）
  */
-Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
+Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     HTTP_LOG_DEBUG("[https] [handler] [start]");
     auto reader = conn.getReader();
     HttpRequest request;
@@ -202,7 +202,7 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
 
         // 获取底层 socket 并处理 WebSocket 连接
         auto& socket = conn.getSocket();
-        co_await handleWssConnection(socket).wait();
+        co_await handleWssConnection(socket);
         co_return;
     }
 

@@ -30,14 +30,14 @@ concept HasChunkedRequestBody = requires(T* stream) {
 int main() {
     static_assert(requires(H2cServerBuilder& builder) {
         builder.activeConnHandler(
-            [](auto&) -> galay::kernel::Coroutine { co_return; }
+            [](auto&) -> galay::kernel::Task<void> { co_return; }
         );
     }, "H2cServerBuilder must expose activeConnHandler(handler)");
 
 #ifdef GALAY_HTTP_SSL_ENABLED
     static_assert(requires(H2ServerBuilder& builder) {
         builder.activeConnHandler(
-            [](auto&) -> galay::kernel::Coroutine { co_return; }
+            [](auto&) -> galay::kernel::Task<void> { co_return; }
         );
     }, "H2ServerBuilder must expose activeConnHandler(handler)");
 #endif

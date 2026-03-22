@@ -17,7 +17,7 @@ using namespace galay::kernel;
 /**
  * @brief WebSocket 客户端协程
  */
-Coroutine runWebSocketClient(const std::string& url) {
+Task<void> runWebSocketClient(const std::string& url) {
     HTTP_LOG_INFO("Connecting to {}", url);
 
     // 1. 创建 WsClient
@@ -223,17 +223,8 @@ int main(int argc, char* argv[]) {
 
         HTTP_LOG_INFO("Runtime started");
 
-        // 获取调度器并启动 WebSocket 客户端协程
-        auto* scheduler = runtime.getNextIOScheduler();
-        if (!scheduler) {
-            HTTP_LOG_ERROR("No IO scheduler available");
-            return 1;
-        }
-
-        scheduleCoroutine(scheduler, runWebSocketClient(url));
-
-        // 等待足够的时间让 WebSocket 通信完成
-        std::this_thread::sleep_for(std::chrono::seconds(10));
+        auto join = runtime.spawn(runWebSocketClient(url));
+        join.join();
 
         // 停止 Runtime
         runtime.stop();

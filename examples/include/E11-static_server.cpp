@@ -10,7 +10,7 @@
 using namespace galay::http;
 using namespace galay::kernel;
 
-Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
+Task<void> indexHandler(HttpConn& conn, HttpRequest req) {
     (void)req;
     auto response = Http1_1ResponseBuilder::ok()
         .header("Server", "Galay-Static-Example/1.0")

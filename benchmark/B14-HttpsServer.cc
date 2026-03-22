@@ -25,7 +25,7 @@ void signalHandler(int) {
     g_running = false;
 }
 
-Coroutine handleHttpsRequest(HttpConnImpl<galay::ssl::SslSocket> conn) {
+Task<void> handleHttpsRequest(HttpConnImpl<galay::ssl::SslSocket> conn) {
     while (true) {
         auto reader = conn.getReader();
         auto writer = conn.getWriter();
@@ -120,4 +120,3 @@ int main() {
 }
 
 #endif
-

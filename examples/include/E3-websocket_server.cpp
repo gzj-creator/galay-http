@@ -40,7 +40,7 @@ using namespace std::chrono_literals;
  * @brief 处理 WebSocket 连接
  * @param ws_conn WebSocket 连接（通过引用传递）
  */
-Coroutine handleWebSocketConnection(WsConn& ws_conn) {
+Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     HTTP_LOG_INFO("[ws] [conn] [open]");
 
 
@@ -139,7 +139,7 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
  * @brief HTTP 请求处理器（处理 WebSocket 升级）
  * @param conn HTTP 连接
  */
-Coroutine handleHttpRequest(HttpConn conn) {
+Task<void> handleHttpRequest(HttpConn conn) {
     // 读取 HTTP 请求
     auto reader = conn.getReader();
     HttpRequest request;
@@ -196,7 +196,7 @@ Coroutine handleHttpRequest(HttpConn conn) {
         WsConn ws_conn = WsConn::from(std::move(conn), true);
 
         // 处理 WebSocket 连接（通过引用传递，避免移动导致引用失效）
-        co_await handleWebSocketConnection(ws_conn).wait();
+        co_await handleWebSocketConnection(ws_conn);
         co_return;
     }
 

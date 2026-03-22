@@ -14,7 +14,6 @@
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-ssl/ssl/SslContext.h"
 #include "galay-ssl/async/SslSocket.h"
@@ -44,8 +43,8 @@ using namespace galay::async;
 using namespace galay::kernel;
 
 template<typename SocketType>
-inline Coroutine runDefaultHttp1FallbackLoop(const char* log_tag,
-                                             galay::http::HttpConnImpl<SocketType>&& conn) {
+inline Task<void> runDefaultHttp1FallbackLoop(const char* log_tag,
+                                              galay::http::HttpConnImpl<SocketType>&& conn) {
     bool keep_alive = true;
     while (keep_alive) {
         galay::http::HttpRequest request;
@@ -214,7 +213,7 @@ inline std::string drainRingBuffer(RingBuffer& rb) {
 /**
  * @brief HTTP/1.1 降级处理器类型
  */
-using Http1FallbackHandler = std::function<Coroutine(
+using Http1FallbackHandler = std::function<Task<void>(
     galay::http::HttpConnImpl<TcpSocket>, galay::http::HttpRequestHeader)>;
 
 /**
@@ -303,14 +302,14 @@ private:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduleCoroutine(scheduler, serverLoop(scheduler));
+                scheduleTask(scheduler, serverLoop(scheduler));
             }
         }
 
         return true;
     }
 
-    Coroutine serverLoop(IOScheduler* scheduler) {
+    Task<void> serverLoop(IOScheduler* scheduler) {
         // Each serverLoop creates its own listener socket
         TcpSocket listener(IPType::IPV4);
 
@@ -366,7 +365,7 @@ private:
             }
 
             // Handle connection on the same scheduler
-            scheduleCoroutine(scheduler, handleConnection(std::move(client_socket)));
+            scheduleTask(scheduler, handleConnection(std::move(client_socket)));
         }
 
         co_return;
@@ -375,7 +374,7 @@ private:
     /**
      * @brief 处理新连接
      */
-    Coroutine handleConnection(TcpSocket socket) {
+    Task<void> handleConnection(TcpSocket socket) {
         Http2ConnImpl<TcpSocket> conn(std::move(socket));
 
         // 配置本地设置
@@ -384,7 +383,7 @@ private:
 
         DetectedProtocol protocol = DetectedProtocol::Unknown;
         galay::http::HttpRequestHeader upgrade_request;
-        co_await detectProtocol(conn, protocol, upgrade_request).wait();
+        co_await detectProtocol(conn, protocol, upgrade_request);
 
         switch (protocol) {
         case DetectedProtocol::H2cPriorKnowledge:
@@ -394,16 +393,16 @@ private:
             auto* mgr = conn.streamManager();
             HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
             if (m_active_conn_handler) {
-                co_await mgr->start(m_active_conn_handler).wait();
+                co_await mgr->start(m_active_conn_handler);
             } else {
-                co_await mgr->start(m_stream_handler).wait();
+                co_await mgr->start(m_stream_handler);
             }
             HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
             co_await conn.close();
             break;
         }
         case DetectedProtocol::Http1:
-            co_await handleHttp1Fallback(std::move(conn), std::move(upgrade_request)).wait();
+            co_await handleHttp1Fallback(std::move(conn), std::move(upgrade_request));
             break;
         default:
             HTTP_LOG_ERROR("[protocol] [detect-fail]");
@@ -414,7 +413,7 @@ private:
         co_return;
     }
 
-    Coroutine readAtLeast(Http2ConnImpl<TcpSocket>& conn, size_t n) {
+    Task<void> readAtLeast(Http2ConnImpl<TcpSocket>& conn, size_t n) {
         auto& rb = conn.ringBuffer();
         while (rb.readable() < n) {
             auto write_iovecs = borrowWriteIovecs(rb);
@@ -433,13 +432,13 @@ private:
      * @param protocol 输出协议类型
      * @param upgrade_request 输出首个 HTTP/1.1 请求头（Upgrade/Http1 路径）
      */
-    Coroutine detectProtocol(Http2ConnImpl<TcpSocket>& conn,
-                            DetectedProtocol& protocol,
-                            galay::http::HttpRequestHeader& upgrade_request) {
+    Task<void> detectProtocol(Http2ConnImpl<TcpSocket>& conn,
+                              DetectedProtocol& protocol,
+                              galay::http::HttpRequestHeader& upgrade_request) {
         protocol = DetectedProtocol::Unknown;
         auto& rb = conn.ringBuffer();
 
-        co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength).wait();
+        co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength);
         if (rb.readable() < kHttp2ConnectionPrefaceLength) {
             co_return;
         }
@@ -526,7 +525,7 @@ private:
                              header_data.size() - header_end - 4);
                 }
 
-                co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength).wait();
+                co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength);
                 if (rb.readable() < kHttp2ConnectionPrefaceLength) {
                     HTTP_LOG_ERROR("[preface] [recv-fail]");
                     co_return;
@@ -563,19 +562,19 @@ private:
         co_return;
     }
 
-    Coroutine handleHttp1Fallback(Http2ConnImpl<TcpSocket>&& h2_conn,
-                                  galay::http::HttpRequestHeader first_request_header) {
+    Task<void> handleHttp1Fallback(Http2ConnImpl<TcpSocket>&& h2_conn,
+                                   galay::http::HttpRequestHeader first_request_header) {
         galay::http::HttpConnImpl<TcpSocket> conn(
             std::move(h2_conn.socket()), std::move(h2_conn.ringBuffer()));
 
         if (m_http1_fallback) {
-            co_await m_http1_fallback(std::move(conn), std::move(first_request_header)).wait();
+            co_await m_http1_fallback(std::move(conn), std::move(first_request_header));
             co_return;
         }
 
         (void)first_request_header;
         // 默认行为：进入 HTTP/1.1 处理链路，而不是直接返回 505。
-        co_await runDefaultHttp1FallbackLoop("[h2c] [h1-fallback]", std::move(conn)).wait();
+        co_await runDefaultHttp1FallbackLoop("[h2c] [h1-fallback]", std::move(conn));
         co_return;
     }
 
@@ -733,7 +732,7 @@ public:
     }
 
     void setHttp1Fallback(
-        std::function<Coroutine(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> handler) {
+        std::function<Task<void>(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> handler) {
         m_http1_fallback = std::move(handler);
     }
 
@@ -811,7 +810,7 @@ private:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduleCoroutine(scheduler, serverLoop(scheduler));
+                scheduleTask(scheduler, serverLoop(scheduler));
             }
         }
         return true;
@@ -869,7 +868,7 @@ private:
         return true;
     }
 
-    Coroutine serverLoop(IOScheduler* scheduler) {
+    Task<void> serverLoop(IOScheduler* scheduler) {
         TcpSocket listener(IPType::IPV4);
 
         auto reuse_result = listener.option().handleReuseAddr();
@@ -920,15 +919,15 @@ private:
                 continue;
             }
 
-            scheduleCoroutine(scheduler, handleConnection(std::move(client_socket)));
+            scheduleTask(scheduler, handleConnection(std::move(client_socket)));
         }
 
         co_return;
     }
 
-    Coroutine readConnectionPreface(galay::ssl::SslSocket& socket,
-                                    std::array<char, kHttp2ConnectionPrefaceLength>& preface,
-                                    bool& ok) {
+    Task<void> readConnectionPreface(galay::ssl::SslSocket& socket,
+                                     std::array<char, kHttp2ConnectionPrefaceLength>& preface,
+                                     bool& ok) {
         ok = false;
         size_t received = 0;
         while (received < preface.size()) {
@@ -942,7 +941,7 @@ private:
         co_return;
     }
 
-    Coroutine handleConnection(galay::ssl::SslSocket socket) {
+    Task<void> handleConnection(galay::ssl::SslSocket socket) {
         auto handshake_result = co_await socket.handshake();
         if (!handshake_result) {
             HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
@@ -954,14 +953,14 @@ private:
         if (alpn != "h2") {
             HTTP_LOG_INFO("[h2] [alpn-fallback] [to=http/1.1] [got={}]",
                           alpn.empty() ? "(empty)" : alpn);
-            co_await handleHttp1Fallback(std::move(socket)).wait();
+            co_await handleHttp1Fallback(std::move(socket));
             co_return;
         }
         HTTP_LOG_DEBUG("[h2] [alpn-ok]");
 
         std::array<char, kHttp2ConnectionPrefaceLength> preface{};
         bool preface_ok = false;
-        co_await readConnectionPreface(socket, preface, preface_ok).wait();
+        co_await readConnectionPreface(socket, preface, preface_ok);
         if (!preface_ok ||
             std::memcmp(preface.data(), kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
             HTTP_LOG_ERROR("[h2] [preface-invalid]");
@@ -984,22 +983,22 @@ private:
         auto* mgr = conn.streamManager();
         HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
         if (m_active_conn_handler) {
-            co_await mgr->start(m_active_conn_handler).wait();
+            co_await mgr->start(m_active_conn_handler);
         } else {
-            co_await mgr->start(m_stream_handler).wait();
+            co_await mgr->start(m_stream_handler);
         }
         HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
         co_await conn.close();
         co_return;
     }
 
-    Coroutine handleHttp1Fallback(galay::ssl::SslSocket socket) {
+    Task<void> handleHttp1Fallback(galay::ssl::SslSocket socket) {
         galay::http::HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket));
         if (m_http1_fallback) {
-            co_await m_http1_fallback(std::move(conn)).wait();
+            co_await m_http1_fallback(std::move(conn));
             co_return;
         }
-        co_await runDefaultHttp1FallbackLoop("[h2] [h1-fallback]", std::move(conn)).wait();
+        co_await runDefaultHttp1FallbackLoop("[h2] [h1-fallback]", std::move(conn));
         co_return;
     }
 
@@ -1008,7 +1007,7 @@ private:
     H2ServerConfig m_config;
     Http2ConnectionHandler m_stream_handler;
     Http2ActiveConnHandler m_active_conn_handler;
-    std::function<Coroutine(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> m_http1_fallback;
+    std::function<Task<void>(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> m_http1_fallback;
     std::atomic<bool> m_running;
     galay::ssl::SslContext m_ssl_ctx;
 };

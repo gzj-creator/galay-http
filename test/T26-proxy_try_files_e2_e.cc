@@ -22,7 +22,7 @@ using namespace galay::kernel;
 
 namespace {
 
-Coroutine upstreamEcho(HttpConn& conn, HttpRequest req)
+Task<void> upstreamEcho(HttpConn& conn, HttpRequest req)
 {
     auto response = Http1_1ResponseBuilder::ok()
         .header("Server", "E2E-Upstream/1.0")
@@ -37,7 +37,7 @@ Coroutine upstreamEcho(HttpConn& conn, HttpRequest req)
     co_return;
 }
 
-Coroutine upstreamCatchAll(HttpConn& conn, HttpRequest req)
+Task<void> upstreamCatchAll(HttpConn& conn, HttpRequest req)
 {
     auto response = Http1_1ResponseBuilder::ok()
         .header("Server", "E2E-Upstream/1.0")
@@ -52,7 +52,7 @@ Coroutine upstreamCatchAll(HttpConn& conn, HttpRequest req)
     co_return;
 }
 
-Coroutine upstreamHeaders(HttpConn& conn, HttpRequest req)
+Task<void> upstreamHeaders(HttpConn& conn, HttpRequest req)
 {
     auto& headers = req.header().headerPairs();
     const std::string host = headers.getValue("Host");
@@ -82,7 +82,7 @@ Coroutine upstreamHeaders(HttpConn& conn, HttpRequest req)
     co_return;
 }
 
-Coroutine upstreamConnPort(HttpConn& conn, HttpRequest req)
+Task<void> upstreamConnPort(HttpConn& conn, HttpRequest req)
 {
     (void)req;
     uint16_t remote_port = 0;
@@ -108,12 +108,12 @@ Coroutine upstreamConnPort(HttpConn& conn, HttpRequest req)
     co_return;
 }
 
-Coroutine upstreamStream(HttpConn& conn, HttpRequest req)
+Task<void> upstreamStream(HttpConn& conn, HttpRequest req)
 {
     (void)req;
     auto writer = conn.getWriter();
 
-    auto send_blob = [&writer](std::string blob) -> Coroutine {
+    auto send_blob = [&writer](std::string blob) -> Task<void> {
         auto result = co_await writer.send(std::move(blob));
         if (!result) {
             co_return;
@@ -127,10 +127,10 @@ Coroutine upstreamStream(HttpConn& conn, HttpRequest req)
         "Content-Type: text/plain\r\n"
         "Transfer-Encoding: chunked\r\n"
         "Connection: close\r\n"
-        "\r\n").wait();
-    co_await send_blob("5\r\nhello\r\n").wait();
-    co_await send_blob("5\r\nworld\r\n").wait();
-    co_await send_blob("0\r\n\r\n").wait();
+        "\r\n");
+    co_await send_blob("5\r\nhello\r\n");
+    co_await send_blob("5\r\nworld\r\n");
+    co_await send_blob("0\r\n\r\n");
     co_return;
 }
 

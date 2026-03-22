@@ -18,7 +18,7 @@
 using namespace galay::http2;
 using namespace galay::kernel;
 
-Coroutine runClient(const std::string& host, uint16_t port) {
+Task<void> runClient(const std::string& host, uint16_t port) {
     H2Client client(H2ClientBuilder()
         .verifyPeer(false)
         .build());
@@ -103,8 +103,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    scheduleCoroutine(scheduler, runClient(host, port));
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    auto join = runtime.spawn(runClient(host, port));
+    join.join();
     runtime.stop();
     return 0;
 }

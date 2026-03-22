@@ -58,7 +58,7 @@ static uint32_t toLatencyUs(std::chrono::steady_clock::duration duration) {
 /**
  * @brief 单个 WSS 客户端压测协程
  */
-Coroutine benchmarkWssClient(
+Task<void> benchmarkWssClient(
     int client_id,
     const std::string& url,
     const std::string& message_payload,
@@ -284,7 +284,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Failed to get IO scheduler for client " << i << "\n";
                 return 1;
             }
-            scheduleCoroutine(scheduler, benchmarkWssClient(i, url, message_payload, end_time));
+            scheduleTask(scheduler, benchmarkWssClient(i, url, message_payload, end_time));
         }
 
         std::cout << "Running for " << duration_sec << " seconds...\n";

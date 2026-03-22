@@ -14,7 +14,7 @@ using namespace galay::kernel;
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 
-Coroutine httpsClientExample(const std::string& url) {
+Task<void> httpsClientExample(const std::string& url) {
     std::cout << "Connecting to " << url << "...\n";
 
     HttpsClient client(HttpsClientBuilder()
@@ -104,15 +104,8 @@ int main(int argc, char* argv[]) {
     Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
 
-    auto* scheduler = rt.getNextIOScheduler();
-    if (!scheduler) {
-        std::cerr << "No IO scheduler available\n";
-        return 1;
-    }
-
-    scheduleCoroutine(scheduler, httpsClientExample(url));
-
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    auto join = rt.spawn(httpsClientExample(url));
+    join.join();
 
     rt.stop();
 

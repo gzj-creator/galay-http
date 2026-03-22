@@ -11,6 +11,4 @@
 #include "/usr/local/include/galay-kernel/kernel/Runtime.h"
 #endif
 
-#include "galay-kernel/kernel/Coroutine.h"
-
 #endif // GALAY_HTTP_KERNEL_RUNTIME_COMPAT_H

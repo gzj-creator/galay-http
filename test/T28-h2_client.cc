@@ -21,9 +21,8 @@ using namespace galay::http2;
 
 static std::atomic<int> g_success{0};
 static std::atomic<int> g_fail{0};
-static std::atomic<bool> g_done{false};
 
-Coroutine runClient(const std::string& host, uint16_t port, int num_requests) {
+Task<void> runClient(const std::string& host, uint16_t port, int num_requests) {
     H2Client client(H2ClientBuilder()
         .verifyPeer(false)
         .build());
@@ -32,7 +31,6 @@ Coroutine runClient(const std::string& host, uint16_t port, int num_requests) {
     if (!connect_result) {
         std::cerr << "[connect-fail] " << static_cast<int>(connect_result.error()) << "\n";
         g_fail += num_requests;
-        g_done = true;
         co_return;
     }
 
@@ -42,7 +40,6 @@ Coroutine runClient(const std::string& host, uint16_t port, int num_requests) {
         std::cerr << "[alpn-fail] expected h2, got " << alpn << "\n";
         g_fail += num_requests;
         co_await client.close();
-        g_done = true;
         co_return;
     }
 
@@ -73,7 +70,6 @@ Coroutine runClient(const std::string& host, uint16_t port, int num_requests) {
     }
 
     co_await client.close();
-    g_done = true;
     co_return;
 }
 
@@ -102,11 +98,8 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    scheduleCoroutine(scheduler, runClient(host, port, requests));
-
-    while (!g_done) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    auto join = runtime.spawn(runClient(host, port, requests));
+    join.join();
 
     runtime.stop();
 

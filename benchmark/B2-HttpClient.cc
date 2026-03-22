@@ -28,9 +28,9 @@ std::atomic<int> g_active_connections{0};
 #if defined(__GNUC__) && !defined(__clang__)
 __attribute__((noinline))
 #endif
-Coroutine continuousWorker(int worker_id, const std::string& host, int port, const std::string& path,
-                           std::chrono::steady_clock::time_point end_time,
-                           std::atomic<bool>& stop_flag) {
+Task<void> continuousWorker(int worker_id, const std::string& host, int port, const std::string& path,
+                            std::chrono::steady_clock::time_point end_time,
+                            std::atomic<bool>& stop_flag) {
     (void)worker_id;
     g_active_connections++;
     auto client = HttpClientBuilder().build();
@@ -115,7 +115,7 @@ void runContinuousBenchmark(Runtime& rt, int connections, int duration_sec,
     for (int i = 0; i < connections; i++) {
         auto* scheduler = rt.getNextIOScheduler();
         if (scheduler) {
-            scheduleCoroutine(scheduler, continuousWorker(i, host, port, path, end_time, stop_flag));
+            scheduleTask(scheduler, continuousWorker(i, host, port, path, end_time, stop_flag));
         }
     }
 

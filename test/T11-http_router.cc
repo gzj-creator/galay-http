@@ -37,27 +37,27 @@ std::string resolveStaticDir() {
 } // namespace
 
 // 测试用的简单处理器
-Coroutine testHandler(HttpConn& conn, HttpRequest req) {
+galay::kernel::Task<void> testHandler(HttpConn& conn, HttpRequest req) {
     HTTP_LOG_INFO("Test handler called");
     co_return;
 }
 
-Coroutine userHandler(HttpConn& conn, HttpRequest req) {
+galay::kernel::Task<void> userHandler(HttpConn& conn, HttpRequest req) {
     HTTP_LOG_INFO("User handler called");
     co_return;
 }
 
-Coroutine postHandler(HttpConn& conn, HttpRequest req) {
+galay::kernel::Task<void> postHandler(HttpConn& conn, HttpRequest req) {
     HTTP_LOG_INFO("Post handler called");
     co_return;
 }
 
-Coroutine staticHandler(HttpConn& conn, HttpRequest req) {
+galay::kernel::Task<void> staticHandler(HttpConn& conn, HttpRequest req) {
     HTTP_LOG_INFO("Static handler called");
     co_return;
 }
 
-Coroutine filesHandler(HttpConn& conn, HttpRequest req) {
+galay::kernel::Task<void> filesHandler(HttpConn& conn, HttpRequest req) {
     HTTP_LOG_INFO("Files handler called");
     co_return;
 }

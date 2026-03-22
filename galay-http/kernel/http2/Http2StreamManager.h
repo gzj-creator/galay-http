@@ -8,7 +8,6 @@
 #include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include <memory>
 #include <queue>
@@ -25,6 +24,7 @@
 #include <algorithm>
 #include <deque>
 #include <limits>
+#include <stdexcept>
 
 namespace galay::http2
 {
@@ -59,7 +59,40 @@ struct PendingAction {
 /**
  * @brief 用户流处理器类型
  */
-using Http2StreamHandler = std::function<Coroutine(Http2Stream::ptr)>;
+using Http2StreamHandler = std::function<Task<void>(Http2Stream::ptr)>;
+
+class StartDetachedTaskAwaitable {
+public:
+    explicit StartDetachedTaskAwaitable(Task<void>&& task) noexcept
+        : m_task(std::move(task))
+    {
+    }
+
+    bool await_ready() const noexcept {
+        return !m_task.isValid();
+    }
+
+    template<typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        auto* scheduler = handle.promise().taskRefView().belongScheduler();
+        if (scheduler == nullptr) {
+            throw std::runtime_error("detached task requires an active scheduler");
+        }
+        if (!scheduleTask(scheduler, std::move(m_task))) {
+            throw std::runtime_error("failed to schedule detached task");
+        }
+        return false;
+    }
+
+    void await_resume() const noexcept {}
+
+private:
+    Task<void> m_task;
+};
+
+inline StartDetachedTaskAwaitable startDetachedTask(Task<void> task) {
+    return StartDetachedTaskAwaitable(std::move(task));
+}
 
 class Http2ActiveStreamBatch {
 public:
@@ -111,7 +144,7 @@ public:
             if (m_mailbox->m_closed || !m_mailbox->m_batches.empty()) {
                 return false;
             }
-            m_mailbox->m_waiterHandle = handle;
+            m_mailbox->m_waiter = Waker(handle);
             m_mailbox->m_hasWaiter = true;
             return true;
         }
@@ -150,7 +183,7 @@ public:
         m_batches.clear();
         m_closed = false;
         m_hasWaiter = false;
-        m_waiterHandle = {};
+        m_waiter = {};
     }
 
 private:
@@ -184,22 +217,15 @@ private:
             return;
         }
         m_hasWaiter = false;
-        auto handle = m_waiterHandle;
-        m_waiterHandle = {};
-        if (handle) {
-            auto& waiter = handle.promise().coroutineRef();
-            if (waiter.belongScheduler()) {
-                waiter.resume();
-                return;
-            }
-            handle.resume();
-        }
+        auto waiter = std::move(m_waiter);
+        m_waiter = {};
+        waiter.wakeUp();
     }
 
     std::deque<Batch> m_batches;
     bool m_closed = false;
     bool m_hasWaiter = false;
-    std::coroutine_handle<Coroutine::promise_type> m_waiterHandle;
+    Waker m_waiter;
 };
 
 class Http2ConnContext {
@@ -270,7 +296,7 @@ private:
     bool m_closed = false;
 };
 
-using Http2ActiveConnHandler = std::function<Coroutine(Http2ConnContext&)>;
+using Http2ActiveConnHandler = std::function<Task<void>(Http2ConnContext&)>;
 
 /**
  * @brief HTTP/2 流管理器
@@ -284,80 +310,6 @@ template<typename SocketType>
 class Http2StreamManagerImpl
 {
 public:
-    struct BackgroundLoops {
-        Coroutine writer;
-        Coroutine monitor;
-    };
-
-    class StartInBackgroundAwaitable
-        : public galay::kernel::TimeoutSupport<StartInBackgroundAwaitable>
-    {
-    public:
-        StartInBackgroundAwaitable(Http2StreamManagerImpl* manager, Http2StreamHandler handler)
-            : m_manager(manager)
-            , m_handler(std::move(handler))
-        {
-        }
-
-        bool await_ready() const noexcept { return false; }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (m_started) {
-                return false;
-            }
-            m_started = true;
-            auto* scheduler = handle.promise().getCoroutine().belongScheduler();
-            if (scheduler) {
-                m_manager->startWithScheduler(scheduler, std::move(m_handler));
-            }
-            return false;
-        }
-
-        StartInBackgroundAwaitable& wait() & { return *this; }
-        StartInBackgroundAwaitable&& wait() && { return std::move(*this); }
-
-        void await_resume() const noexcept {}
-
-    private:
-        Http2StreamManagerImpl* m_manager;
-        Http2StreamHandler m_handler;
-        bool m_started = false;
-    };
-
-    class ShutdownAwaitable
-        : public galay::kernel::TimeoutSupport<ShutdownAwaitable>
-    {
-    public:
-        ShutdownAwaitable(Http2StreamManagerImpl* manager, Http2ErrorCode error)
-            : m_manager(manager)
-            , m_error(error)
-        {
-        }
-
-        bool await_ready() const noexcept { return false; }
-
-        template<typename Handle>
-        bool await_suspend(Handle handle) {
-            if (!m_started) {
-                m_started = true;
-                m_wait_result.emplace(m_manager->shutdownImpl(m_error).wait());
-            }
-            return m_wait_result->await_suspend(handle);
-        }
-
-        ShutdownAwaitable& wait() & { return *this; }
-        ShutdownAwaitable&& wait() && { return std::move(*this); }
-
-        void await_resume() const noexcept {}
-
-    private:
-        Http2StreamManagerImpl* m_manager;
-        Http2ErrorCode m_error;
-        bool m_started = false;
-        std::optional<galay::kernel::WaitResult> m_wait_result;
-    };
-
     Http2StreamManagerImpl(Http2ConnImpl<SocketType>& conn)
         : m_conn(conn)
         , m_running(false)
@@ -373,51 +325,44 @@ public:
      * - Reader: 读取帧、处理连接级帧、分发流级帧、spawn handler
      * - Writer: 从 send channel 接收数据并写入 socket
      */
-    Coroutine start(Http2StreamHandler handler) {
+    Task<void> start(Http2StreamHandler handler) {
         prepareForStart(false);
         if constexpr (is_ssl_socket_v<SocketType>) {
-            Coroutine monitor = monitorLoop();
-            co_await spawn(monitor);
+            co_await startDetachedTask(monitorLoopThenNotify(&m_monitor_done));
             m_writer_ready.notify();
-            co_await sslServiceLoop(std::move(handler)).wait();
-            co_await finishForegroundSslRun(monitor).wait();
+            co_await sslServiceLoop(std::move(handler));
+            co_await finishForegroundSslRun();
             co_return;
         }
-        auto loops = createBackgroundLoops();
-        co_await startBackgroundLoops(loops).wait();
-        co_await readerLoop(std::move(handler)).wait();
-        co_await finishForegroundRun(loops).wait();
+        co_await startBackgroundLoops();
+        co_await readerLoop(std::move(handler));
+        co_await finishForegroundRun();
         co_return;
     }
 
-    Coroutine start(Http2ActiveConnHandler handler) {
+    Task<void> start(Http2ActiveConnHandler handler) {
         prepareForStart(true);
         if constexpr (is_ssl_socket_v<SocketType>) {
-            Coroutine monitor = monitorLoop();
-            co_await spawn(monitor);
+            co_await startDetachedTask(monitorLoopThenNotify(&m_monitor_done));
             m_writer_ready.notify();
 
             Http2ConnContext ctx(m_active_stream_mailbox);
             m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
-            Coroutine active_handler = runActiveHandler(std::move(handler), &ctx);
-            co_await spawn(active_handler);
+            co_await startDetachedTask(runActiveHandler(std::move(handler), &ctx));
 
-            co_await sslServiceLoop(nullptr).wait();
-            co_await finishForegroundSslRun(monitor).wait();
+            co_await sslServiceLoop(nullptr);
+            co_await finishForegroundSslRun();
             co_return;
         }
 
-        auto loops = createBackgroundLoops();
-        co_await startBackgroundLoops(loops).wait();
+        co_await startBackgroundLoops();
 
         Http2ConnContext ctx(m_active_stream_mailbox);
         m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
-        Coroutine active_handler = runActiveHandler(std::move(handler), &ctx);
-        co_await spawn(active_handler);
+        co_await startDetachedTask(runActiveHandler(std::move(handler), &ctx));
 
-        co_await readerLoop(nullptr).wait();
-        co_await finishForegroundRun(loops).wait();
-        co_await active_handler.wait();
+        co_await readerLoop(nullptr);
+        co_await finishForegroundRun();
         co_return;
     }
 
@@ -451,34 +396,24 @@ public:
     Http2ConnImpl<SocketType>& conn() { return m_conn; }
 
     /**
-     * @brief 在后台启动 StreamManager，等待 writer 就绪后返回
-     * @details 比 co_await spawn(mgr->start(handler)) 更安全：
-     *          返回时 writer 已启动，可以安全地向 send channel 推送帧。
-     *          调用者之后可以直接 sendHeaders/sendData，无需担心调度时序。
-     */
-    StartInBackgroundAwaitable startInBackground(Http2StreamHandler handler) {
-        return StartInBackgroundAwaitable(this, std::move(handler));
-    }
-
-    /**
      * @brief 从非协程上下文启动 StreamManager
      * @param scheduler 当前 IO 调度器
      * @param handler 用户流处理回调
-     * @details 通过 scheduleCoroutine(scheduler, ) 启动 reader/writer/monitor，
+     * @details 通过 scheduleTask(scheduler, ) 启动 reader/writer/monitor，
      *          不需要协程上下文，可从 CustomAwaitable::await_resume() 等普通函数调用。
      */
     void startWithScheduler(galay::kernel::Scheduler* scheduler, Http2StreamHandler handler) {
         prepareForStart(false);
         if constexpr (is_ssl_socket_v<SocketType>) {
-            scheduleCoroutine(scheduler, monitorLoop());
+            scheduleTask(scheduler, monitorLoopThenNotify(&m_monitor_done));
             m_writer_ready.notify();
-            scheduleCoroutine(scheduler, sslServiceLoopThenCleanup(std::move(handler)));
+            scheduleTask(scheduler, sslServiceLoopThenCleanup(std::move(handler)));
             return;
         }
-        scheduleCoroutine(scheduler, writerLoop());
-        scheduleCoroutine(scheduler, monitorLoop());
+        scheduleTask(scheduler, writerLoopThenNotify(&m_writer_done));
+        scheduleTask(scheduler, monitorLoopThenNotify(&m_monitor_done));
         m_writer_ready.notify();
-        scheduleCoroutine(scheduler, readerLoopThenCleanup(std::move(handler)));
+        scheduleTask(scheduler, readerLoopThenCleanup(std::move(handler)));
     }
 
     /**
@@ -495,12 +430,12 @@ public:
      * @brief 优雅关闭：发送 GOAWAY、关闭连接、等待 StreamManager 停止
      * @details 替代手动的 sendGoaway + conn.close() + waitStopped() 序列
      */
-    ShutdownAwaitable shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
-        return ShutdownAwaitable(this, error);
+    Task<void> shutdown(Http2ErrorCode error = Http2ErrorCode::NoError) {
+        return shutdownImpl(error);
     }
 
 private:
-    Coroutine shutdownImpl(Http2ErrorCode error = Http2ErrorCode::NoError) {
+    Task<void> shutdownImpl(Http2ErrorCode error = Http2ErrorCode::NoError) {
         if (!m_started) co_return;
 
         if (m_running) {
@@ -594,21 +529,14 @@ private:
             static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
     }
 
-    BackgroundLoops createBackgroundLoops() {
-        return BackgroundLoops{
-            .writer = writerLoop(),
-            .monitor = monitorLoop(),
-        };
-    }
-
-    Coroutine startBackgroundLoops(BackgroundLoops& loops) {
-        co_await spawn(loops.writer);
-        co_await spawn(loops.monitor);
+    Task<void> startBackgroundLoops() {
+        co_await startDetachedTask(writerLoopThenNotify(&m_writer_done));
+        co_await startDetachedTask(monitorLoopThenNotify(&m_monitor_done));
         m_writer_ready.notify();
         co_return;
     }
 
-    Coroutine finishForegroundRun(BackgroundLoops& loops) {
+    Task<void> finishForegroundRun() {
         m_draining_handlers.store(true, std::memory_order_release);
         if (m_active_handlers.load(std::memory_order_acquire) > 0) {
             co_await m_handler_waiter.wait();
@@ -616,26 +544,26 @@ private:
 
         m_running = false;
         m_send_channel.send(Http2OutgoingFrame{});
-        co_await loops.writer.wait();
-        co_await loops.monitor.wait();
+        co_await m_writer_done.wait();
+        co_await m_monitor_done.wait();
         m_stop_waiter.notify();
         co_return;
     }
 
-    Coroutine finishForegroundSslRun(Coroutine& monitor) {
+    Task<void> finishForegroundSslRun() {
         m_draining_handlers.store(true, std::memory_order_release);
         if (m_active_handlers.load(std::memory_order_acquire) > 0) {
             co_await m_handler_waiter.wait();
         }
 
         m_running = false;
-        co_await monitor.wait();
+        co_await m_monitor_done.wait();
         m_stop_waiter.notify();
         co_return;
     }
 
-    Coroutine readerLoopThenCleanup(Http2StreamHandler handler) {
-        co_await readerLoop(std::move(handler)).wait();
+    Task<void> readerLoopThenCleanup(Http2StreamHandler handler) {
+        co_await readerLoop(std::move(handler));
 
         m_draining_handlers.store(true, std::memory_order_release);
         if (m_active_handlers.load(std::memory_order_acquire) > 0) {
@@ -644,12 +572,14 @@ private:
 
         m_running = false;
         m_send_channel.send(Http2OutgoingFrame{});
+        co_await m_writer_done.wait();
+        co_await m_monitor_done.wait();
         m_stop_waiter.notify();
         co_return;
     }
 
-    Coroutine sslServiceLoopThenCleanup(Http2StreamHandler handler) {
-        co_await sslServiceLoop(std::move(handler)).wait();
+    Task<void> sslServiceLoopThenCleanup(Http2StreamHandler handler) {
+        co_await sslServiceLoop(std::move(handler));
 
         m_draining_handlers.store(true, std::memory_order_release);
         if (m_active_handlers.load(std::memory_order_acquire) > 0) {
@@ -657,6 +587,7 @@ private:
         }
 
         m_running = false;
+        co_await m_monitor_done.wait();
         m_stop_waiter.notify();
         co_return;
     }
@@ -684,6 +615,36 @@ public:
 private:
     static constexpr auto kSslIoOwnerPollInterval = std::chrono::milliseconds(5);
 
+    Task<void> writerLoopThenNotify(AsyncWaiter<void>* done) {
+        try {
+            co_await writerLoop();
+        } catch (...) {
+            if (done) {
+                done->notify();
+            }
+            throw;
+        }
+        if (done) {
+            done->notify();
+        }
+        co_return;
+    }
+
+    Task<void> monitorLoopThenNotify(AsyncWaiter<void>* done) {
+        try {
+            co_await monitorLoop();
+        } catch (...) {
+            if (done) {
+                done->notify();
+            }
+            throw;
+        }
+        if (done) {
+            done->notify();
+        }
+        co_return;
+    }
+
     Http2Stream::ptr newStream(uint32_t stream_id) {
         auto stream = m_conn.getStream(stream_id);
         if (stream) {
@@ -696,7 +657,7 @@ private:
     /**
      * @brief Reader 协程：读取帧、处理连接级帧、分发流级帧
      */
-    Coroutine readerLoop(Http2StreamHandler handler) {
+    Task<void> readerLoop(Http2StreamHandler handler) {
         // readerLoop 只在 IO 错误（peer closed / connection error）或连接关闭时退出。
         // GOAWAY（无论收到还是发出）不退出：GOAWAY 只表示不再有新流，
         // 已有流的帧仍需继续读取直到连接关闭（RFC 9113 §6.8）。
@@ -785,7 +746,7 @@ private:
                         auto stream = m_pending_spawns.top();
                         m_pending_spawns.pop();
                         m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
-                        co_await spawn(runHandler(handler, stream));
+                        co_await startDetachedTask(runHandler(handler, stream));
                     }
 
                     if (exit_loop) {
@@ -864,7 +825,7 @@ private:
                 auto stream = m_pending_spawns.top();
                 m_pending_spawns.pop();
                 m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
-                co_await spawn(runHandler(handler, stream));
+                co_await startDetachedTask(runHandler(handler, stream));
             }
 
             if (exit_loop) {
@@ -880,7 +841,7 @@ private:
         co_return;
     }
 
-    Coroutine sslServiceLoop(Http2StreamHandler handler) {
+    Task<void> sslServiceLoop(Http2StreamHandler handler) {
         std::vector<Http2OutgoingFrame> outgoing_batch;
         std::vector<std::string> flattened_buffers;
         std::vector<Http2OutgoingFrame::WaiterPtr> waiters;
@@ -1016,7 +977,7 @@ private:
                     auto stream = m_pending_spawns.top();
                     m_pending_spawns.pop();
                     m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
-                    co_await spawn(runHandler(handler, stream));
+                    co_await startDetachedTask(runHandler(handler, stream));
                 }
             }
 
@@ -1085,8 +1046,8 @@ private:
         co_return;
     }
 
-    Coroutine runHandler(Http2StreamHandler handler, Http2Stream::ptr stream) {
-        co_await handler(stream).wait();
+    Task<void> runHandler(Http2StreamHandler handler, Http2Stream::ptr stream) {
+        co_await handler(stream);
         // 流处理完毕，从连接的流表中移除，释放 max_concurrent_streams 配额
         m_conn.removeStream(stream->streamId());
         int remaining = m_active_handlers.fetch_sub(1, std::memory_order_acq_rel) - 1;
@@ -1096,8 +1057,8 @@ private:
         co_return;
     }
 
-    Coroutine runActiveHandler(Http2ActiveConnHandler handler, Http2ConnContext* ctx) {
-        co_await handler(*ctx).wait();
+    Task<void> runActiveHandler(Http2ActiveConnHandler handler, Http2ConnContext* ctx) {
+        co_await handler(*ctx);
         if (m_running && !m_conn.isClosing()) {
             m_conn.initiateClose();
         }
@@ -1108,7 +1069,7 @@ private:
         co_return;
     }
 
-    Coroutine monitorLoop() {
+    Task<void> monitorLoop() {
         while (m_running) {
             co_await galay::kernel::sleep(std::chrono::milliseconds(100));
             if (!m_running) {
@@ -1162,7 +1123,7 @@ private:
      * @brief Writer 协程：从 send channel 接收数据并写入 socket
      * @details 使用 writev 批量发送多个帧，减少系统调用和内存拷贝
      */
-    Coroutine writerLoop() {
+    Task<void> writerLoop() {
         // 预分配待发送包和 iovec 数组，避免每次循环分配
         std::vector<Http2OutgoingFrame> outgoing_batch;
         std::vector<std::string> flattened_buffers;
@@ -2018,6 +1979,8 @@ private:
     bool m_running;
     galay::kernel::AsyncWaiter<void> m_stop_waiter;
     galay::kernel::AsyncWaiter<void> m_writer_ready;
+    galay::kernel::AsyncWaiter<void> m_writer_done;
+    galay::kernel::AsyncWaiter<void> m_monitor_done;
     uint32_t m_next_local_stream_id = 0;
     std::atomic<int> m_active_handlers{0};
     std::atomic<bool> m_draining_handlers{false};

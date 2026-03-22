@@ -23,7 +23,7 @@ constexpr uint16_t TEST_PORT = 8080;
  * @brief 测试：请求超时
  * @details 服务器延迟响应，客户端设置较短超时时间
  */
-Coroutine testRequestTimeout(IOScheduler* scheduler)
+Task<void> testRequestTimeout(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test: Request Timeout ===");
 
@@ -89,7 +89,7 @@ Coroutine testRequestTimeout(IOScheduler* scheduler)
  * @brief 测试：连接超时
  * @details 连接到不存在的服务器，测试连接超时
  */
-Coroutine testConnectTimeout(IOScheduler* scheduler)
+Task<void> testConnectTimeout(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test: Connect Timeout ===");
 
@@ -128,7 +128,7 @@ Coroutine testConnectTimeout(IOScheduler* scheduler)
  * @brief 测试：服务器主动断开连接
  * @details 服务器在发送部分数据后断开连接
  */
-Coroutine testServerDisconnect(IOScheduler* scheduler)
+Task<void> testServerDisconnect(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test: Server Disconnect ===");
 
@@ -197,7 +197,7 @@ Coroutine testServerDisconnect(IOScheduler* scheduler)
  * @brief 测试：接收超时
  * @details 服务器发送部分数据后停止，测试接收超时
  */
-Coroutine testReceiveTimeout(IOScheduler* scheduler)
+Task<void> testReceiveTimeout(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test: Receive Timeout ===");
 
@@ -260,7 +260,7 @@ Coroutine testReceiveTimeout(IOScheduler* scheduler)
  * @brief 测试：多次超时重试
  * @details 测试超时后重新发起请求
  */
-Coroutine testTimeoutRetry(IOScheduler* scheduler)
+Task<void> testTimeoutRetry(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test: Timeout Retry ===");
 
@@ -341,7 +341,7 @@ Coroutine testTimeoutRetry(IOScheduler* scheduler)
  * @brief 测试：正常请求（无超时）
  * @details 验证超时功能不影响正常请求
  */
-Coroutine testNormalRequestWithTimeout(IOScheduler* scheduler)
+Task<void> testNormalRequestWithTimeout(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test: Normal Request With Timeout ===");
 
@@ -427,22 +427,22 @@ int main()
         }
 
         // 运行测试
-        scheduleCoroutine(scheduler, testNormalRequestWithTimeout(scheduler));
+        scheduleTask(scheduler, testNormalRequestWithTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduleCoroutine(scheduler, testRequestTimeout(scheduler));
+        scheduleTask(scheduler, testRequestTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduleCoroutine(scheduler, testConnectTimeout(scheduler));
+        scheduleTask(scheduler, testConnectTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduleCoroutine(scheduler, testServerDisconnect(scheduler));
+        scheduleTask(scheduler, testServerDisconnect(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, testReceiveTimeout(scheduler));
+        scheduleTask(scheduler, testReceiveTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduleCoroutine(scheduler, testTimeoutRetry(scheduler));
+        scheduleTask(scheduler, testTimeoutRetry(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(5));
 
         runtime.stop();

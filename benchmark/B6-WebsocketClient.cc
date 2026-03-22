@@ -81,7 +81,7 @@ static uint32_t toLatencyUs(std::chrono::steady_clock::duration duration) {
 /**
  * @brief 单个 WebSocket 客户端压测
  */
-Coroutine benchmarkWebSocketClient(
+Task<void> benchmarkWebSocketClient(
     IOScheduler* scheduler,
     int client_id,
     const std::string& message_payload,
@@ -292,7 +292,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Failed to get IO scheduler for client " << i << "\n";
             return 1;
         }
-        scheduleCoroutine(scheduler, benchmarkWebSocketClient(scheduler, i, message_payload, end_time));
+        scheduleTask(scheduler, benchmarkWebSocketClient(scheduler, i, message_payload, end_time));
     }
 
     std::cout << "Running for " << duration_sec << " seconds...\n";

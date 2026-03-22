@@ -69,7 +69,7 @@ void signalHandler(int) {
     g_running = false;
 }
 
-Coroutine handleActiveConn(Http2ConnContext& ctx) {
+Task<void> handleActiveConn(Http2ConnContext& ctx) {
     while (true) {
         auto streams = co_await ctx.getActiveStreams(64);
         if (!streams) {

@@ -12,7 +12,7 @@
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include "galay-kernel/kernel/Timeout.hpp"
 #include <galay-utils/algorithm/Base64.hpp>
 #include <memory>
@@ -73,7 +73,6 @@ private:
 
 // Forward declarations
 class H2cUpgradeAwaitable;
-class H2cShutdownAwaitable;
 
 /**
  * @brief H2c 升级 CustomAwaitable
@@ -324,8 +323,10 @@ public:
     H2cUpgradeAwaitable(H2cClient& client, const std::string& path);
 
     bool await_ready() const noexcept { return m_error.has_value(); }
-    bool await_suspend(std::coroutine_handle<PromiseType> handle) {
-        m_scheduler = handle.promise().getCoroutine().belongScheduler();
+
+    template<typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) {
+        m_scheduler = handle.promise().taskRefView().belongScheduler();
         return CustomAwaitable::await_suspend(handle);
     }
 
@@ -421,36 +422,6 @@ public:
 };
 
 /**
- * @brief H2c 关闭包装 Awaitable
- * @details 将关闭逻辑委托给 shutdownImpl() 协程，确保在同一调度器顺序执行，
- *          避免提前析构连接对象导致 reader/writer 协程 UAF。
- */
-class H2cShutdownAwaitable
-    : public TimeoutSupport<H2cShutdownAwaitable>
-{
-public:
-    using ManagerShutdownAwaitable = Http2StreamManagerImpl<TcpSocket>::ShutdownAwaitable;
-
-    explicit H2cShutdownAwaitable(H2cClient& client);
-
-    bool await_ready() const noexcept { return false; }
-
-    template<typename Handle>
-    bool await_suspend(Handle handle);
-
-    H2cShutdownAwaitable& wait() & { return *this; }
-    H2cShutdownAwaitable&& wait() && { return std::move(*this); }
-
-    std::expected<bool, Http2Error> await_resume();
-
-private:
-    H2cClient& m_client;
-    bool m_started = false;
-    std::optional<ManagerShutdownAwaitable> m_manager_shutdown;
-    std::optional<galay::kernel::CloseAwaitable> m_socket_close;
-};
-
-/**
  * @brief H2c 客户端 (HTTP/2 over cleartext)
  */
 class H2cClient
@@ -483,14 +454,13 @@ public:
     Http2Stream::ptr post(const std::string& path,
                           const std::string& body,
                           const std::string& content_type = "application/x-www-form-urlencoded");
-    H2cShutdownAwaitable shutdown();
+    Task<std::expected<bool, Http2Error>> shutdown();
 
     bool isUpgraded() const { return m_upgraded; }
     Http2ConnImpl<TcpSocket>* getConn() { return m_conn.get(); }
 
 private:
     friend class H2cUpgradeAwaitable;
-    friend class H2cShutdownAwaitable;
 
     H2cClientConfig m_config;
     std::string m_host;
@@ -529,7 +499,7 @@ inline std::expected<bool, Http2Error> H2cUpgradeAwaitable::await_resume() {
 
     manager->startWithScheduler(
         m_scheduler,
-        [](Http2Stream::ptr) -> Coroutine { co_return; });
+        [](Http2Stream::ptr) -> Task<void> { co_return; });
 
     m_client->m_socket.reset();
     m_client->m_ring_buffer.reset();
@@ -633,60 +603,6 @@ inline H2cUpgradeAwaitable H2cClient::upgrade(const std::string& path) {
     return H2cUpgradeAwaitable(*this, path);
 }
 
-inline H2cShutdownAwaitable::H2cShutdownAwaitable(H2cClient& client)
-    : m_client(client)
-{
-}
-
-template<typename Handle>
-inline bool H2cShutdownAwaitable::await_suspend(Handle handle) {
-    if (m_started) {
-        return false;
-    }
-    m_started = true;
-    m_client.m_shutdown_result = true;
-
-    HTTP_LOG_INFO("[h2c] [shutdown] [begin] [has-conn={}] [upgraded={}]",
-                  m_client.m_conn != nullptr, m_client.m_upgraded);
-
-    if (m_client.m_conn && m_client.m_conn->streamManager()) {
-        m_manager_shutdown.emplace(m_client.m_conn->streamManager()->shutdown(Http2ErrorCode::NoError));
-        return m_manager_shutdown->await_suspend(handle);
-    }
-
-    if (m_client.m_socket) {
-        m_socket_close.emplace(m_client.m_socket->close());
-        return m_socket_close->await_suspend(handle);
-    }
-
-    return false;
-}
-
-inline std::expected<bool, Http2Error> H2cShutdownAwaitable::await_resume() {
-    if (m_manager_shutdown.has_value()) {
-        m_manager_shutdown->await_resume();
-    }
-
-    if (m_socket_close.has_value()) {
-        auto close_result = m_socket_close->await_resume();
-        if (!close_result) {
-            m_client.m_shutdown_result = std::unexpected(
-                Http2Error(Http2ErrorCode::InternalError, close_result.error().message()));
-        }
-    }
-
-    m_client.m_conn.reset();
-    m_client.m_socket.reset();
-    m_client.m_ring_buffer.reset();
-    m_client.m_upgraded = false;
-    if (!m_client.m_shutdown_result) {
-        return m_client.m_shutdown_result;
-    }
-    m_client.m_shutdown_result = true;
-    HTTP_LOG_INFO("[h2c] [shutdown] [done]");
-    return m_client.m_shutdown_result;
-}
-
 // ============== get() / post() ==============
 
 inline Http2Stream::ptr H2cClient::get(const std::string& path) {
@@ -727,8 +643,34 @@ inline Http2Stream::ptr H2cClient::post(const std::string& path,
     return stream;
 }
 
-inline H2cShutdownAwaitable H2cClient::shutdown() {
-    return H2cShutdownAwaitable(*this);
+inline Task<std::expected<bool, Http2Error>> H2cClient::shutdown() {
+    m_shutdown_result = true;
+
+    HTTP_LOG_INFO("[h2c] [shutdown] [begin] [has-conn={}] [upgraded={}]",
+                  m_conn != nullptr, m_upgraded);
+
+    if (m_conn && m_conn->streamManager()) {
+        co_await m_conn->streamManager()->shutdown(Http2ErrorCode::NoError);
+    } else if (m_socket) {
+        auto close_result = co_await m_socket->close();
+        if (!close_result) {
+            m_shutdown_result = std::unexpected(
+                Http2Error(Http2ErrorCode::InternalError, close_result.error().message()));
+        }
+    }
+
+    m_conn.reset();
+    m_socket.reset();
+    m_ring_buffer.reset();
+    m_upgraded = false;
+
+    if (!m_shutdown_result) {
+        co_return m_shutdown_result;
+    }
+
+    m_shutdown_result = true;
+    HTTP_LOG_INFO("[h2c] [shutdown] [done]");
+    co_return m_shutdown_result;
 }
 
 } // namespace galay::http2

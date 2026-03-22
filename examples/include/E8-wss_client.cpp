@@ -17,12 +17,10 @@ using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
 
-static std::atomic<bool> g_done{false};
-
 /**
  * @brief WSS 客户端协程
  */
-Coroutine wssClientCoroutine(const std::string& url, int message_count) {
+Task<void> wssClientCoroutine(const std::string& url, int message_count) {
     try {
         constexpr auto kOpTimeout = std::chrono::milliseconds(3000);
 
@@ -35,7 +33,6 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
             HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
-            g_done = true;
             co_return;
         }
         HTTP_LOG_INFO("[connect] [ok]");
@@ -44,7 +41,6 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         auto handshake_result = co_await client.handshake();
         if (!handshake_result) {
             HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
-            g_done = true;
             co_await client.close();
             co_return;
         }
@@ -56,13 +52,11 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         auto upgrade_result = co_await upgrader().timeout(kOpTimeout);
         if (!upgrade_result) {
             HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error().message());
-            g_done = true;
             co_await client.close();
             co_return;
         }
         if (!upgrade_result.value()) {
             HTTP_LOG_ERROR("[ws] [upgrade] [incomplete]");
-            g_done = true;
             co_await client.close();
             co_return;
         }
@@ -75,7 +69,6 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
             auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode).timeout(kOpTimeout);
             if (!recv_result) {
                 HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", recv_result.error().message());
-                g_done = true;
                 co_await client.close();
                 co_return;
             }
@@ -94,7 +87,6 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
                 auto send_result = co_await session.sendText(msg);
                 if (!send_result) {
                     HTTP_LOG_ERROR("[ws] [send-fail] [{}]", send_result.error().message());
-                    g_done = true;
                     co_await client.close();
                     co_return;
                 }
@@ -111,7 +103,6 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
                 auto recv_result = co_await session.getMessage(echo_msg, echo_opcode).timeout(kOpTimeout);
                 if (!recv_result) {
                     HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", recv_result.error().message());
-                    g_done = true;
                     co_await client.close();
                     co_return;
                 }
@@ -142,7 +133,6 @@ Coroutine wssClientCoroutine(const std::string& url, int message_count) {
         HTTP_LOG_ERROR("[exception] [{}]", e.what());
     }
 
-    g_done = true;
     co_return;
 }
 
@@ -164,20 +154,8 @@ int main(int argc, char* argv[]) {
         Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
         runtime.start();
 
-        auto* scheduler = runtime.getNextIOScheduler();
-        if (!scheduler) {
-            std::cerr << "No IO scheduler available\n";
-            return 1;
-        }
-
-        scheduleCoroutine(scheduler, wssClientCoroutine(url, message_count));
-
-        // 等待完成
-        while (!g_done) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        auto join = runtime.spawn(wssClientCoroutine(url, message_count));
+        join.join();
         runtime.stop();
         std::cout << "Done.\n";
 

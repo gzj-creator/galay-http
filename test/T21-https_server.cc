@@ -23,7 +23,7 @@ void signalHandler(int) {
 }
 
 // HTTPS 请求处理器 - 支持 keep-alive
-Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
+Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     auto reader = conn.getReader();
     auto writer = conn.getWriter();
 

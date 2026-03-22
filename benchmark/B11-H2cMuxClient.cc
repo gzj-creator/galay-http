@@ -39,10 +39,47 @@ struct Stats {
 
 static Stats g;
 
+struct BatchBarrier {
+    void addOne() {
+        remaining.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void completeOne() {
+        if (remaining.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            done.notify();
+        }
+    }
+
+    bool hasPending() const {
+        return remaining.load(std::memory_order_acquire) > 0;
+    }
+
+    std::atomic<int> remaining{0};
+    AsyncWaiter<void> done;
+};
+
+struct BatchBarrierGuard {
+    explicit BatchBarrierGuard(std::shared_ptr<BatchBarrier> barrier)
+        : m_barrier(std::move(barrier))
+    {
+    }
+
+    ~BatchBarrierGuard() {
+        if (m_barrier) {
+            m_barrier->completeOne();
+        }
+    }
+
+private:
+    std::shared_ptr<BatchBarrier> m_barrier;
+};
+
 /**
  * 单个 stream 的响应处理协程（由 spawn 并发运行）
  */
-Coroutine handleResponse(Http2Stream::ptr stream) {
+Task<void> handleResponse(Http2Stream::ptr stream, std::shared_ptr<BatchBarrier> barrier) {
+    BatchBarrierGuard guard(std::move(barrier));
+
     bool finished = false;
     while (!finished) {
         auto batch_result = co_await stream->getFrames(16);
@@ -77,10 +114,10 @@ Coroutine handleResponse(Http2Stream::ptr stream) {
  *   每轮在同一连接上并发发射 streams_per_conn 个 stream，
  *   等待全部完成后进入下一轮
  */
-Coroutine runConnection(std::shared_ptr<H2cClient> client,
-                        int id,
-                        const std::string& host, uint16_t port,
-                        int streams_per_conn, int rounds) {
+Task<void> runConnection(std::shared_ptr<H2cClient> client,
+                         int id,
+                         const std::string& host, uint16_t port,
+                         int streams_per_conn, int rounds) {
     g.active++;
 
     auto conn_result = co_await client->connect(host, port);
@@ -122,21 +159,20 @@ Coroutine runConnection(std::shared_ptr<H2cClient> client,
 
     for (int r = 0; r < rounds && mgr->isRunning(); r++) {
         // 并发发射一批 stream
-        std::vector<Coroutine> waiters;
-        waiters.reserve(streams_per_conn);
+        auto barrier = std::make_shared<BatchBarrier>();
 
         for (int s = 0; s < streams_per_conn; s++) {
             auto stream = mgr->allocateStream();
             stream->sendHeaders(request_headers, false, true);
             stream->sendData(kPayload, true);
 
-            waiters.push_back(handleResponse(stream));
-            co_await spawn(waiters.back());
+            barrier->addOne();
+            co_await startDetachedTask(handleResponse(stream, barrier));
         }
 
         // 等待本轮所有 stream 完成
-        for (auto& w : waiters) {
-            co_await w.wait();
+        if (barrier->hasPending()) {
+            co_await barrier->done.wait();
         }
     }
 
@@ -209,7 +245,7 @@ int main(int argc, char* argv[]) {
         auto client = std::make_shared<H2cClient>(H2cClientBuilder().buildConfig());
         client_pool.push_back(client);
         auto* sched = rt.getNextIOScheduler();
-        scheduleCoroutine(sched, runConnection(std::move(client), i, host, port, streams, rounds));
+        scheduleTask(sched, runConnection(std::move(client), i, host, port, streams, rounds));
     }
 
     std::cout << "压测进行中";

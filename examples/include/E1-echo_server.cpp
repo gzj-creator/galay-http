@@ -15,7 +15,7 @@ using namespace galay::http;
 using namespace galay::kernel;
 
 // Echo 处理器：返回客户端发送的内容
-Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
+Task<void> echoHandler(HttpConn& conn, HttpRequest req) {
     // 获取请求体
     std::string requestBody = req.getBodyStr();
 
@@ -37,7 +37,7 @@ Coroutine echoHandler(HttpConn& conn, HttpRequest req) {
 }
 
 // 主页处理器
-Coroutine indexHandler(HttpConn& conn, HttpRequest req) {
+Task<void> indexHandler(HttpConn& conn, HttpRequest req) {
     std::string body = R"(<!DOCTYPE html>
 <html>
 <head>

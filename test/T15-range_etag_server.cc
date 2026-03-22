@@ -20,7 +20,7 @@ using namespace galay::kernel;
 namespace fs = std::filesystem;
 
 // CORS 处理器 - 处理 OPTIONS 预检请求
-Coroutine corsHandler(HttpConn& conn, HttpRequest req) {
+Task<void> corsHandler(HttpConn& conn, HttpRequest req) {
     std::cout << "CORS OPTIONS request received for: " << req.header().uri() << std::endl;
 
     auto response = Http1_1ResponseBuilder::noContent()
@@ -43,7 +43,7 @@ Coroutine corsHandler(HttpConn& conn, HttpRequest req) {
 }
 
 // 自定义文件处理器 - 添加 CORS 头
-Coroutine fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
+Task<void> fileHandlerWithCORS(HttpConn& conn, HttpRequest req) {
     // 获取请求的文件路径
     std::string uri = req.header().uri();
 

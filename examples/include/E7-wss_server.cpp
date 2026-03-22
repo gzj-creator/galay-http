@@ -38,7 +38,7 @@ void signalHandler(int) {
  * @brief 处理 WSS 连接（使用底层帧处理）
  * @details 由于 SslSocket 不支持 readv，这里使用 recv 直接读取数据
  */
-Coroutine handleWssConnection(galay::ssl::SslSocket& socket) {
+Task<void> handleWssConnection(galay::ssl::SslSocket& socket) {
     HTTP_LOG_INFO("[wss] [conn] [open]");
     g_connections++;
 
@@ -138,7 +138,7 @@ cleanup:
 /**
  * @brief HTTPS 请求处理器（处理 WSS 升级）
  */
-Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
+Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     HTTP_LOG_DEBUG("[https] [handler] [start]");
     auto reader = conn.getReader();
     HttpRequest request;
@@ -191,7 +191,7 @@ Coroutine httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
         // 获取底层 socket 并处理 WebSocket 连接
         // 注意：这里需要直接访问 socket，因为 WsConn 模板不支持 SslSocket
         auto& socket = conn.getSocket();
-        co_await handleWssConnection(socket).wait();
+        co_await handleWssConnection(socket);
         co_return;
     }
 

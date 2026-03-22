@@ -19,7 +19,7 @@ static std::atomic<bool> g_done{false};
 static std::atomic<bool> g_success{false};
 static std::atomic<bool> g_failed{false};
 
-Coroutine testHttpsClient() {
+Task<void> testHttpsClient() {
     std::cout << "=== HTTPS Client Test ===" << std::endl;
 
     HttpsClient client(HttpsClientBuilder()
@@ -143,7 +143,7 @@ int main() {
         return 1;
     }
 
-    scheduleCoroutine(scheduler, testHttpsClient());
+    scheduleTask(scheduler, testHttpsClient());
 
     // 等待测试完成
     while (!g_done) {

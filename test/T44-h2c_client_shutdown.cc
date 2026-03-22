@@ -24,7 +24,7 @@ static std::atomic<ClientStage> g_stage{ClientStage::Init};
 static std::atomic<bool> g_done{false};
 static std::atomic<bool> g_ok{false};
 
-Coroutine handleStream(Http2Stream::ptr stream) {
+Task<void> handleStream(Http2Stream::ptr stream) {
     auto request_done = co_await stream->waitRequestComplete();
     if (!request_done) {
         co_return;
@@ -40,7 +40,7 @@ Coroutine handleStream(Http2Stream::ptr stream) {
     co_return;
 }
 
-Coroutine runClient(uint16_t port) {
+Task<void> runClient(uint16_t port) {
     H2cClient client(H2cClientBuilder().build());
 
     auto connect_result = co_await client.connect("127.0.0.1", port);
@@ -107,7 +107,7 @@ int main() {
         server.stop();
         return 1;
     }
-    scheduleCoroutine(scheduler, runClient(port));
+    scheduleTask(scheduler, runClient(port));
 
     for (int i = 0; i < 100; ++i) {
         if (g_done.load(std::memory_order_acquire)) {

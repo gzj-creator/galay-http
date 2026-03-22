@@ -7,7 +7,6 @@
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/kernel/Runtime.h"
-#include "galay-kernel/kernel/Coroutine.h"
 #include <memory>
 #include <atomic>
 #include <functional>
@@ -38,7 +37,7 @@ class HttpServerImpl;
  * @brief HTTP连接处理器类型
  */
 template<typename SocketType>
-using HttpConnHandlerImpl = std::function<Coroutine(HttpConnImpl<SocketType>)>;
+using HttpConnHandlerImpl = std::function<Task<void>(HttpConnImpl<SocketType>)>;
 
 /**
  * @brief HTTP服务器配置
@@ -118,7 +117,7 @@ public:
     void start(HttpRouter&& router) {
         m_router = std::move(router);
 
-        m_handler = [this](HttpConnImpl<SocketType> conn) -> Coroutine {
+        m_handler = [this](HttpConnImpl<SocketType> conn) -> Task<void> {
             HTTP_LOG_DEBUG("[handler] [start]");
             bool keep_alive = true;
 
@@ -184,7 +183,7 @@ public:
 
                 HTTP_LOG_DEBUG("[handler] [call]");
                 if constexpr (std::is_same_v<SocketType, TcpSocket>) {
-                    co_await (*match.handler)(conn, std::move(request)).wait();
+                    co_await (*match.handler)(conn, std::move(request));
                 } else {
                     HTTP_LOG_ERROR("[router] [https] [unsupported]");
                     break;
@@ -259,14 +258,14 @@ protected:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduleCoroutine(scheduler, serverLoop(scheduler));
+                scheduleTask(scheduler, serverLoop(scheduler));
             }
         }
 
         return true;
     }
 
-    virtual Coroutine serverLoop(IOScheduler* scheduler) {
+    virtual Task<void> serverLoop(IOScheduler* scheduler) {
         // 每个 serverLoop 创建自己的 listener socket
         TcpSocket listener(IPType::IPV4);
 
@@ -339,7 +338,7 @@ protected:
             HTTP_LOG_DEBUG("[handler] [spawn]");
 
             // 在当前调度器上处理连接
-            scheduleCoroutine(scheduler, m_handler(std::move(conn)));
+            scheduleTask(scheduler, m_handler(std::move(conn)));
             HTTP_LOG_DEBUG("[handler] [spawned]");
         }
 
@@ -463,7 +462,7 @@ protected:
         return galay::ssl::SslSocket(&m_ssl_ctx, fd);
     }
 
-    Coroutine serverLoop(IOScheduler* scheduler) override {
+    Task<void> serverLoop(IOScheduler* scheduler) override {
         // 每个 serverLoop 创建自己的 listener socket
         TcpSocket listener(IPType::IPV4);
 
@@ -526,14 +525,14 @@ protected:
             }
 
             // 在当前调度器上执行 SSL 握手和处理
-            scheduleCoroutine(scheduler, handleSslConnection(std::move(client_socket)));
+            scheduleTask(scheduler, handleSslConnection(std::move(client_socket)));
         }
 
         co_return;
     }
 
 private:
-    Coroutine handleSslConnection(galay::ssl::SslSocket socket) {
+    Task<void> handleSslConnection(galay::ssl::SslSocket socket) {
         auto handshake_result = co_await socket.handshake();
         if (!handshake_result) {
             HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
@@ -545,7 +544,8 @@ private:
 
         // 创建连接并调用处理器
         HttpConnImpl<galay::ssl::SslSocket> conn(std::move(socket));
-        co_await m_handler(std::move(conn)).wait();
+        co_await m_handler(std::move(conn));
+        co_return;
     }
 
     static HttpServerConfig convertConfig(const HttpsServerConfig& config) {

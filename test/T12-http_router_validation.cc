@@ -13,7 +13,7 @@ using namespace galay::http;
 using namespace galay::kernel;
 
 // 测试用的处理器
-Coroutine testHandler(HttpConn& conn, HttpRequest req) {
+Task<void> testHandler(HttpConn& conn, HttpRequest req) {
     co_return;
 }
 

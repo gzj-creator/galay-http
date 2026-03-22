@@ -6,7 +6,7 @@
 #include "HttpRange.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpBase.h"
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include <functional>
 #include <unordered_map>
 #include <string>
@@ -28,7 +28,7 @@ class HttpServerImpl;
  * @brief HTTP路由处理器类型
  * @details 用户提供的处理函数，接收HttpConn引用和HttpRequest
  */
-using HttpRouteHandler = std::function<Coroutine(HttpConn&, HttpRequest)>;
+using HttpRouteHandler = std::function<Task<void>(HttpConn&, HttpRequest)>;
 
 /**
  * @brief 代理转发模式
@@ -314,12 +314,12 @@ private:
      * @param config 静态文件传输配置
      * @return 协程
      */
-    static Coroutine sendFileContent(HttpConn& conn,
-                                     HttpRequest& req,
-                                     const std::string& filePath,
-                                     size_t fileSize,
-                                     const std::string& mimeType,
-                                     const StaticFileConfig& config);
+    static Task<void> sendFileContent(HttpConn& conn,
+                                      HttpRequest& req,
+                                      const std::string& filePath,
+                                      size_t fileSize,
+                                      const std::string& mimeType,
+                                      const StaticFileConfig& config);
 
     /**
      * @brief 发送单个 Range 响应（206 Partial Content）
@@ -334,15 +334,15 @@ private:
      * @param config 静态文件传输配置
      * @return 协程
      */
-    static Coroutine sendSingleRange(HttpConn& conn,
-                                     HttpRequest& req,
-                                     const std::string& filePath,
-                                     size_t fileSize,
-                                     const std::string& mimeType,
-                                     const std::string& etag,
-                                     const std::string& lastModified,
-                                     const HttpRange& range,
-                                     const StaticFileConfig& config);
+    static Task<void> sendSingleRange(HttpConn& conn,
+                                      HttpRequest& req,
+                                      const std::string& filePath,
+                                      size_t fileSize,
+                                      const std::string& mimeType,
+                                      const std::string& etag,
+                                      const std::string& lastModified,
+                                      const HttpRange& range,
+                                      const StaticFileConfig& config);
 
     /**
      * @brief 发送多个 Range 响应（206 Partial Content with multipart/byteranges）
@@ -357,15 +357,15 @@ private:
      * @param config 静态文件传输配置
      * @return 协程
      */
-    static Coroutine sendMultipleRanges(HttpConn& conn,
-                                        HttpRequest& req,
-                                        const std::string& filePath,
-                                        size_t fileSize,
-                                        const std::string& mimeType,
-                                        const std::string& etag,
-                                        const std::string& lastModified,
-                                        const RangeParseResult& rangeResult,
-                                        const StaticFileConfig& config);
+    static Task<void> sendMultipleRanges(HttpConn& conn,
+                                         HttpRequest& req,
+                                         const std::string& filePath,
+                                         size_t fileSize,
+                                         const std::string& mimeType,
+                                         const std::string& etag,
+                                         const std::string& lastModified,
+                                         const RangeParseResult& rangeResult,
+                                         const StaticFileConfig& config);
 
 private:
     // 精确匹配路由表：HttpMethod -> (path -> handler)

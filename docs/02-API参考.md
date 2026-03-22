@@ -624,7 +624,7 @@ struct H2ServerConfig {
 - `start()`
 - `start(Http2ConnectionHandler handler)`
 - `start(Http2ActiveConnHandler handler)`
-- `setHttp1Fallback(std::function<Coroutine(HttpConnImpl<SslSocket>)>)`
+- `setHttp1Fallback(std::function<Task<void>(HttpConnImpl<SslSocket>, HttpRequestHeader)>)`
 - `stop()`
 - `isRunning() const`
 - `getRuntime()`

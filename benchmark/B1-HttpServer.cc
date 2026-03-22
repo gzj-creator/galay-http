@@ -33,7 +33,7 @@ void signalHandler(int) {
 /**
  * @brief HTTP 请求处理器 - 简单的 OK 响应
  */
-Coroutine handleHttpRequest(HttpConn conn) {
+Task<void> handleHttpRequest(HttpConn conn) {
     while(true) {
         auto reader = conn.getReader();
         HttpRequest request;

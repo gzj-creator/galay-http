@@ -33,7 +33,7 @@ using namespace galay::kernel;
 /**
  * @brief WebSocket 客户端测试
  */
-Coroutine testWebSocketClient(IOScheduler* scheduler) {
+Task<void> testWebSocketClient(IOScheduler* scheduler) {
     HTTP_LOG_INFO("Starting WebSocket client test");
 
     // 创建 socket 并连接
@@ -181,7 +181,7 @@ int main() {
         return 1;
     }
 
-    scheduleCoroutine(scheduler, testWebSocketClient(scheduler));
+    scheduleTask(scheduler, testWebSocketClient(scheduler));
 
     // 等待测试完成（这里简单地等待一段时间）
     std::this_thread::sleep_for(std::chrono::seconds(30));

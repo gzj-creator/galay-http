@@ -27,7 +27,7 @@ void signalHandler(int) {
 /**
  * @brief 处理单个流的请求
  */
-Coroutine handleStream(Http2Stream::ptr stream) {
+Task<void> handleStream(Http2Stream::ptr stream) {
     g_request_count++;
 
     // New contract: frame-first request consumption.

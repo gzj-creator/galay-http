@@ -27,7 +27,7 @@ void signalHandler(int) {
 }
 
 // 处理单个流的请求
-Coroutine handleStream(Http2Stream::ptr stream) {
+Task<void> handleStream(Http2Stream::ptr stream) {
     g_requests++;
 
     // 读取完整请求（帧驱动）

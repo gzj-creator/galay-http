@@ -23,7 +23,7 @@ void signalHandler(int) {
     g_running = false;
 }
 
-Coroutine handleStream(Http2Stream::ptr stream) {
+Task<void> handleStream(Http2Stream::ptr stream) {
     g_requests++;
 
     while (true) {

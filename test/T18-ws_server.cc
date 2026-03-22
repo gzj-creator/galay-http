@@ -36,7 +36,7 @@ void signalHandler(int) {
 /**
  * @brief 处理 WebSocket 连接
  */
-Coroutine handleWebSocketConnection(WsConn& ws_conn) {
+Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     g_connection_count++;
     HTTP_LOG_INFO("WebSocket connection #{} established", g_connection_count.load());
 
@@ -138,7 +138,7 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
 /**
  * @brief HTTP 请求处理器
  */
-Coroutine handleHttpRequest(HttpConn conn) {
+Task<void> handleHttpRequest(HttpConn conn) {
     auto reader = conn.getReader();
     HttpRequest request;
 
@@ -178,7 +178,7 @@ Coroutine handleHttpRequest(HttpConn conn) {
 
         WsConn ws_conn = WsConn::from(std::move(conn), true);
 
-        co_await handleWebSocketConnection(ws_conn).wait();
+        co_await handleWebSocketConnection(ws_conn);
     }
     else {
         // 普通 HTTP 请求

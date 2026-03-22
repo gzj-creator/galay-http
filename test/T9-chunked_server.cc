@@ -37,7 +37,7 @@ using namespace galay::async;
 std::atomic<int> g_request_count{0};
 
 // 处理客户端连接
-Coroutine handleClient(TcpSocket client, Host clientHost) {
+Task<void> handleClient(TcpSocket client, Host clientHost) {
     HTTP_LOG_INFO("Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
     client.option().handleNonBlock();
@@ -186,7 +186,7 @@ Coroutine handleClient(TcpSocket client, Host clientHost) {
 }
 
 // Chunk测试服务器
-Coroutine chunkedTestServer() {
+Task<void> chunkedTestServer() {
     HTTP_LOG_INFO("=== HTTP Chunked Encoding Test Server ===");
     HTTP_LOG_INFO("Starting server...");
 
@@ -408,7 +408,7 @@ int main() {
     }
 
     // 启动服务器
-    scheduleCoroutine(scheduler, chunkedTestServer());
+    scheduleTask(scheduler, chunkedTestServer());
 
     HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 

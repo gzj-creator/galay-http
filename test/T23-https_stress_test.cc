@@ -20,7 +20,7 @@ std::atomic<int> g_fail{0};
 std::atomic<int> g_completed{0};
 
 // 单连接多请求 (keep-alive)
-Coroutine keepAliveRequests(int conn_id, int requests_per_conn) {
+Task<void> keepAliveRequests(int conn_id, int requests_per_conn) {
     HttpsClient client(HttpsClientBuilder()
         .verifyPeer(false)
         .build());
@@ -127,7 +127,7 @@ bool runKeepAliveTest(Runtime& rt, int total_requests, int connections, const st
     for (int i = 0; i < connections; i++) {
         auto* scheduler = rt.getNextIOScheduler();
         if (scheduler) {
-            scheduleCoroutine(scheduler, keepAliveRequests(i, requests_per_conn));
+            scheduleTask(scheduler, keepAliveRequests(i, requests_per_conn));
         }
     }
 

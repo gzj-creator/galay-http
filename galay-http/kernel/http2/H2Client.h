@@ -51,7 +51,6 @@ struct H2ClientConnectMachine;
 class H2ClientConnectSequence;
 struct H2RequestMachine;
 auto buildRequestOperation(H2Client& client, Http2Request&& request);
-class H2ClientCloseAwaitable;
 } // namespace detail
 
 class H2ClientBuilder {
@@ -73,7 +72,6 @@ class H2Client
 {
 public:
     using ConnectAwaitable = detail::H2ClientConnectSequence;
-    using CloseAwaitable = detail::H2ClientCloseAwaitable;
 
     H2Client(const H2ClientConfig& config = H2ClientConfig());
     ~H2Client() = default;
@@ -90,7 +88,7 @@ public:
     Http2Stream::ptr post(const std::string& path,
                           const std::string& body,
                           const std::string& content_type = "application/x-www-form-urlencoded");
-    auto close();
+    Task<std::expected<bool, Http2ErrorCode>> close();
 
     bool isConnected() const { return m_connected; }
 
@@ -104,7 +102,6 @@ public:
 private:
     friend struct detail::H2ClientConnectMachine;
     friend class detail::H2ClientConnectSequence;
-    friend class detail::H2ClientCloseAwaitable;
     friend struct detail::H2RequestMachine;
     friend auto detail::buildRequestOperation(H2Client& client, Http2Request&& request);
 
@@ -911,68 +908,6 @@ inline auto buildRequestOperation(H2Client& client, Http2Request&& request) {
         .build();
 }
 
-class H2ClientCloseAwaitable
-    : public TimeoutSupport<H2ClientCloseAwaitable>
-{
-public:
-    using ManagerShutdownStep = Http2StreamManagerImpl<galay::ssl::SslSocket>::ShutdownAwaitable;
-    using SocketCloseStep = galay::kernel::CloseAwaitable;
-
-    explicit H2ClientCloseAwaitable(H2Client& client)
-        : m_client(client)
-    {
-    }
-
-    bool await_ready() const noexcept { return false; }
-
-    template<typename Handle>
-    bool await_suspend(Handle handle) {
-        if (m_started) {
-            return false;
-        }
-        m_started = true;
-        m_client.m_connected = false;
-        m_client.m_close_result = true;
-
-        if (m_client.m_conn) {
-            if (auto* manager = m_client.m_conn->streamManager()) {
-                m_manager_shutdown_step.emplace(manager, Http2ErrorCode::NoError);
-                return m_manager_shutdown_step->await_suspend(handle);
-            }
-
-            m_socket_close_step.emplace(m_client.m_conn->close());
-            return m_socket_close_step->await_suspend(handle);
-        }
-
-        if (m_client.m_socket) {
-            m_socket_close_step.emplace(m_client.m_socket->close());
-            return m_socket_close_step->await_suspend(handle);
-        }
-
-        return false;
-    }
-
-    std::expected<bool, Http2ErrorCode> await_resume() {
-        if (m_manager_shutdown_step.has_value()) {
-            m_manager_shutdown_step->await_resume();
-        }
-
-        if (m_socket_close_step.has_value()) {
-            (void)m_socket_close_step->await_resume();
-        }
-
-        m_client.m_conn.reset();
-        m_client.m_socket.reset();
-        return m_client.m_close_result;
-    }
-
-private:
-    H2Client& m_client;
-    bool m_started = false;
-    std::optional<ManagerShutdownStep> m_manager_shutdown_step;
-    std::optional<SocketCloseStep> m_socket_close_step;
-};
-
 } // namespace detail
 
 inline H2Client::H2Client(const H2ClientConfig& config)
@@ -1029,7 +964,7 @@ inline bool H2Client::ensureActiveStreamManager() {
 
     manager->startWithScheduler(
         m_scheduler,
-        [](Http2Stream::ptr) -> galay::kernel::Coroutine { co_return; });
+        [](Http2Stream::ptr) -> galay::kernel::Task<void> { co_return; });
     return true;
 }
 
@@ -1073,8 +1008,25 @@ inline Http2Stream::ptr H2Client::post(const std::string& path,
     return stream;
 }
 
-inline auto H2Client::close() {
-    return detail::H2ClientCloseAwaitable(*this);
+inline Task<std::expected<bool, Http2ErrorCode>> H2Client::close() {
+    m_connected = false;
+    m_close_result = true;
+
+    if (m_conn) {
+        if (auto* manager = m_conn->streamManager()) {
+            co_await manager->shutdown(Http2ErrorCode::NoError);
+        } else {
+            auto close_result = co_await m_conn->close();
+            (void)close_result;
+        }
+    } else if (m_socket) {
+        auto close_result = co_await m_socket->close();
+        (void)close_result;
+    }
+
+    m_conn.reset();
+    m_socket.reset();
+    co_return m_close_result;
 }
 
 inline H2Client H2ClientBuilder::build() const { return H2Client(m_config); }

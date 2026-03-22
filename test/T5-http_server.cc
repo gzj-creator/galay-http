@@ -64,7 +64,7 @@ std::string buildApiDataBody(std::string_view method_name,
         + "}";
 }
 
-Coroutine sendRawPayload(HttpConn& conn, std::string payload) {
+Task<void> sendRawPayload(HttpConn& conn, std::string payload) {
     auto& socket = conn.getSocket();
     size_t sent = 0;
     while (sent < payload.size()) {
@@ -81,7 +81,7 @@ Coroutine sendRawPayload(HttpConn& conn, std::string payload) {
 }  // namespace
 
 // HTTP请求处理器协程
-Coroutine handleRequest(HttpConn conn) {
+Task<void> handleRequest(HttpConn conn) {
     auto reader = conn.getReader();
     auto writer = conn.getWriter();
 
@@ -135,7 +135,7 @@ Coroutine handleRequest(HttpConn conn) {
                 "Connection: keep-alive\r\n"
                 "\r\n"
                 "partial";
-            co_await sendRawPayload(conn, std::move(partial)).wait();
+            co_await sendRawPayload(conn, std::move(partial));
             continue;
         } else if (uri.starts_with("/delay/")) {
             const int delay_seconds = parseDelaySeconds(uri);

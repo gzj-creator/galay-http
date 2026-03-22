@@ -243,7 +243,7 @@ bool isLikelyStreamingRequest(const std::string& uri, const HeaderPair& headers)
     return false;
 }
 
-Coroutine sendProxyError(HttpConn& conn, HttpStatusCode code, const std::string& message) {
+Task<void> sendProxyError(HttpConn& conn, HttpStatusCode code, const std::string& message) {
     auto response = Http1_1ResponseBuilder()
         .status(code)
         .header("Server", "Galay-Proxy/1.0")
@@ -260,10 +260,10 @@ Coroutine sendProxyError(HttpConn& conn, HttpStatusCode code, const std::string&
     co_return;
 }
 
-Coroutine connectProxyUpstream(HttpClient& client,
-                               const std::string& url,
-                               bool& ok,
-                               std::string& err_msg)
+Task<void> connectProxyUpstream(HttpClient& client,
+                                const std::string& url,
+                                bool& ok,
+                                std::string& err_msg)
 {
     ok = false;
     err_msg.clear();
@@ -284,10 +284,10 @@ Coroutine connectProxyUpstream(HttpClient& client,
     co_return;
 }
 
-Coroutine relayRawUpstreamToDownstream(TcpSocket& upstream,
-                                       TcpSocket& downstream,
-                                       bool& ok,
-                                       std::string& err_msg)
+Task<void> relayRawUpstreamToDownstream(TcpSocket& upstream,
+                                        TcpSocket& downstream,
+                                        bool& ok,
+                                        std::string& err_msg)
 {
     ok = false;
     err_msg.clear();
@@ -678,9 +678,9 @@ void HttpRouter::mount(const std::string& routePrefix, const std::string& dirPat
 
     // 创建动态文件处理器。文件未命中时，优先走 fallback proxy（如已配置）
     auto fallback_state = m_fallbackProxyHandlerState;
-    HttpRouteHandler fallback = [fallback_state](HttpConn& conn, HttpRequest req) -> Coroutine {
+    HttpRouteHandler fallback = [fallback_state](HttpConn& conn, HttpRequest req) -> Task<void> {
         if (fallback_state && fallback_state->has_value()) {
-            co_await fallback_state->value()(conn, std::move(req)).wait();
+            co_await fallback_state->value()(conn, std::move(req));
             co_return;
         }
 
@@ -832,7 +832,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
     }
 
     // 捕获 routePrefix、dirPath 和 config，返回一个协程处理器
-    return [routePrefix, dirPath, canonicalDir, config, fallbackHandler](HttpConn& conn, HttpRequest req) -> Coroutine {
+    return [routePrefix, dirPath, canonicalDir, config, fallbackHandler](HttpConn& conn, HttpRequest req) -> Task<void> {
         namespace fs = std::filesystem;
 
         // 获取请求的路径参数（通配符匹配的部分）
@@ -864,7 +864,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
 
         if (fileNotFound) {
             if (fallbackHandler) {
-                co_await fallbackHandler(conn, std::move(req)).wait();
+                co_await fallbackHandler(conn, std::move(req));
                 co_return;
             }
             // 文件不存在
@@ -901,7 +901,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
         // 检查文件是否存在且是普通文件
         if (!fs::exists(canonicalFile) || !fs::is_regular_file(canonicalFile)) {
             if (fallbackHandler) {
-                co_await fallbackHandler(conn, std::move(req)).wait();
+                co_await fallbackHandler(conn, std::move(req));
                 co_return;
             }
             HTTP_LOG_WARN("[file] [missing] [{}]", canonicalFile.string());
@@ -929,9 +929,7 @@ HttpRouteHandler HttpRouter::createStaticFileHandler(const std::string& routePre
                        canonicalFile.string(),
                        fileSize,
                        mimeType);
-        // 使用配置的传输方式发送文件
-        // 直接 co_await 协程，不需要 .wait()
-        co_await sendFileContent(conn, req, canonicalFile.string(), fileSize, mimeType, config).wait();
+        co_await sendFileContent(conn, req, canonicalFile.string(), fileSize, mimeType, config);
         co_return;
     };
 }
@@ -978,7 +976,7 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
                                                      const StaticFileConfig& config)
 {
     // 捕获文件路径和配置
-    return [filePath, config](HttpConn& conn, HttpRequest req) -> Coroutine {
+    return [filePath, config](HttpConn& conn, HttpRequest req) -> Task<void> {
         namespace fs = std::filesystem;
 
         // 检查文件是否存在
@@ -1005,7 +1003,7 @@ HttpRouteHandler HttpRouter::createSingleFileHandler(const std::string& filePath
         std::string mimeType = MimeType::convertToMimeType(ext);
 
         // 使用配置的传输方式发送文件
-        co_await sendFileContent(conn, req, filePath, fileSize, mimeType, config).wait();
+        co_await sendFileContent(conn, req, filePath, fileSize, mimeType, config);
         co_return;
     };
 }
@@ -1015,7 +1013,7 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
                                                 uint16_t upstreamPort,
                                                 ProxyMode mode)
 {
-    return [routePrefix, upstreamHost, upstreamPort, mode](HttpConn& conn, HttpRequest req) -> Coroutine {
+    return [routePrefix, upstreamHost, upstreamPort, mode](HttpConn& conn, HttpRequest req) -> Task<void> {
         const std::string request_uri = req.header().uri();
         const std::string upstream_uri = rewriteProxyUri(routePrefix, request_uri);
         const std::string pool_key = buildUpstreamKey(upstreamHost, upstreamPort);
@@ -1056,11 +1054,11 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
             auto client = std::make_unique<HttpClient>();
             bool connect_ok = false;
             std::string connect_err;
-            co_await connectProxyUpstream(*client, upstream_connect_url, connect_ok, connect_err).wait();
+            co_await connectProxyUpstream(*client, upstream_connect_url, connect_ok, connect_err);
             if (!connect_ok) {
                 HTTP_LOG_ERROR("[proxy-raw] [connect-fail] [{}]", connect_err);
                 co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                        "Bad Gateway: connect upstream failed").wait();
+                                        "Bad Gateway: connect upstream failed");
                 co_return;
             }
 
@@ -1082,7 +1080,7 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
             if (!send_ok) {
                 co_await client->close();
                 co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                        "Bad Gateway: send upstream failed").wait();
+                                        "Bad Gateway: send upstream failed");
                 co_return;
             }
 
@@ -1091,7 +1089,7 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
             co_await relayRawUpstreamToDownstream(client->socket(),
                                                   conn.getSocket(),
                                                   relay_ok,
-                                                  relay_err).wait();
+                                                  relay_err);
             if (!relay_ok && !relay_err.empty()) {
                 HTTP_LOG_WARN("[proxy-raw] [relay-fail] [{}]", relay_err);
             }
@@ -1113,11 +1111,11 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
             client = std::make_unique<HttpClient>();
             bool connect_ok = false;
             std::string connect_err;
-            co_await connectProxyUpstream(*client, upstream_connect_url, connect_ok, connect_err).wait();
+            co_await connectProxyUpstream(*client, upstream_connect_url, connect_ok, connect_err);
             if (!connect_ok) {
                 HTTP_LOG_ERROR("[proxy] [connect-fail] [{}]", connect_err);
                 co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                        "Bad Gateway: connect upstream failed").wait();
+                                        "Bad Gateway: connect upstream failed");
                 co_return;
             }
         }
@@ -1150,18 +1148,18 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
                     client = std::make_unique<HttpClient>();
                     bool reconnect_ok = false;
                     std::string reconnect_err;
-                    co_await connectProxyUpstream(*client, upstream_connect_url, reconnect_ok, reconnect_err).wait();
+                    co_await connectProxyUpstream(*client, upstream_connect_url, reconnect_ok, reconnect_err);
                     if (!reconnect_ok) {
                         HTTP_LOG_ERROR("[proxy] [reconnect-fail] [{}]", reconnect_err);
                         co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                                "Bad Gateway: send upstream failed").wait();
+                                                "Bad Gateway: send upstream failed");
                         co_return;
                     }
                     continue;
                 }
 
                 co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                        "Bad Gateway: send upstream failed").wait();
+                                        "Bad Gateway: send upstream failed");
                 co_return;
             }
 
@@ -1188,18 +1186,18 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
                     client = std::make_unique<HttpClient>();
                     bool reconnect_ok = false;
                     std::string reconnect_err;
-                    co_await connectProxyUpstream(*client, upstream_connect_url, reconnect_ok, reconnect_err).wait();
+                    co_await connectProxyUpstream(*client, upstream_connect_url, reconnect_ok, reconnect_err);
                     if (!reconnect_ok) {
                         HTTP_LOG_ERROR("[proxy] [reconnect-fail] [{}]", reconnect_err);
                         co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                                "Bad Gateway: recv upstream failed").wait();
+                                                "Bad Gateway: recv upstream failed");
                         co_return;
                     }
                     continue;
                 }
 
                 co_await sendProxyError(conn, HttpStatusCode::BadGateway_502,
-                                        "Bad Gateway: recv upstream failed").wait();
+                                        "Bad Gateway: recv upstream failed");
                 co_return;
             }
 
@@ -1241,12 +1239,12 @@ HttpRouteHandler HttpRouter::createProxyHandler(const std::string& routePrefix,
 
 // ==================== 文件传输实现 ====================
 
-Coroutine HttpRouter::sendFileContent(HttpConn& conn,
-                                      HttpRequest& req,
-                                      const std::string& filePath,
-                                      size_t fileSize,
-                                      const std::string& mimeType,
-                                      const StaticFileConfig& config)
+Task<void> HttpRouter::sendFileContent(HttpConn& conn,
+                                       HttpRequest& req,
+                                       const std::string& filePath,
+                                       size_t fileSize,
+                                       const std::string& mimeType,
+                                       const StaticFileConfig& config)
 {
     // 生成稳定 ETag（mtime + size + inode/路径哈希）
     namespace fs = std::filesystem;
@@ -1363,10 +1361,10 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
         // 处理 Range 请求
         if (rangeResult.type == RangeType::SINGLE_RANGE) {
             // 单范围请求
-            co_await sendSingleRange(conn, req, filePath, fileSize, mimeType, etag, lastModifiedStr, rangeResult.ranges[0], config).wait();
+            co_await sendSingleRange(conn, req, filePath, fileSize, mimeType, etag, lastModifiedStr, rangeResult.ranges[0], config);
         } else if (rangeResult.type == RangeType::MULTIPLE_RANGES) {
             // 多范围请求 (multipart/byteranges)
-            co_await sendMultipleRanges(conn, req, filePath, fileSize, mimeType, etag, lastModifiedStr, rangeResult, config).wait();
+            co_await sendMultipleRanges(conn, req, filePath, fileSize, mimeType, etag, lastModifiedStr, rangeResult, config);
         }
         co_return;
     }
@@ -1536,15 +1534,15 @@ Coroutine HttpRouter::sendFileContent(HttpConn& conn,
 
 // ==================== Range 请求处理实现 ====================
 
-Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
-                                      HttpRequest& req,
-                                      const std::string& filePath,
-                                      size_t fileSize,
-                                      const std::string& mimeType,
-                                      const std::string& etag,
-                                      const std::string& lastModified,
-                                      const HttpRange& range,
-                                      const StaticFileConfig& config)
+Task<void> HttpRouter::sendSingleRange(HttpConn& conn,
+                                       HttpRequest& req,
+                                       const std::string& filePath,
+                                       size_t fileSize,
+                                       const std::string& mimeType,
+                                       const std::string& etag,
+                                       const std::string& lastModified,
+                                       const HttpRange& range,
+                                       const StaticFileConfig& config)
 {
     auto writer = conn.getWriter();
 
@@ -1645,15 +1643,15 @@ Coroutine HttpRouter::sendSingleRange(HttpConn& conn,
     co_return;
 }
 
-Coroutine HttpRouter::sendMultipleRanges(HttpConn& conn,
-                                         HttpRequest& req,
-                                         const std::string& filePath,
-                                         size_t fileSize,
-                                         const std::string& mimeType,
-                                         const std::string& etag,
-                                         const std::string& lastModified,
-                                         const RangeParseResult& rangeResult,
-                                         const StaticFileConfig& config)
+Task<void> HttpRouter::sendMultipleRanges(HttpConn& conn,
+                                          HttpRequest& req,
+                                          const std::string& filePath,
+                                          size_t fileSize,
+                                          const std::string& mimeType,
+                                          const std::string& etag,
+                                          const std::string& lastModified,
+                                          const RangeParseResult& rangeResult,
+                                          const StaticFileConfig& config)
 {
     auto writer = conn.getWriter();
 

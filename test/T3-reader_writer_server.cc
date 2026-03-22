@@ -37,7 +37,7 @@ using namespace galay::async;
 std::atomic<int> g_request_count{0};
 
 // Echo服务器
-Coroutine echoServer() {
+Task<void> echoServer() {
     HTTP_LOG_INFO("=== HTTP Reader/Writer Test Server ===");
     HTTP_LOG_INFO("Starting server...");
 
@@ -225,7 +225,7 @@ int main() {
     }
 
     // 启动服务器
-    scheduleCoroutine(scheduler, echoServer());
+    scheduleTask(scheduler, echoServer());
 
     HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 

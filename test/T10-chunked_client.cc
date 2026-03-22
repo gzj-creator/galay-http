@@ -33,7 +33,7 @@ using namespace galay::kernel;
 using namespace galay::async;
 
 // 发送chunked请求并接收响应
-Coroutine sendChunkedRequest() {
+Task<void> sendChunkedRequest() {
     HTTP_LOG_INFO("=== HTTP Chunked Client Test ===");
     HTTP_LOG_INFO("Connecting to server...");
 
@@ -222,7 +222,7 @@ int main() {
     }
 
     // 启动客户端
-    scheduleCoroutine(scheduler, sendChunkedRequest());
+    scheduleTask(scheduler, sendChunkedRequest());
 
     // 等待一段时间让测试完成
     std::this_thread::sleep_for(std::chrono::seconds(3));

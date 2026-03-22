@@ -14,7 +14,7 @@ using namespace galay::async;
 /**
  * @brief 测试 GET 请求
  */
-Coroutine testGet(IOScheduler* scheduler)
+Task<void> testGet(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 1: GET Request ===");
 
@@ -77,7 +77,7 @@ Coroutine testGet(IOScheduler* scheduler)
 /**
  * @brief 测试 POST 请求
  */
-Coroutine testPost(IOScheduler* scheduler)
+Task<void> testPost(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 2: POST Request ===");
 
@@ -137,7 +137,7 @@ Coroutine testPost(IOScheduler* scheduler)
 /**
  * @brief 测试多个连续请求
  */
-Coroutine testMultipleRequests(IOScheduler* scheduler)
+Task<void> testMultipleRequests(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 3: Multiple Requests ===");
 
@@ -214,13 +214,13 @@ int main()
         }
 
         // 运行测试
-        scheduleCoroutine(scheduler, testGet(scheduler));
+        scheduleTask(scheduler, testGet(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, testPost(scheduler));
+        scheduleTask(scheduler, testPost(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, testMultipleRequests(scheduler));
+        scheduleTask(scheduler, testMultipleRequests(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
         runtime.stop();

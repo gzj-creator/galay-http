@@ -1,7 +1,7 @@
 #ifndef GALAY_HTTP2_CONNECTION_CORE_H
 #define GALAY_HTTP2_CONNECTION_CORE_H
 
-#include "galay-kernel/kernel/Coroutine.h"
+#include "galay-kernel/kernel/Task.h"
 #include <atomic>
 #include <chrono>
 
@@ -71,7 +71,7 @@ public:
 
     TimerEvent checkTimers(std::chrono::steady_clock::time_point now) noexcept;
 
-    galay::kernel::Coroutine run();
+    galay::kernel::Task<void> run();
 
 private:
     std::atomic<State> m_state{State::Idle};

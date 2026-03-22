@@ -16,8 +16,8 @@ using H2cManager = Http2StreamManagerImpl<TcpSocket>;
 
 static_assert(std::is_same_v<
               std::remove_cvref_t<decltype(std::declval<H2cManager&>().shutdown())>,
-              H2cManager::ShutdownAwaitable>,
-              "Http2StreamManager::shutdown() should return the direct shutdown awaitable");
+              galay::kernel::Task<void>>,
+              "Http2StreamManager::shutdown() should return Task<void>");
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-http/kernel/http2/H2Client.h"

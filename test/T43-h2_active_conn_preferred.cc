@@ -19,12 +19,12 @@ static std::atomic<uint32_t> g_seen_events{0};
 static std::atomic<bool> g_client_done{false};
 static std::atomic<bool> g_client_ok{false};
 
-Coroutine legacyStreamHandler(Http2Stream::ptr) {
+Task<void> legacyStreamHandler(Http2Stream::ptr) {
     g_stream_handler_calls.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
 
-Coroutine activeConnHandler(Http2ConnContext& ctx) {
+Task<void> activeConnHandler(Http2ConnContext& ctx) {
     g_active_handler_calls.fetch_add(1, std::memory_order_relaxed);
 
     while (true) {
@@ -60,7 +60,7 @@ Coroutine activeConnHandler(Http2ConnContext& ctx) {
     co_return;
 }
 
-Coroutine runClient(uint16_t port) {
+Task<void> runClient(uint16_t port) {
     H2cClient client(H2cClientBuilder().build());
 
     auto connect_result = co_await client.connect("127.0.0.1", port);
@@ -127,7 +127,7 @@ int main() {
         return 1;
     }
 
-    scheduleCoroutine(scheduler, runClient(port));
+    scheduleTask(scheduler, runClient(port));
 
     for (int i = 0; i < 100; ++i) {
         if (g_client_done.load(std::memory_order_acquire)) {

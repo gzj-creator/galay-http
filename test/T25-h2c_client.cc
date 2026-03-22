@@ -24,7 +24,7 @@ std::atomic<bool> g_done{false};
 /**
  * @brief 客户端测试协程
  */
-Coroutine testClient(const std::string& host, uint16_t port, int num_requests) {
+Task<void> testClient(const std::string& host, uint16_t port, int num_requests) {
     H2cClient client(H2cClientBuilder().build());
 
     std::cout << "Connecting to " << host << ":" << port << "..." << std::endl;
@@ -105,8 +105,7 @@ int main(int argc, char* argv[]) {
         Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
         runtime.start();
 
-        auto* scheduler = runtime.getNextIOScheduler();
-        scheduleCoroutine(scheduler, testClient(host, port, num_requests));
+        auto join = runtime.spawn(testClient(host, port, num_requests));
 
         // Wait for coroutine completion (max 30 seconds)
         for (int i = 0; i < 300; i++) {
@@ -114,6 +113,10 @@ int main(int argc, char* argv[]) {
             if (g_done.load()) {
                 break;
             }
+        }
+
+        if (g_done.load()) {
+            join.join();
         }
 
         runtime.stop();

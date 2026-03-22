@@ -17,7 +17,7 @@ using namespace galay::kernel;
 std::atomic<int> g_success{0};
 std::atomic<int> g_fail{0};
 
-Coroutine singleRequest(int id) {
+Task<void> singleRequest(int id) {
     std::cout << "[Request " << id << "] Starting..." << std::endl;
 
     HttpsClient client(HttpsClientBuilder()
@@ -116,7 +116,7 @@ int main() {
     for (int i = 0; i < 20; i++) {
         auto* scheduler = rt.getNextIOScheduler();
         if (scheduler) {
-            scheduleCoroutine(scheduler, singleRequest(i));
+            scheduleTask(scheduler, singleRequest(i));
         }
         // 等待每个请求完成
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

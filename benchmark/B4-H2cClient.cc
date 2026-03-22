@@ -33,7 +33,7 @@ struct ActiveClientGuard {
     ~ActiveClientGuard() { active_clients.fetch_sub(1); }
 };
 
-Coroutine handleStream(Http2Stream::ptr stream) {
+Task<void> handleStream(Http2Stream::ptr stream) {
     bool finished = false;
     while (!finished) {
         auto batch_result = co_await stream->getFrames(16);
@@ -72,11 +72,11 @@ Coroutine handleStream(Http2Stream::ptr stream) {
 /**
  * @brief 单个客户端协程 - 使用 HTTP/2 多路复用
  */
-Coroutine runClient(std::shared_ptr<H2cClient> client,
-                    int client_id,
-                    const std::string& host,
-                    uint16_t port,
-                    int requests_per_client) {
+Task<void> runClient(std::shared_ptr<H2cClient> client,
+                     int client_id,
+                     const std::string& host,
+                     uint16_t port,
+                     int requests_per_client) {
     ActiveClientGuard guard;
 
     // 连接到服务器
@@ -119,7 +119,7 @@ Coroutine runClient(std::shared_ptr<H2cClient> client,
         stream->sendData(kEchoPayload, true);
         total_requests++;
 
-        co_await handleStream(stream).wait();
+        co_await handleStream(stream);
     }
 
     co_await client->shutdown();
@@ -175,7 +175,7 @@ void runBenchmark(const std::string& host,
         auto client = std::make_shared<H2cClient>(H2cClientBuilder().buildConfig());
         client_pool.push_back(client);
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduleCoroutine(scheduler, runClient(std::move(client), i, host, port, requests_per_client));
+        scheduleTask(scheduler, runClient(std::move(client), i, host, port, requests_per_client));
     }
 
     // 等待所有客户端完成

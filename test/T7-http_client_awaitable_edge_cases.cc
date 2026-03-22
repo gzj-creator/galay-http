@@ -15,7 +15,7 @@ using namespace galay::async;
 /**
  * @brief 测试1: 连接失败
  */
-Coroutine testConnectionFailure(IOScheduler* scheduler)
+Task<void> testConnectionFailure(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 1: Connection Failure ===");
 
@@ -39,7 +39,7 @@ Coroutine testConnectionFailure(IOScheduler* scheduler)
 /**
  * @brief 测试2: 服务器关闭连接
  */
-Coroutine testServerCloseConnection(IOScheduler* scheduler)
+Task<void> testServerCloseConnection(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 2: Server Close Connection ===");
 
@@ -85,7 +85,7 @@ Coroutine testServerCloseConnection(IOScheduler* scheduler)
 /**
  * @brief 测试3: 多个连续请求
  */
-Coroutine testMultipleRequests(IOScheduler* scheduler)
+Task<void> testMultipleRequests(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 3: Multiple Sequential Requests ===");
 
@@ -139,7 +139,7 @@ Coroutine testMultipleRequests(IOScheduler* scheduler)
 /**
  * @brief 测试4: 大请求体
  */
-Coroutine testLargeRequestBody(IOScheduler* scheduler)
+Task<void> testLargeRequestBody(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 4: Large Request Body ===");
 
@@ -190,7 +190,7 @@ Coroutine testLargeRequestBody(IOScheduler* scheduler)
 /**
  * @brief 测试5: 404 错误
  */
-Coroutine test404NotFound(IOScheduler* scheduler)
+Task<void> test404NotFound(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 5: 404 Not Found ===");
 
@@ -241,7 +241,7 @@ Coroutine test404NotFound(IOScheduler* scheduler)
 /**
  * @brief 测试6: 空响应体
  */
-Coroutine testEmptyResponse(IOScheduler* scheduler)
+Task<void> testEmptyResponse(IOScheduler* scheduler)
 {
     HTTP_LOG_INFO("=== Test 6: Empty Response Body ===");
 
@@ -302,22 +302,22 @@ int main()
         }
 
         // 运行边界测试
-        scheduleCoroutine(scheduler, testConnectionFailure(scheduler));
+        scheduleTask(scheduler, testConnectionFailure(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, testServerCloseConnection(scheduler));
+        scheduleTask(scheduler, testServerCloseConnection(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, testMultipleRequests(scheduler));
+        scheduleTask(scheduler, testMultipleRequests(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduleCoroutine(scheduler, testLargeRequestBody(scheduler));
+        scheduleTask(scheduler, testLargeRequestBody(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, test404NotFound(scheduler));
+        scheduleTask(scheduler, test404NotFound(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduleCoroutine(scheduler, testEmptyResponse(scheduler));
+        scheduleTask(scheduler, testEmptyResponse(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
         runtime.stop();

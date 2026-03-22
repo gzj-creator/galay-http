@@ -17,7 +17,7 @@ using namespace galay::kernel;
 #if defined(__GNUC__) && !defined(__clang__)
 __attribute__((noinline))
 #endif
-Coroutine sendEchoRequest(const std::string& url, const std::string& message) {
+Task<void> sendEchoRequest(const std::string& url, const std::string& message) {
     std::cout << "Connecting to " << url << "...\n";
 
     // 创建 HttpClient 并连接
@@ -91,17 +91,8 @@ int main(int argc, char* argv[]) {
 
         std::cout << "Runtime started\n";
 
-        // 获取调度器并启动请求协程
-        auto* scheduler = runtime.getNextIOScheduler();
-        if (!scheduler) {
-            std::cerr << "No IO scheduler available\n";
-            return 1;
-        }
-
-        scheduleCoroutine(scheduler, sendEchoRequest(url, message));
-
-        // 等待一段时间让请求完成
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        auto join = runtime.spawn(sendEchoRequest(url, message));
+        join.join();
 
         // 停止 Runtime
         runtime.stop();

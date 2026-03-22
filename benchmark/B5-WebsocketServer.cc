@@ -146,7 +146,7 @@ cleanup:
 /**
  * @brief HTTP 请求处理协程
  */
-Coroutine handleHttpRequest(HttpConn conn) {
+Task<void> handleHttpRequest(HttpConn conn) {
     static std::atomic<int> req_id{0};
     int current_req_id = req_id.fetch_add(1);
 
