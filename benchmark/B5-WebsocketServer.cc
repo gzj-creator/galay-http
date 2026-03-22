@@ -23,6 +23,8 @@
 #include <cstdlib>
 #include <string_view>
 #include <utility>
+#include "galay-kernel/kernel/Task.h"
+#include "galay-kernel/kernel/Scheduler.hpp"
 
 using namespace galay::http;
 using namespace galay::websocket;
@@ -43,7 +45,7 @@ void signalHandler(int) {
 /**
  * @brief WebSocket 连接处理协程
  */
-Coroutine handleWebSocketConnection(WsConn& ws_conn) {
+Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     int conn_id = total_connections.fetch_add(1);
 
     auto reader = ws_conn.getReader();
@@ -62,9 +64,10 @@ Coroutine handleWebSocketConnection(WsConn& ws_conn) {
     HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sent]", conn_id);
 
     // 消息循环
+    std::string message;
+    WsOpcode opcode = WsOpcode::Text;
     while (true) {
-        std::string message;
-        WsOpcode opcode;
+        message.clear();
 
         HTTP_LOG_INFO("[ws] [conn-{}] [waiting-message]", conn_id);
         auto result = co_await reader.getMessage(message, opcode);
@@ -146,7 +149,7 @@ cleanup:
 /**
  * @brief HTTP 请求处理协程
  */
-Coroutine handleHttpRequest(HttpConn conn) {
+Task<void> handleHttpRequest(HttpConn conn) {
     static std::atomic<int> req_id{0};
     int current_req_id = req_id.fetch_add(1);
 
@@ -196,7 +199,7 @@ Coroutine handleHttpRequest(HttpConn conn) {
         WsConn ws_conn = WsConn::from(std::move(conn), true);
 
         HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [entering-ws-handler]", current_req_id);
-        co_await handleWebSocketConnection(ws_conn).wait();
+        co_await handleWebSocketConnection(ws_conn);
         HTTP_LOG_INFO("[http] [req-{}] [ws-handler] [done]", current_req_id);
     } else {
         // 非 WebSocket 请求，返回 404

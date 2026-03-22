@@ -10,6 +10,8 @@
 #include <csignal>
 #include <atomic>
 #include <memory>
+#include "galay-kernel/kernel/Task.h"
+#include "galay-kernel/kernel/Scheduler.hpp"
 
 using namespace galay::http2;
 using namespace galay::kernel;
@@ -70,7 +72,7 @@ void signalHandler(int) {
     g_running = false;
 }
 
-Coroutine handleActiveConn(Http2ConnContext& ctx) {
+Task<void> handleActiveConn(Http2ConnContext& ctx) {
     while (true) {
         auto streams = co_await ctx.getActiveStreams(64);
         if (!streams) {
