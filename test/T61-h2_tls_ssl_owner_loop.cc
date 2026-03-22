@@ -4,6 +4,7 @@
 #include <utility>
 #include <vector>
 
+#ifdef GALAY_HTTP_SSL_ENABLED
 #include "galay-kernel/common/Bytes.h"
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-ssl/common/Error.h"
@@ -129,8 +130,13 @@ Task<void> runSslOwnerLoop(Http2StreamManagerImpl<MockSslSocket>& manager) {
 }
 
 } // namespace
+#endif
 
 int main() {
+#ifndef GALAY_HTTP_SSL_ENABLED
+    std::cout << "T61-H2TlsSslOwnerLoop SKIP (SSL disabled)\n";
+    return 0;
+#else
     auto send_error = std::unexpected(galay::ssl::SslError(galay::ssl::SslErrorCode::kWriteFailed));
     Http2ConnImpl<MockSslSocket> conn(MockSslSocket({
         send_error,
@@ -147,7 +153,7 @@ int main() {
 
     Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     runtime.start();
-    runtime.blockOn(runSslOwnerLoop(manager));
+    runtime.blockOn(static_cast<galay::kernel::Task<void>>(runSslOwnerLoop(manager)));
     runtime.stop();
 
     if (!waiter1->isReady() || !waiter2->isReady()) {
@@ -167,4 +173,5 @@ int main() {
 
     std::cout << "T61-H2TlsSslOwnerLoop PASS\n";
     return 0;
+#endif
 }

@@ -206,19 +206,19 @@ Coroutine runAllTests(IOScheduler* scheduler) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // 启动所有测试（并发执行）
-    scheduler->spawn(testClient(1, "/test"));
+    scheduleCoroutine(scheduler, testClient(1, "/test"));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    scheduler->spawn(testClient(2, "/api/users?id=123"));
+    scheduleCoroutine(scheduler, testClient(2, "/api/users?id=123"));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    scheduler->spawn(testClient(3, "/very/long/path/to/resource"));
+    scheduleCoroutine(scheduler, testClient(3, "/very/long/path/to/resource"));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    scheduler->spawn(testClient(4, "/"));
+    scheduleCoroutine(scheduler, testClient(4, "/"));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    scheduler->spawn(testClient(5, "/test%20path"));
+    scheduleCoroutine(scheduler, testClient(5, "/test%20path"));
 
     // 等待所有测试完成
     std::this_thread::sleep_for(std::chrono::seconds(2));
@@ -250,7 +250,7 @@ int main() {
     }
 
     // 运行测试
-    scheduler->spawn(runAllTests(scheduler));
+    scheduleCoroutine(scheduler, runAllTests(scheduler));
 
     // 等待测试完成
     while (!g_test_done.load()) {

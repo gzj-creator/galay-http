@@ -225,7 +225,7 @@ int main() {
     }
 
     // 启动服务器
-    scheduler->spawn(echoServer());
+    scheduleCoroutine(scheduler, echoServer());
 
     HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 

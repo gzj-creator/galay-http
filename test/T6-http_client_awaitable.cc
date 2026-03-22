@@ -214,13 +214,13 @@ int main()
         }
 
         // 运行测试
-        scheduler->spawn(testGet(scheduler));
+        scheduleCoroutine(scheduler, testGet(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(testPost(scheduler));
+        scheduleCoroutine(scheduler, testPost(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(testMultipleRequests(scheduler));
+        scheduleCoroutine(scheduler, testMultipleRequests(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
         runtime.stop();

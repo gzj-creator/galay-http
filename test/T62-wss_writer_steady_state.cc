@@ -10,10 +10,10 @@
 #include "galay-ssl/async/SslSocket.h"
 #endif
 
-using namespace galay::websocket;
-
 int main() {
 #ifdef GALAY_HTTP_SSL_ENABLED
+    using namespace galay::websocket;
+
     galay::ssl::SslSocket socket(nullptr);
     WsWriterImpl<galay::ssl::SslSocket> writer(WsWriterSetting::byServer(), socket);
 

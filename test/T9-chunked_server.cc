@@ -408,7 +408,7 @@ int main() {
     }
 
     // 启动服务器
-    scheduler->spawn(chunkedTestServer());
+    scheduleCoroutine(scheduler, chunkedTestServer());
 
     HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 

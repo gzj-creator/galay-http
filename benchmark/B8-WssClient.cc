@@ -284,7 +284,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "Failed to get IO scheduler for client " << i << "\n";
                 return 1;
             }
-            scheduler->spawn(benchmarkWssClient(i, url, message_payload, end_time));
+            scheduleCoroutine(scheduler, benchmarkWssClient(i, url, message_payload, end_time));
         }
 
         std::cout << "Running for " << duration_sec << " seconds...\n";

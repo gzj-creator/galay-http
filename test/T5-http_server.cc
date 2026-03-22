@@ -8,6 +8,7 @@
 #include <thread>
 #include <chrono>
 #include <cctype>
+#include <algorithm>
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
@@ -34,6 +35,50 @@ using namespace galay::kernel;
 
 std::atomic<bool> g_server_running{false};
 std::atomic<int> g_request_count{0};
+
+namespace {
+
+constexpr const char* kApiAllowMethods = "GET, POST, PUT, DELETE, HEAD, OPTIONS, PATCH, TRACE";
+
+int parseDelaySeconds(const std::string& uri) {
+    constexpr std::string_view prefix = "/delay/";
+    if (!uri.starts_with(prefix)) {
+        return 0;
+    }
+    try {
+        return std::max(0, std::stoi(uri.substr(prefix.size())));
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::string buildApiDataBody(std::string_view method_name,
+                             std::string_view uri,
+                             size_t body_size) {
+    return std::string("{\"method\":\"")
+        + std::string(method_name)
+        + "\",\"uri\":\""
+        + std::string(uri)
+        + "\",\"body_size\":"
+        + std::to_string(body_size)
+        + "}";
+}
+
+Coroutine sendRawPayload(HttpConn& conn, std::string payload) {
+    auto& socket = conn.getSocket();
+    size_t sent = 0;
+    while (sent < payload.size()) {
+        auto result = co_await socket.send(payload.data() + sent, payload.size() - sent);
+        if (!result) {
+            HTTP_LOG_ERROR("Failed to send raw payload: {}", result.error().message());
+            co_return;
+        }
+        sent += result.value();
+    }
+    co_return;
+}
+
+}  // namespace
 
 // HTTP请求处理器协程
 Coroutine handleRequest(HttpConn conn) {
@@ -74,8 +119,31 @@ Coroutine handleRequest(HttpConn conn) {
         std::string content_type = "text/html; charset=utf-8";
         std::string body;
         std::string uri = request.header().uri();
+        const auto method = request.header().method();
 
-        if (uri == "/" || uri == "/index.html") {
+        if (uri == "/disconnect") {
+            HTTP_LOG_INFO("Disconnect endpoint requested, closing socket immediately");
+            co_await conn.close();
+            co_return;
+        } else if (uri == "/partial") {
+            // Advertise a longer body than we actually send so client timeout paths
+            // can observe an incomplete response on a live connection.
+            std::string partial =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/plain\r\n"
+                "Content-Length: 1024\r\n"
+                "Connection: keep-alive\r\n"
+                "\r\n"
+                "partial";
+            co_await sendRawPayload(conn, std::move(partial)).wait();
+            continue;
+        } else if (uri.starts_with("/delay/")) {
+            const int delay_seconds = parseDelaySeconds(uri);
+            HTTP_LOG_INFO("Delay endpoint requested: {}s", delay_seconds);
+            std::this_thread::sleep_for(std::chrono::seconds(delay_seconds));
+            content_type = "text/plain; charset=utf-8";
+            body = "Delayed " + std::to_string(delay_seconds) + " second(s)";
+        } else if (uri == "/" || uri == "/index.html") {
             body = R"(<!DOCTYPE html>
 <html>
 <head>
@@ -125,6 +193,41 @@ Coroutine handleRequest(HttpConn conn) {
     "status": "running",
     "timestamp": ")" + std::to_string(std::time(nullptr)) + R"("
 })";
+        } else if (uri == "/api/data" || uri == "/api/data/1") {
+            content_type = "application/json";
+            switch (method) {
+                case HttpMethod::GET:
+                case HttpMethod::POST:
+                case HttpMethod::PUT:
+                case HttpMethod::PATCH:
+                    body = buildApiDataBody(
+                        httpMethodToString(method),
+                        uri,
+                        request.bodyStr().size());
+                    break;
+                case HttpMethod::DELETE:
+                    code = HttpStatusCode::NoContent_204;
+                    content_type.clear();
+                    body.clear();
+                    break;
+                case HttpMethod::HEAD:
+                    body.clear();
+                    break;
+                case HttpMethod::OPTIONS:
+                    code = HttpStatusCode::NoContent_204;
+                    content_type.clear();
+                    body.clear();
+                    break;
+                case HttpMethod::TRACE:
+                    content_type = "text/plain; charset=utf-8";
+                    body = std::string("TRACE ") + uri;
+                    break;
+                default:
+                    code = HttpStatusCode::MethodNotAllowed_405;
+                    content_type = "text/plain; charset=utf-8";
+                    body = "Method Not Allowed";
+                    break;
+            }
         } else {
             code = HttpStatusCode::NotFound_404;
             body = R"(<!DOCTYPE html>
@@ -151,13 +254,22 @@ Coroutine handleRequest(HttpConn conn) {
         }
 
         // 发送响应
-        auto response = Http1_1ResponseBuilder()
+        auto response_builder = Http1_1ResponseBuilder()
             .status(code)
-            .header("Content-Type", content_type)
             .header("Server", GALAY_SERVER)
-            .header("Connection", keep_alive ? "keep-alive" : "close")
-            .body(std::move(body))
-            .buildMove();
+            .header("Connection", keep_alive ? "keep-alive" : "close");
+
+        if (!content_type.empty()) {
+            response_builder.header("Content-Type", content_type);
+        }
+        if (uri == "/api/data" || uri == "/api/data/1") {
+            response_builder.header("Allow", kApiAllowMethods);
+        }
+        if (method != HttpMethod::HEAD && !body.empty()) {
+            response_builder.body(std::move(body));
+        }
+
+        auto response = response_builder.buildMove();
 
         auto sendResult = co_await writer.sendResponse(response);
         if (!sendResult) {

@@ -110,7 +110,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    scheduler->spawn(httpsClientExample(url));
+    scheduleCoroutine(scheduler, httpsClientExample(url));
 
     std::this_thread::sleep_for(std::chrono::seconds(5));
 

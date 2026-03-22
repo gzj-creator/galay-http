@@ -21,9 +21,6 @@
 #include "galay-http/kernel/http/HttpLog.h"
 #include <iostream>
 #include <csignal>
-#include "galay-kernel/kernel/Task.h"
-#include "galay-kernel/kernel/Scheduler.hpp"
-
 using namespace galay::http;
 using namespace galay::kernel;
 
@@ -36,7 +33,7 @@ void signalHandler(int) {
 /**
  * @brief HTTP 请求处理器 - 简单的 OK 响应
  */
-Task<void> handleHttpRequest(HttpConn conn) {
+Coroutine handleHttpRequest(HttpConn conn) {
     while(true) {
         auto reader = conn.getReader();
         HttpRequest request;

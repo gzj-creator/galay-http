@@ -302,22 +302,22 @@ int main()
         }
 
         // 运行边界测试
-        scheduler->spawn(testConnectionFailure(scheduler));
+        scheduleCoroutine(scheduler, testConnectionFailure(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(testServerCloseConnection(scheduler));
+        scheduleCoroutine(scheduler, testServerCloseConnection(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(testMultipleRequests(scheduler));
+        scheduleCoroutine(scheduler, testMultipleRequests(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testLargeRequestBody(scheduler));
+        scheduleCoroutine(scheduler, testLargeRequestBody(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(test404NotFound(scheduler));
+        scheduleCoroutine(scheduler, test404NotFound(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(testEmptyResponse(scheduler));
+        scheduleCoroutine(scheduler, testEmptyResponse(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
         runtime.stop();

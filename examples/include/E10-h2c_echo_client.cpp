@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
         runtime.start();
 
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(runClient(host, port));
+        scheduleCoroutine(scheduler, runClient(host, port));
 
         std::this_thread::sleep_for(std::chrono::seconds(10));
 

@@ -427,22 +427,22 @@ int main()
         }
 
         // 运行测试
-        scheduler->spawn(testNormalRequestWithTimeout(scheduler));
+        scheduleCoroutine(scheduler, testNormalRequestWithTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testRequestTimeout(scheduler));
+        scheduleCoroutine(scheduler, testRequestTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testConnectTimeout(scheduler));
+        scheduleCoroutine(scheduler, testConnectTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testServerDisconnect(scheduler));
+        scheduleCoroutine(scheduler, testServerDisconnect(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(2));
 
-        scheduler->spawn(testReceiveTimeout(scheduler));
+        scheduleCoroutine(scheduler, testReceiveTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testTimeoutRetry(scheduler));
+        scheduleCoroutine(scheduler, testTimeoutRetry(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(5));
 
         runtime.stop();

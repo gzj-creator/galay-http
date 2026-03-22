@@ -503,31 +503,31 @@ int main()
         }
 
         // 运行所有测试
-        scheduler->spawn(testGetMethod(scheduler));
+        scheduleCoroutine(scheduler, testGetMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testPostMethod(scheduler));
+        scheduleCoroutine(scheduler, testPostMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testPutMethod(scheduler));
+        scheduleCoroutine(scheduler, testPutMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testDeleteMethod(scheduler));
+        scheduleCoroutine(scheduler, testDeleteMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testHeadMethod(scheduler));
+        scheduleCoroutine(scheduler, testHeadMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testOptionsMethod(scheduler));
+        scheduleCoroutine(scheduler, testOptionsMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testPatchMethod(scheduler));
+        scheduleCoroutine(scheduler, testPatchMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testTraceMethod(scheduler));
+        scheduleCoroutine(scheduler, testTraceMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testConnectMethod(scheduler));
+        scheduleCoroutine(scheduler, testConnectMethod(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
         runtime.stop();

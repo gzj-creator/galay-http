@@ -115,7 +115,7 @@ void runContinuousBenchmark(Runtime& rt, int connections, int duration_sec,
     for (int i = 0; i < connections; i++) {
         auto* scheduler = rt.getNextIOScheduler();
         if (scheduler) {
-            scheduler->spawn(continuousWorker(i, host, port, path, end_time, stop_flag));
+            scheduleCoroutine(scheduler, continuousWorker(i, host, port, path, end_time, stop_flag));
         }
     }
 

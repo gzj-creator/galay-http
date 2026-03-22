@@ -130,7 +130,7 @@ int main() {
         return 1;
     }
 
-    scheduler->spawn(runClient(port));
+    scheduleCoroutine(scheduler, runClient(port));
 
     for (int i = 0; i < 120; ++i) {
         if (g_client_done.load(std::memory_order_acquire)) {

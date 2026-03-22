@@ -23,9 +23,6 @@
 #include <cstdlib>
 #include <string_view>
 #include <utility>
-#include "galay-kernel/kernel/Task.h"
-#include "galay-kernel/kernel/Scheduler.hpp"
-
 using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
@@ -149,7 +146,7 @@ cleanup:
 /**
  * @brief HTTP 请求处理协程
  */
-Task<void> handleHttpRequest(HttpConn conn) {
+Coroutine handleHttpRequest(HttpConn conn) {
     static std::atomic<int> req_id{0};
     int current_req_id = req_id.fetch_add(1);
 

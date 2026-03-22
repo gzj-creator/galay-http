@@ -259,7 +259,7 @@ protected:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduler->spawn(serverLoop(scheduler));
+                scheduleCoroutine(scheduler, serverLoop(scheduler));
             }
         }
 
@@ -339,7 +339,7 @@ protected:
             HTTP_LOG_DEBUG("[handler] [spawn]");
 
             // 在当前调度器上处理连接
-            scheduler->spawn(m_handler(std::move(conn)));
+            scheduleCoroutine(scheduler, m_handler(std::move(conn)));
             HTTP_LOG_DEBUG("[handler] [spawned]");
         }
 
@@ -526,7 +526,7 @@ protected:
             }
 
             // 在当前调度器上执行 SSL 握手和处理
-            scheduler->spawn(handleSslConnection(std::move(client_socket)));
+            scheduleCoroutine(scheduler, handleSslConnection(std::move(client_socket)));
         }
 
         co_return;

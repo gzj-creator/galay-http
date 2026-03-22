@@ -222,7 +222,7 @@ int main() {
     }
 
     // 启动客户端
-    scheduler->spawn(sendChunkedRequest());
+    scheduleCoroutine(scheduler, sendChunkedRequest());
 
     // 等待一段时间让测试完成
     std::this_thread::sleep_for(std::chrono::seconds(3));

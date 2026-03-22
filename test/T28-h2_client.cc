@@ -102,7 +102,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    scheduler->spawn(runClient(host, port, requests));
+    scheduleCoroutine(scheduler, runClient(host, port, requests));
 
     while (!g_done) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

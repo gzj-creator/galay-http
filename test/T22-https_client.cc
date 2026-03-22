@@ -143,7 +143,7 @@ int main() {
         return 1;
     }
 
-    scheduler->spawn(testHttpsClient());
+    scheduleCoroutine(scheduler, testHttpsClient());
 
     // 等待测试完成
     while (!g_done) {

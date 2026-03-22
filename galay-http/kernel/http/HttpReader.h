@@ -4,33 +4,31 @@
 #include "HttpReaderSetting.h"
 #include "HttpLog.h"
 #include "galay-http/kernel/IoVecUtils.h"
+#include "galay-http/protoc/http/HttpChunk.h"
+#include "galay-http/protoc/http/HttpError.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/protoc/http/HttpResponse.h"
-#include "galay-http/protoc/http/HttpError.h"
-#include "galay-http/protoc/http/HttpChunk.h"
+#include "galay-kernel/async/TcpSocket.h"
 #include "galay-kernel/common/Buffer.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Timeout.hpp"
-#include "galay-kernel/async/TcpSocket.h"
 #include <expected>
-#include <array>
-#include <coroutine>
-#include <type_traits>
-#include <variant>
+#include <memory>
+#include <optional>
 #include <span>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/async/SslAwaitableCore.h"
 #include "galay-ssl/async/SslSocket.h"
-#include "galay-http/kernel/SslRecvCompatAwaitable.h"
 #endif
 
-namespace galay::http
-{
+namespace galay::http {
 
-using namespace galay::kernel;
 using namespace galay::async;
+using namespace galay::kernel;
 
-// 类型特征：检测是否是 SslSocket
 template<typename T>
 struct is_ssl_socket : std::false_type {};
 
@@ -42,182 +40,132 @@ struct is_ssl_socket<galay::ssl::SslSocket> : std::true_type {};
 template<typename T>
 inline constexpr bool is_ssl_socket_v = is_ssl_socket<T>::value;
 
-// 前向声明
-template<typename SocketType>
-class HttpReaderImpl;
+namespace detail {
 
-/**
- * @brief HTTP请求读取等待体 - TcpSocket 版本
- */
-template<typename SocketType, bool IsSsl = is_ssl_socket_v<SocketType>>
-class GetRequestAwaitableImpl;
+template<typename StateT>
+struct HttpRingBufferTcpReadMachine {
+    using result_type = typename StateT::ResultType;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Read;
 
-// TcpSocket 特化版本（CustomAwaitable + ReadvIOContext）
-template<typename SocketType>
-class GetRequestAwaitableImpl<SocketType, false>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<GetRequestAwaitableImpl<SocketType, false>>
-{
-public:
-    class ProtocolRecvAwaitable : public galay::kernel::ReadvIOContext
-    {
-    public:
-        explicit ProtocolRecvAwaitable(GetRequestAwaitableImpl* owner)
-            : galay::kernel::ReadvIOContext(m_iovec_storage, 0)
-            , m_owner(owner)
-        {
+    explicit HttpRingBufferTcpReadMachine(std::shared_ptr<StateT> state)
+        : m_state(std::move(state)) {}
+
+    MachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
         }
 
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->parseRequestFromRingBuffer()) {
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kHeaderTooLarge));
-                    return true;
-                }
-                return false;
-            }
-
-            auto result = galay::kernel::io::handleReadv(cqe);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                return false;
-            }
-            if (!result) {
-                m_owner->setRecvError(result.error());
-                return true;
-            }
-
-            size_t recv_bytes = result.value();
-            if (recv_bytes == 0) {
-                m_owner->setParseError(HttpError(kConnectionClose));
-                return true;
-            }
-
-            m_owner->m_ring_buffer->produce(recv_bytes);
-            m_owner->m_total_received += recv_bytes;
-
-            if (m_owner->parseRequestFromRingBuffer()) {
-                return true;
-            }
-
-            if (!prepareRecvWindow()) {
-                m_owner->setParseError(HttpError(kHeaderTooLarge));
-                return true;
-            }
-            return false;
+        if (m_state->parseFromRingBuffer()) {
+            m_result = m_state->takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
         }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->parseRequestFromRingBuffer()) {
-                return true;
-            }
 
-            while (true) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kHeaderTooLarge));
-                    return true;
-                }
-
-                auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovec_storage.data(),
-                                                             static_cast<int>(m_iovecs.size()));
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                    return false;
-                }
-                if (!result) {
-                    m_owner->setRecvError(result.error());
-                    return true;
-                }
-
-                size_t recv_bytes = result.value();
-                if (recv_bytes == 0) {
-                    m_owner->setParseError(HttpError(kConnectionClose));
-                    return true;
-                }
-
-                m_owner->m_ring_buffer->produce(recv_bytes);
-                m_owner->m_total_received += recv_bytes;
-
-                if (m_owner->parseRequestFromRingBuffer()) {
-                    return true;
-                }
-            }
+        if (!m_state->prepareRecvWindow()) {
+            m_result = m_state->takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
         }
+
+        return MachineAction<result_type>::waitReadv(
+            m_state->recvIovecsData(),
+            m_state->recvIovecsCount());
+    }
+
+    void onRead(std::expected<size_t, IOError> result) {
+        if (!result) {
+            m_state->setRecvError(result.error());
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_state->onPeerClosed();
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        m_state->onBytesReceived(result.value());
+    }
+
+    void onWrite(std::expected<size_t, IOError>) {}
+
+    std::shared_ptr<StateT> m_state;
+    std::optional<result_type> m_result;
+};
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+template<typename StateT>
+struct HttpRingBufferSslReadMachine {
+    using result_type = typename StateT::ResultType;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Read;
+
+    explicit HttpRingBufferSslReadMachine(std::shared_ptr<StateT> state)
+        : m_state(std::move(state)) {}
+
+    galay::ssl::SslMachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (m_state->parseFromRingBuffer()) {
+            m_result = m_state->takeResult();
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        char* recv_buffer = nullptr;
+        size_t recv_length = 0;
+        if (!m_state->prepareRecvWindow(recv_buffer, recv_length)) {
+            m_result = m_state->takeResult();
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        return galay::ssl::SslMachineAction<result_type>::recv(recv_buffer, recv_length);
+    }
+
+    void onHandshake(std::expected<void, galay::ssl::SslError>) {}
+
+    void onRecv(std::expected<Bytes, galay::ssl::SslError> result) {
+        if (!result) {
+            m_state->setSslRecvError(result.error());
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        const size_t recv_bytes = result.value().size();
+        if (recv_bytes == 0) {
+            m_state->onPeerClosed();
+            m_result = m_state->takeResult();
+            return;
+        }
+
+        m_state->onBytesReceived(recv_bytes);
+    }
+
+    void onSend(std::expected<size_t, galay::ssl::SslError>) {}
+
+    void onShutdown(std::expected<void, galay::ssl::SslError>) {}
+
+    std::shared_ptr<StateT> m_state;
+    std::optional<result_type> m_result;
+};
 #endif
 
-    private:
-        bool prepareRecvWindow() {
-            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(
-                m_iovec_storage.data(), m_iovec_storage.size());
-            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
-            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
-#ifdef USE_IOURING
-            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
-            m_msg.msg_iovlen = m_iovecs.size();
-#endif
-            return compact_count > 0;
-        }
+struct HttpRequestReadState {
+    using ResultType = std::expected<bool, HttpError>;
 
-        GetRequestAwaitableImpl* m_owner;
-        std::array<struct iovec, 2> m_iovec_storage{};
-    };
-
-    GetRequestAwaitableImpl(RingBuffer& ring_buffer,
-                           const HttpReaderSetting& setting,
-                           HttpRequest& request,
-                           SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_ring_buffer(&ring_buffer)
+    HttpRequestReadState(RingBuffer& ring_buffer,
+                         const HttpReaderSetting& setting,
+                         HttpRequest& request)
+        : m_ring_buffer(&ring_buffer)
         , m_setting(&setting)
-        , m_request(&request)
-        , m_socket(&socket)
-        , m_total_received(0)
-        , m_recv_awaitable(this)
-        , m_result(true)
-    {
-        m_parse_iovecs.reserve(2);
-        addTask(IOEventType::READV, &m_recv_awaitable);
-    }
+        , m_request(&request) {}
 
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            auto& io_error = m_result.error();
-            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-                HTTP_LOG_DEBUG("[conn] [closed]");
-                return std::unexpected(HttpError(kConnectionClose));
-            }
-            HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
-            return std::unexpected(HttpError(kRecvError, io_error.message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    bool parseRequestFromRingBuffer() {
-        struct iovec read_iovecs[2];
-        const size_t iov_count = m_ring_buffer->getReadIovecs(read_iovecs, 2);
-        if (iov_count == 0) {
+    bool parseFromRingBuffer() {
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
+        if (read_iovecs.empty()) {
             return false;
         }
 
-        if (IoVecWindow::buildWindow(read_iovecs, iov_count, m_parse_iovecs) == 0) {
+        if (IoVecWindow::buildWindow(read_iovecs, m_parse_iovecs) == 0) {
             return false;
         }
 
@@ -228,238 +176,6 @@ private:
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
             if (m_total_received >= m_setting->getMaxHeaderSize() && !m_request->isComplete()) {
-                HTTP_LOG_DEBUG("[header] [too-large] [recv={}] [max={}]",
-                               m_total_received, m_setting->getMaxHeaderSize());
-                setParseError(HttpError(kHeaderTooLarge));
-                return true;
-            }
-            return false;
-        }
-
-        if (error_code != kNoError) {
-            HTTP_LOG_DEBUG("[parse] [error] [{}]", static_cast<int>(error_code));
-            setParseError(HttpError(error_code));
-            return true;
-        }
-
-        if (!m_request->isComplete()) {
-            return false;
-        }
-
-        auto& header = m_request->header();
-        const std::string* host = header.headerPairs().getValuePtr("host");
-        HTTP_LOG_INFO("[{}] [{}] [{}]",
-                      httpMethodToString(header.method()),
-                      header.uri(),
-                      (host == nullptr || host->empty()) ? "-" : *host);
-        return true;
-    }
-
-    void setRecvError(const galay::kernel::IOError& io_error) {
-        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-            m_http_error = HttpError(kConnectionClose, io_error.message());
-            return;
-        }
-        m_http_error = HttpError(kRecvError, io_error.message());
-    }
-
-    void setParseError(HttpError&& error) {
-        m_http_error = std::move(error);
-    }
-
-    RingBuffer* m_ring_buffer;
-    const HttpReaderSetting* m_setting;
-    HttpRequest* m_request;
-    SocketType* m_socket;
-    size_t m_total_received;
-    std::vector<iovec> m_parse_iovecs;
-    ProtocolRecvAwaitable m_recv_awaitable;
-    std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
-};
-
-#ifdef GALAY_HTTP_SSL_ENABLED
-// SslSocket 特化版本（CustomAwaitable + SslRecvAwaitable）
-template<typename SocketType>
-class GetRequestAwaitableImpl<SocketType, true>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<GetRequestAwaitableImpl<SocketType, true>>
-{
-public:
-    using RecvAwaitableType = galay::http::SslRecvCompatAwaitable;
-
-    class ProtocolRecvAwaitable : public RecvAwaitableType
-    {
-    public:
-        explicit ProtocolRecvAwaitable(GetRequestAwaitableImpl* owner)
-            : RecvAwaitableType(owner->m_socket->recv(owner->m_dummy_recv_buffer, sizeof(owner->m_dummy_recv_buffer)))
-            , m_owner(owner)
-        {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-            if (m_owner->parseRequestFromRingBuffer()) {
-                return true;
-            }
-
-            if (!prepareRecvWindow()) {
-                m_owner->setParseError(HttpError(kHeaderTooLarge));
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                return false;
-            }
-
-            this->m_sslResultSet = false;
-            const bool done = RecvAwaitableType::handleComplete(cqe, handle);
-            if (!done) {
-                return false;
-            }
-
-            auto recv_result = std::move(this->m_sslResult);
-            this->m_sslResultSet = false;
-
-            if (!recv_result) {
-                const auto& error = recv_result.error();
-                if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                    return false;
-                }
-                m_owner->setSslRecvError(error);
-                return true;
-            }
-
-            const size_t recv_bytes = recv_result.value().size();
-            if (recv_bytes == 0) {
-                m_owner->setParseError(HttpError(kConnectionClose));
-                return true;
-            }
-
-            m_owner->m_ring_buffer->produce(recv_bytes);
-            m_owner->m_total_received += recv_bytes;
-            return m_owner->parseRequestFromRingBuffer();
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->parseRequestFromRingBuffer()) {
-                return true;
-            }
-
-            while (true) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kHeaderTooLarge));
-                    return true;
-                }
-
-                this->m_sslResultSet = false;
-                const bool done = RecvAwaitableType::handleComplete(handle);
-                if (!done) {
-                    return false;
-                }
-
-                auto recv_result = std::move(this->m_sslResult);
-                this->m_sslResultSet = false;
-
-                if (!recv_result) {
-                    const auto& error = recv_result.error();
-                    if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                        return false;
-                    }
-                    m_owner->setSslRecvError(error);
-                    return true;
-                }
-
-                const size_t recv_bytes = recv_result.value().size();
-                if (recv_bytes == 0) {
-                    m_owner->setParseError(HttpError(kConnectionClose));
-                    return true;
-                }
-
-                m_owner->m_ring_buffer->produce(recv_bytes);
-                m_owner->m_total_received += recv_bytes;
-                if (m_owner->parseRequestFromRingBuffer()) {
-                    return true;
-                }
-            }
-        }
-#endif
-
-    private:
-        bool prepareRecvWindow() {
-            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
-            if (write_iovecs.empty()) {
-                return false;
-            }
-            this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-            this->m_plainLength = write_iovecs[0].iov_len;
-            return this->m_plainLength > 0;
-        }
-
-        GetRequestAwaitableImpl* m_owner;
-    };
-
-    GetRequestAwaitableImpl(RingBuffer& ring_buffer,
-                           const HttpReaderSetting& setting,
-                           HttpRequest& request,
-                           SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_ring_buffer(&ring_buffer)
-        , m_setting(&setting)
-        , m_request(&request)
-        , m_socket(&socket)
-        , m_total_received(0)
-        , m_recv_awaitable(this)
-        , m_result(true)
-    {
-        addTask(IOEventType::RECV, &m_recv_awaitable);
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            const auto& io_error = m_result.error();
-            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-                return std::unexpected(HttpError(kConnectionClose));
-            }
-            return std::unexpected(HttpError(kRecvError, io_error.message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    bool parseRequestFromRingBuffer() {
-        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
-        if (read_iovecs.empty()) {
-            return false;
-        }
-
-        std::vector<iovec> parse_iovecs;
-        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
-            return false;
-        }
-
-        auto [error_code, consumed] = m_request->fromIOVec(parse_iovecs);
-        if (consumed > 0) {
-            m_ring_buffer->consume(consumed);
-        }
-
-        if (error_code == kHeaderInComplete || error_code == kIncomplete) {
-            if (m_total_received >= m_setting->getMaxHeaderSize() && !m_request->isComplete()) {
                 setParseError(HttpError(kHeaderTooLarge));
                 return true;
             }
@@ -476,7 +192,7 @@ private:
         }
 
         auto& header = m_request->header();
-        std::string host = header.headerPairs().getValue("host");
+        const std::string host = header.headerPairs().getValue("host");
         HTTP_LOG_INFO("[{}] [{}] [{}]",
                       httpMethodToString(header.method()),
                       header.uri(),
@@ -484,6 +200,42 @@ private:
         return true;
     }
 
+    bool prepareRecvWindow() {
+        m_write_iovecs = borrowWriteIovecs(*m_ring_buffer);
+        if (m_write_iovecs.empty()) {
+            setParseError(HttpError(kHeaderTooLarge));
+            return false;
+        }
+        return true;
+    }
+
+    bool prepareRecvWindow(char*& buffer, size_t& length) {
+        if (!prepareRecvWindow()) {
+            buffer = nullptr;
+            length = 0;
+            return false;
+        }
+        if (!IoVecWindow::bindFirstNonEmpty(m_write_iovecs, buffer, length)) {
+            setParseError(HttpError(kHeaderTooLarge));
+            return false;
+        }
+        return true;
+    }
+
+    const struct iovec* recvIovecsData() const { return m_write_iovecs.data(); }
+    size_t recvIovecsCount() const { return m_write_iovecs.size(); }
+
+    void setRecvError(const IOError& io_error) {
+        if (IOError::contains(io_error.code(), kDisconnectError)) {
+            HTTP_LOG_DEBUG("[conn] [closed]");
+            m_http_error = HttpError(kConnectionClose);
+            return;
+        }
+        HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
+        m_http_error = HttpError(kRecvError, io_error.message());
+    }
+
+#ifdef GALAY_HTTP_SSL_ENABLED
     void setSslRecvError(const galay::ssl::SslError& error) {
         if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
             m_http_error = HttpError(kConnectionClose);
@@ -491,204 +243,60 @@ private:
         }
         m_http_error = HttpError(kRecvError, error.message());
     }
+#endif
 
-    void setParseError(HttpError&& error) {
-        m_http_error = std::move(error);
+    void onPeerClosed() { m_http_error = HttpError(kConnectionClose); }
+
+    void onBytesReceived(size_t recv_bytes) {
+        m_ring_buffer->produce(recv_bytes);
+        m_total_received += recv_bytes;
+    }
+
+    void setParseError(HttpError&& error) { m_http_error = std::move(error); }
+
+    ResultType takeResult() {
+        if (m_http_error.has_value()) {
+            return std::unexpected(std::move(*m_http_error));
+        }
+        return true;
     }
 
     RingBuffer* m_ring_buffer;
     const HttpReaderSetting* m_setting;
     HttpRequest* m_request;
-    SocketType* m_socket;
-    size_t m_total_received;
-    char m_dummy_recv_buffer[1];
-    ProtocolRecvAwaitable m_recv_awaitable;
+    size_t m_total_received = 0;
+    std::vector<iovec> m_parse_iovecs;
+    BorrowedIovecs<2> m_write_iovecs;
     std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
 };
-#endif
 
-/**
- * @brief HTTP响应读取等待体
- */
-template<typename SocketType, bool IsSsl = is_ssl_socket_v<SocketType>>
-class GetResponseAwaitableImpl;
+struct HttpResponseReadState {
+    using ResultType = std::expected<bool, HttpError>;
 
-// TcpSocket 特化版本（CustomAwaitable + RecvAwaitable）
-template<typename SocketType>
-class GetResponseAwaitableImpl<SocketType, false>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<GetResponseAwaitableImpl<SocketType, false>>
-{
-public:
-    class ProtocolRecvAwaitable : public galay::kernel::RecvAwaitable
-    {
-    public:
-        explicit ProtocolRecvAwaitable(GetResponseAwaitableImpl* owner)
-            : galay::kernel::RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
-            , m_owner(owner)
-        {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->parseResponseFromRingBuffer()) {
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kHeaderTooLarge));
-                    return true;
-                }
-                return false;
-            }
-
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                return false;
-            }
-            if (!result) {
-                m_owner->setRecvError(result.error());
-                return true;
-            }
-
-            size_t recv_bytes = result.value();
-            if (recv_bytes == 0) {
-                m_owner->setParseError(HttpError(kConnectionClose));
-                return true;
-            }
-
-            m_owner->m_ring_buffer->produce(recv_bytes);
-            m_owner->m_total_received += recv_bytes;
-
-            if (m_owner->parseResponseFromRingBuffer()) {
-                return true;
-            }
-
-            if (!prepareRecvWindow()) {
-                m_owner->setParseError(HttpError(kHeaderTooLarge));
-                return true;
-            }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->parseResponseFromRingBuffer()) {
-                return true;
-            }
-
-            while (true) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kHeaderTooLarge));
-                    return true;
-                }
-
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                    return false;
-                }
-                if (!result) {
-                    m_owner->setRecvError(result.error());
-                    return true;
-                }
-
-                size_t recv_bytes = result.value();
-                if (recv_bytes == 0) {
-                    m_owner->setParseError(HttpError(kConnectionClose));
-                    return true;
-                }
-
-                m_owner->m_ring_buffer->produce(recv_bytes);
-                m_owner->m_total_received += recv_bytes;
-
-                if (m_owner->parseResponseFromRingBuffer()) {
-                    return true;
-                }
-            }
-        }
-#endif
-
-    private:
-        bool prepareRecvWindow() {
-            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
-            if (write_iovecs.empty()) {
-                return false;
-            }
-
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
-        }
-
-        GetResponseAwaitableImpl* m_owner;
-    };
-
-    GetResponseAwaitableImpl(RingBuffer& ring_buffer,
-                            const HttpReaderSetting& setting,
-                            HttpResponse& response,
-                            SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_ring_buffer(&ring_buffer)
+    HttpResponseReadState(RingBuffer& ring_buffer,
+                          const HttpReaderSetting& setting,
+                          HttpResponse& response)
+        : m_ring_buffer(&ring_buffer)
         , m_setting(&setting)
-        , m_response(&response)
-        , m_socket(&socket)
-        , m_total_received(0)
-        , m_recv_awaitable(this)
-        , m_result(true)
-    {
-        addTask(IOEventType::RECV, &m_recv_awaitable);
-    }
+        , m_response(&response) {}
 
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            auto& io_error = m_result.error();
-            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-                HTTP_LOG_DEBUG("[conn] [closed]");
-                return std::unexpected(HttpError(kConnectionClose));
-            }
-            HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
-            return std::unexpected(HttpError(kRecvError, io_error.message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    bool parseResponseFromRingBuffer() {
+    bool parseFromRingBuffer() {
         auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        std::vector<iovec> parse_iovecs;
-        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+        if (IoVecWindow::buildWindow(read_iovecs, m_parse_iovecs) == 0) {
             return false;
         }
 
-        auto [error_code, consumed] = m_response->fromIOVec(parse_iovecs);
+        auto [error_code, consumed] = m_response->fromIOVec(m_parse_iovecs);
         if (consumed > 0) {
             m_ring_buffer->consume(consumed);
         }
 
         if (error_code == kHeaderInComplete || error_code == kIncomplete) {
             if (m_total_received >= m_setting->getMaxHeaderSize() && !m_response->isComplete()) {
-                HTTP_LOG_DEBUG("[header] [too-large] [recv={}] [max={}]",
-                               m_total_received, m_setting->getMaxHeaderSize());
                 setParseError(HttpError(kHeaderTooLarge));
                 return true;
             }
@@ -696,7 +304,6 @@ private:
         }
 
         if (error_code != kNoError) {
-            HTTP_LOG_DEBUG("[parse] [error] [{}]", static_cast<int>(error_code));
             setParseError(HttpError(error_code));
             return true;
         }
@@ -704,224 +311,42 @@ private:
         return m_response->isComplete();
     }
 
-    void setRecvError(const galay::kernel::IOError& io_error) {
-        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-            m_http_error = HttpError(kConnectionClose, io_error.message());
+    bool prepareRecvWindow() {
+        m_write_iovecs = borrowWriteIovecs(*m_ring_buffer);
+        if (m_write_iovecs.empty()) {
+            setParseError(HttpError(kHeaderTooLarge));
+            return false;
+        }
+        return true;
+    }
+
+    bool prepareRecvWindow(char*& buffer, size_t& length) {
+        if (!prepareRecvWindow()) {
+            buffer = nullptr;
+            length = 0;
+            return false;
+        }
+        if (!IoVecWindow::bindFirstNonEmpty(m_write_iovecs, buffer, length)) {
+            setParseError(HttpError(kHeaderTooLarge));
+            return false;
+        }
+        return true;
+    }
+
+    const struct iovec* recvIovecsData() const { return m_write_iovecs.data(); }
+    size_t recvIovecsCount() const { return m_write_iovecs.size(); }
+
+    void setRecvError(const IOError& io_error) {
+        if (IOError::contains(io_error.code(), kDisconnectError)) {
+            HTTP_LOG_DEBUG("[conn] [closed]");
+            m_http_error = HttpError(kConnectionClose);
             return;
         }
+        HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 
-    void setParseError(HttpError&& error) {
-        m_http_error = std::move(error);
-    }
-
-    RingBuffer* m_ring_buffer;
-    const HttpReaderSetting* m_setting;
-    HttpResponse* m_response;
-    SocketType* m_socket;
-    size_t m_total_received;
-    ProtocolRecvAwaitable m_recv_awaitable;
-    std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
-};
-
 #ifdef GALAY_HTTP_SSL_ENABLED
-// SslSocket 特化版本（CustomAwaitable + SslRecvAwaitable）
-template<typename SocketType>
-class GetResponseAwaitableImpl<SocketType, true>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<GetResponseAwaitableImpl<SocketType, true>>
-{
-public:
-    using RecvAwaitableType = galay::http::SslRecvCompatAwaitable;
-
-    class ProtocolRecvAwaitable : public RecvAwaitableType
-    {
-    public:
-        explicit ProtocolRecvAwaitable(GetResponseAwaitableImpl* owner)
-            : RecvAwaitableType(owner->m_socket->recv(owner->m_dummy_recv_buffer, sizeof(owner->m_dummy_recv_buffer)))
-            , m_owner(owner)
-        {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-            if (m_owner->parseResponseFromRingBuffer()) {
-                return true;
-            }
-
-            if (!prepareRecvWindow()) {
-                m_owner->setParseError(HttpError(kHeaderTooLarge));
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                return false;
-            }
-
-            this->m_sslResultSet = false;
-            const bool done = RecvAwaitableType::handleComplete(cqe, handle);
-            if (!done) {
-                return false;
-            }
-
-            auto recv_result = std::move(this->m_sslResult);
-            this->m_sslResultSet = false;
-
-            if (!recv_result) {
-                const auto& error = recv_result.error();
-                if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                    return false;
-                }
-                m_owner->setSslRecvError(error);
-                return true;
-            }
-
-            const size_t recv_bytes = recv_result.value().size();
-            if (recv_bytes == 0) {
-                m_owner->setParseError(HttpError(kConnectionClose));
-                return true;
-            }
-
-            m_owner->m_ring_buffer->produce(recv_bytes);
-            m_owner->m_total_received += recv_bytes;
-            return m_owner->parseResponseFromRingBuffer();
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->parseResponseFromRingBuffer()) {
-                return true;
-            }
-
-            while (true) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kHeaderTooLarge));
-                    return true;
-                }
-
-                this->m_sslResultSet = false;
-                const bool done = RecvAwaitableType::handleComplete(handle);
-                if (!done) {
-                    return false;
-                }
-
-                auto recv_result = std::move(this->m_sslResult);
-                this->m_sslResultSet = false;
-
-                if (!recv_result) {
-                    const auto& error = recv_result.error();
-                    if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                        return false;
-                    }
-                    m_owner->setSslRecvError(error);
-                    return true;
-                }
-
-                const size_t recv_bytes = recv_result.value().size();
-                if (recv_bytes == 0) {
-                    m_owner->setParseError(HttpError(kConnectionClose));
-                    return true;
-                }
-
-                m_owner->m_ring_buffer->produce(recv_bytes);
-                m_owner->m_total_received += recv_bytes;
-                if (m_owner->parseResponseFromRingBuffer()) {
-                    return true;
-                }
-            }
-        }
-#endif
-
-    private:
-        bool prepareRecvWindow() {
-            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
-            if (write_iovecs.empty()) {
-                return false;
-            }
-            this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-            this->m_plainLength = write_iovecs[0].iov_len;
-            return this->m_plainLength > 0;
-        }
-
-        GetResponseAwaitableImpl* m_owner;
-    };
-
-    GetResponseAwaitableImpl(RingBuffer& ring_buffer,
-                            const HttpReaderSetting& setting,
-                            HttpResponse& response,
-                            SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_ring_buffer(&ring_buffer)
-        , m_setting(&setting)
-        , m_response(&response)
-        , m_socket(&socket)
-        , m_total_received(0)
-        , m_recv_awaitable(this)
-        , m_result(true)
-    {
-        addTask(IOEventType::RECV, &m_recv_awaitable);
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            const auto& io_error = m_result.error();
-            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-                return std::unexpected(HttpError(kConnectionClose));
-            }
-            return std::unexpected(HttpError(kRecvError, io_error.message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    bool parseResponseFromRingBuffer() {
-        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
-        if (read_iovecs.empty()) {
-            return false;
-        }
-
-        std::vector<iovec> parse_iovecs;
-        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
-            return false;
-        }
-
-        auto [error_code, consumed] = m_response->fromIOVec(parse_iovecs);
-        if (consumed > 0) {
-            m_ring_buffer->consume(consumed);
-        }
-
-        if (error_code == kHeaderInComplete || error_code == kIncomplete) {
-            if (m_total_received >= m_setting->getMaxHeaderSize() && !m_response->isComplete()) {
-                setParseError(HttpError(kHeaderTooLarge));
-                return true;
-            }
-            return false;
-        }
-
-        if (error_code != kNoError) {
-            setParseError(HttpError(error_code));
-            return true;
-        }
-
-        return m_response->isComplete();
-    }
-
     void setSslRecvError(const galay::ssl::SslError& error) {
         if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
             m_http_error = HttpError(kConnectionClose);
@@ -929,195 +354,53 @@ private:
         }
         m_http_error = HttpError(kRecvError, error.message());
     }
+#endif
 
-    void setParseError(HttpError&& error) {
-        m_http_error = std::move(error);
+    void onPeerClosed() { m_http_error = HttpError(kConnectionClose); }
+
+    void onBytesReceived(size_t recv_bytes) {
+        m_ring_buffer->produce(recv_bytes);
+        m_total_received += recv_bytes;
+    }
+
+    void setParseError(HttpError&& error) { m_http_error = std::move(error); }
+
+    ResultType takeResult() {
+        if (m_http_error.has_value()) {
+            return std::unexpected(std::move(*m_http_error));
+        }
+        return true;
     }
 
     RingBuffer* m_ring_buffer;
     const HttpReaderSetting* m_setting;
     HttpResponse* m_response;
-    SocketType* m_socket;
-    size_t m_total_received;
-    char m_dummy_recv_buffer[1];
-    ProtocolRecvAwaitable m_recv_awaitable;
+    size_t m_total_received = 0;
+    std::vector<iovec> m_parse_iovecs;
+    BorrowedIovecs<2> m_write_iovecs;
     std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
 };
-#endif
 
-/**
- * @brief HTTP Chunk读取等待体
- */
-template<typename SocketType, bool IsSsl = is_ssl_socket_v<SocketType>>
-class GetChunkAwaitableImpl;
+struct HttpChunkReadState {
+    using ResultType = std::expected<bool, HttpError>;
 
-// TcpSocket 特化版本（CustomAwaitable + RecvAwaitable）
-template<typename SocketType>
-class GetChunkAwaitableImpl<SocketType, false>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<GetChunkAwaitableImpl<SocketType, false>>
-{
-public:
-    class ProtocolRecvAwaitable : public galay::kernel::RecvAwaitable
-    {
-    public:
-        explicit ProtocolRecvAwaitable(GetChunkAwaitableImpl* owner)
-            : galay::kernel::RecvAwaitable(owner->m_socket->controller(), nullptr, 0)
-            , m_owner(owner)
-        {
-        }
+    HttpChunkReadState(RingBuffer& ring_buffer, std::string& chunk_data)
+        : m_ring_buffer(&ring_buffer)
+        , m_chunk_data(&chunk_data) {}
 
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->parseChunkFromRingBuffer()) {
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kRecvError, "RingBuffer is full"));
-                    return true;
-                }
-                return false;
-            }
-
-            auto result = galay::kernel::io::handleRecv(cqe, m_buffer);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                return false;
-            }
-            if (!result) {
-                m_owner->setRecvError(result.error());
-                return true;
-            }
-
-            size_t recv_bytes = result.value();
-            if (recv_bytes == 0) {
-                m_owner->setParseError(HttpError(kConnectionClose));
-                return true;
-            }
-
-            m_owner->m_ring_buffer->produce(recv_bytes);
-
-            if (m_owner->parseChunkFromRingBuffer()) {
-                return true;
-            }
-
-            if (!prepareRecvWindow()) {
-                m_owner->setParseError(HttpError(kRecvError, "RingBuffer is full"));
-                return true;
-            }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->parseChunkFromRingBuffer()) {
-                return true;
-            }
-
-            while (true) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kRecvError, "RingBuffer is full"));
-                    return true;
-                }
-
-                auto result = galay::kernel::io::handleRecv(handle, m_buffer, m_length);
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                    return false;
-                }
-                if (!result) {
-                    m_owner->setRecvError(result.error());
-                    return true;
-                }
-
-                size_t recv_bytes = result.value();
-                if (recv_bytes == 0) {
-                    m_owner->setParseError(HttpError(kConnectionClose));
-                    return true;
-                }
-
-                m_owner->m_ring_buffer->produce(recv_bytes);
-
-                if (m_owner->parseChunkFromRingBuffer()) {
-                    return true;
-                }
-            }
-        }
-#endif
-
-    private:
-        bool prepareRecvWindow() {
-            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
-            if (write_iovecs.empty()) {
-                return false;
-            }
-
-            m_buffer = static_cast<char*>(write_iovecs[0].iov_base);
-            m_length = write_iovecs[0].iov_len;
-            return m_length > 0;
-        }
-
-        GetChunkAwaitableImpl* m_owner;
-    };
-
-    GetChunkAwaitableImpl(RingBuffer& ring_buffer,
-                         const HttpReaderSetting& setting,
-                         std::string& chunk_data,
-                         SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_ring_buffer(&ring_buffer)
-        , m_setting(&setting)
-        , m_chunk_data(&chunk_data)
-        , m_socket(&socket)
-        , m_recv_awaitable(this)
-        , m_result(true)
-    {
-        addTask(IOEventType::RECV, &m_recv_awaitable);
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            auto& io_error = m_result.error();
-            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-                HTTP_LOG_DEBUG("[conn] [closed]");
-                return std::unexpected(HttpError(kConnectionClose));
-            }
-            HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
-            return std::unexpected(HttpError(kRecvError, io_error.message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    bool parseChunkFromRingBuffer() {
+    bool parseFromRingBuffer() {
         auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
             return false;
         }
 
-        std::vector<iovec> parse_iovecs;
-        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+        if (IoVecWindow::buildWindow(read_iovecs, m_parse_iovecs) == 0) {
             return false;
         }
 
-        auto result = Chunk::fromIOVec(parse_iovecs, *m_chunk_data);
+        auto result = Chunk::fromIOVec(m_parse_iovecs, *m_chunk_data);
         if (!result) {
-            auto& error = result.error();
+            const auto& error = result.error();
             if (error.code() == kIncomplete) {
                 return false;
             }
@@ -1128,217 +411,46 @@ private:
 
         auto [is_last, consumed] = result.value();
         m_ring_buffer->consume(consumed);
+        m_is_last = is_last;
         return is_last;
     }
 
-    void setRecvError(const galay::kernel::IOError& io_error) {
-        if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-            m_http_error = HttpError(kConnectionClose, io_error.message());
-            return;
+    bool prepareRecvWindow() {
+        m_write_iovecs = borrowWriteIovecs(*m_ring_buffer);
+        if (m_write_iovecs.empty()) {
+            setParseError(HttpError(kRecvError, "RingBuffer is full"));
+            return false;
         }
-        m_http_error = HttpError(kRecvError, io_error.message());
-    }
-
-    void setParseError(HttpError&& error) {
-        m_http_error = std::move(error);
-    }
-
-    RingBuffer* m_ring_buffer;
-    const HttpReaderSetting* m_setting;
-    std::string* m_chunk_data;
-    SocketType* m_socket;
-    ProtocolRecvAwaitable m_recv_awaitable;
-    std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
-};
-
-#ifdef GALAY_HTTP_SSL_ENABLED
-// SslSocket 特化版本（CustomAwaitable + SslRecvAwaitable）
-template<typename SocketType>
-class GetChunkAwaitableImpl<SocketType, true>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<GetChunkAwaitableImpl<SocketType, true>>
-{
-public:
-    using RecvAwaitableType = galay::http::SslRecvCompatAwaitable;
-
-    class ProtocolRecvAwaitable : public RecvAwaitableType
-    {
-    public:
-        explicit ProtocolRecvAwaitable(GetChunkAwaitableImpl* owner)
-            : RecvAwaitableType(owner->m_socket->recv(owner->m_dummy_recv_buffer, sizeof(owner->m_dummy_recv_buffer)))
-            , m_owner(owner)
-        {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle handle) override {
-            if (m_owner->parseChunkFromRingBuffer()) {
-                return true;
-            }
-
-            if (!prepareRecvWindow()) {
-                m_owner->setParseError(HttpError(kRecvError, "RingBuffer is full"));
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                return false;
-            }
-
-            this->m_sslResultSet = false;
-            const bool done = RecvAwaitableType::handleComplete(cqe, handle);
-            if (!done) {
-                return false;
-            }
-
-            auto recv_result = std::move(this->m_sslResult);
-            this->m_sslResultSet = false;
-
-            if (!recv_result) {
-                const auto& error = recv_result.error();
-                if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                    return false;
-                }
-                m_owner->setSslRecvError(error);
-                return true;
-            }
-
-            const size_t recv_bytes = recv_result.value().size();
-            if (recv_bytes == 0) {
-                m_owner->setParseError(HttpError(kConnectionClose));
-                return true;
-            }
-
-            m_owner->m_ring_buffer->produce(recv_bytes);
-            return m_owner->parseChunkFromRingBuffer();
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->parseChunkFromRingBuffer()) {
-                return true;
-            }
-
-            while (true) {
-                if (!prepareRecvWindow()) {
-                    m_owner->setParseError(HttpError(kRecvError, "RingBuffer is full"));
-                    return true;
-                }
-
-                this->m_sslResultSet = false;
-                const bool done = RecvAwaitableType::handleComplete(handle);
-                if (!done) {
-                    return false;
-                }
-
-                auto recv_result = std::move(this->m_sslResult);
-                this->m_sslResultSet = false;
-
-                if (!recv_result) {
-                    const auto& error = recv_result.error();
-                    if (error.sslError() == SSL_ERROR_WANT_READ || error.sslError() == SSL_ERROR_WANT_WRITE) {
-                        return false;
-                    }
-                    m_owner->setSslRecvError(error);
-                    return true;
-                }
-
-                const size_t recv_bytes = recv_result.value().size();
-                if (recv_bytes == 0) {
-                    m_owner->setParseError(HttpError(kConnectionClose));
-                    return true;
-                }
-
-                m_owner->m_ring_buffer->produce(recv_bytes);
-                if (m_owner->parseChunkFromRingBuffer()) {
-                    return true;
-                }
-            }
-        }
-#endif
-
-    private:
-        bool prepareRecvWindow() {
-            auto write_iovecs = borrowWriteIovecs(*m_owner->m_ring_buffer);
-            if (write_iovecs.empty()) {
-                return false;
-            }
-            this->m_plainBuffer = static_cast<char*>(write_iovecs[0].iov_base);
-            this->m_plainLength = write_iovecs[0].iov_len;
-            return this->m_plainLength > 0;
-        }
-
-        GetChunkAwaitableImpl* m_owner;
-    };
-
-    GetChunkAwaitableImpl(RingBuffer& ring_buffer,
-                         const HttpReaderSetting& setting,
-                         std::string& chunk_data,
-                         SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_ring_buffer(&ring_buffer)
-        , m_setting(&setting)
-        , m_chunk_data(&chunk_data)
-        , m_socket(&socket)
-        , m_recv_awaitable(this)
-        , m_result(true)
-    {
-        addTask(IOEventType::RECV, &m_recv_awaitable);
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            const auto& io_error = m_result.error();
-            if (galay::kernel::IOError::contains(io_error.code(), galay::kernel::kDisconnectError)) {
-                return std::unexpected(HttpError(kConnectionClose));
-            }
-            return std::unexpected(HttpError(kRecvError, io_error.message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
         return true;
     }
 
-private:
-    bool parseChunkFromRingBuffer() {
-        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
-        if (read_iovecs.empty()) {
+    bool prepareRecvWindow(char*& buffer, size_t& length) {
+        if (!prepareRecvWindow()) {
+            buffer = nullptr;
+            length = 0;
             return false;
         }
-
-        std::vector<iovec> parse_iovecs;
-        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+        if (!IoVecWindow::bindFirstNonEmpty(m_write_iovecs, buffer, length)) {
+            setParseError(HttpError(kRecvError, "RingBuffer is full"));
             return false;
         }
-
-        auto result = Chunk::fromIOVec(parse_iovecs, *m_chunk_data);
-        if (!result) {
-            auto& error = result.error();
-            if (error.code() == kIncomplete) {
-                return false;
-            }
-            setParseError(HttpError(error.code(), error.message()));
-            return true;
-        }
-
-        auto [is_last, consumed] = result.value();
-        m_ring_buffer->consume(consumed);
-        return is_last;
+        return true;
     }
 
+    const struct iovec* recvIovecsData() const { return m_write_iovecs.data(); }
+    size_t recvIovecsCount() const { return m_write_iovecs.size(); }
+
+    void setRecvError(const IOError& io_error) {
+        if (IOError::contains(io_error.code(), kDisconnectError)) {
+            HTTP_LOG_DEBUG("[conn] [closed]");
+            m_http_error = HttpError(kConnectionClose);
+            return;
+        }
+        HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
+        m_http_error = HttpError(kRecvError, io_error.message());
+    }
+
+#ifdef GALAY_HTTP_SSL_ENABLED
     void setSslRecvError(const galay::ssl::SslError& error) {
         if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
             m_http_error = HttpError(kConnectionClose);
@@ -1346,48 +458,76 @@ private:
         }
         m_http_error = HttpError(kRecvError, error.message());
     }
+#endif
 
-    void setParseError(HttpError&& error) {
-        m_http_error = std::move(error);
+    void onPeerClosed() { m_http_error = HttpError(kConnectionClose); }
+
+    void onBytesReceived(size_t recv_bytes) { m_ring_buffer->produce(recv_bytes); }
+
+    void setParseError(HttpError&& error) { m_http_error = std::move(error); }
+
+    ResultType takeResult() {
+        if (m_http_error.has_value()) {
+            return std::unexpected(std::move(*m_http_error));
+        }
+        return m_is_last;
     }
 
     RingBuffer* m_ring_buffer;
-    const HttpReaderSetting* m_setting;
     std::string* m_chunk_data;
-    SocketType* m_socket;
-    char m_dummy_recv_buffer[1];
-    ProtocolRecvAwaitable m_recv_awaitable;
+    std::vector<iovec> m_parse_iovecs;
+    BorrowedIovecs<2> m_write_iovecs;
     std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
+    bool m_is_last = false;
 };
-#endif
 
-/**
- * @brief HTTP读取器模板类
- */
+template<typename SocketType, typename StateT>
+auto buildReadOperation(SocketType& socket, std::shared_ptr<StateT> state) {
+    using ResultType = typename StateT::ResultType;
+    if constexpr (is_ssl_socket_v<SocketType>) {
+#ifdef GALAY_HTTP_SSL_ENABLED
+        return galay::ssl::SslAwaitableBuilder<ResultType>::fromStateMachine(
+                   socket.controller(),
+                   &socket,
+                   HttpRingBufferSslReadMachine<StateT>(std::move(state)))
+            .build();
+#else
+        static_assert(!sizeof(SocketType), "SSL support is disabled");
+#endif
+    } else {
+        return AwaitableBuilder<ResultType>::fromStateMachine(
+                   socket.controller(),
+                   HttpRingBufferTcpReadMachine<StateT>(std::move(state)))
+            .build();
+    }
+}
+
+} // namespace detail
+
 template<typename SocketType>
-class HttpReaderImpl
-{
+class HttpReaderImpl {
 public:
     HttpReaderImpl(RingBuffer& ring_buffer, const HttpReaderSetting& setting, SocketType& socket)
         : m_ring_buffer(&ring_buffer)
         , m_setting(setting)
-        , m_socket(&socket)
-    {
+        , m_socket(&socket) {}
+
+    auto getRequest(HttpRequest& request) {
+        return detail::buildReadOperation(
+            *m_socket,
+            std::make_shared<detail::HttpRequestReadState>(*m_ring_buffer, m_setting, request));
     }
 
-    GetRequestAwaitableImpl<SocketType> getRequest(HttpRequest& request) {
-        return GetRequestAwaitableImpl<SocketType>(*m_ring_buffer, m_setting, request, *m_socket);
+    auto getResponse(HttpResponse& response) {
+        return detail::buildReadOperation(
+            *m_socket,
+            std::make_shared<detail::HttpResponseReadState>(*m_ring_buffer, m_setting, response));
     }
 
-    GetResponseAwaitableImpl<SocketType> getResponse(HttpResponse& response) {
-        return GetResponseAwaitableImpl<SocketType>(*m_ring_buffer, m_setting, response, *m_socket);
-    }
-
-    GetChunkAwaitableImpl<SocketType> getChunk(std::string& chunk_data) {
-        return GetChunkAwaitableImpl<SocketType>(*m_ring_buffer, m_setting, chunk_data, *m_socket);
+    auto getChunk(std::string& chunk_data) {
+        return detail::buildReadOperation(
+            *m_socket,
+            std::make_shared<detail::HttpChunkReadState>(*m_ring_buffer, chunk_data));
     }
 
 private:
@@ -1396,19 +536,12 @@ private:
     SocketType* m_socket;
 };
 
-// 类型别名 - HTTP (TcpSocket)
-using GetRequestAwaitable = GetRequestAwaitableImpl<TcpSocket>;
-using GetResponseAwaitable = GetResponseAwaitableImpl<TcpSocket>;
-using GetChunkAwaitable = GetChunkAwaitableImpl<TcpSocket>;
 using HttpReader = HttpReaderImpl<TcpSocket>;
 
 } // namespace galay::http
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 namespace galay::http {
-using GetRequestAwaitableSsl = GetRequestAwaitableImpl<galay::ssl::SslSocket>;
-using GetResponseAwaitableSsl = GetResponseAwaitableImpl<galay::ssl::SslSocket>;
-using GetChunkAwaitableSsl = GetChunkAwaitableImpl<galay::ssl::SslSocket>;
 using HttpsReader = HttpReaderImpl<galay::ssl::SslSocket>;
 } // namespace galay::http
 #endif

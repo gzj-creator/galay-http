@@ -9,14 +9,18 @@
 #include "galay-http/protoc/http/HttpError.h"
 #include "galay-http/protoc/http/HttpChunk.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
-#include <array>
-#include <coroutine>
 #include <optional>
 #include <string>
+#include <type_traits>
+#include <vector>
 #include <sys/uio.h>
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/async/SslAwaitableCore.h"
+#include "galay-ssl/async/SslSocket.h"
+#endif
 
 namespace galay::http
 {
@@ -24,11 +28,9 @@ namespace galay::http
 using namespace galay::kernel;
 using namespace galay::async;
 
-// 前向声明
 template<typename SocketType>
 class HttpWriterImpl;
 
-// 类型萃取：判断是否为 TcpSocket
 template<typename T>
 struct is_tcp_socket : std::false_type {};
 
@@ -38,364 +40,172 @@ struct is_tcp_socket<TcpSocket> : std::true_type {};
 template<typename T>
 inline constexpr bool is_tcp_socket_v = is_tcp_socket<T>::value;
 
-template<typename SocketType, bool IsTcp = is_tcp_socket_v<SocketType>>
-class SendResponseAwaitableImpl;
+template<typename T>
+struct is_http_writer_ssl_socket : std::false_type {};
 
-/**
- * @brief HTTP响应写入等待体（writev 优化版 - 仅用于 TcpSocket）
- */
-template<typename SocketType>
-class SendResponseWritevAwaitableImpl
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<SendResponseWritevAwaitableImpl<SocketType>>
-{
-public:
-    class ProtocolWritevAwaitable : public galay::kernel::WritevAwaitable
-    {
-    public:
-        explicit ProtocolWritevAwaitable(SendResponseWritevAwaitableImpl* owner)
-            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), m_iovec_storage, 0)
-            , m_owner(owner)
-        {
-            syncIovecs();
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                syncIovecs();
-                if (m_iovecs.empty()) {
-                    m_owner->setSendError(HttpError(kSendError, "No data to write"));
-                    return true;
-                }
-                return false;
-            }
-
-            auto result = galay::kernel::io::handleWritev(cqe);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                return false;
-            }
-            if (!result) {
-                m_owner->setSendError(result.error());
-                return true;
-            }
-
-            size_t written = result.value();
-            if (written == 0) {
-                return false;
-            }
-
-            m_owner->m_writer->updateRemainingWritev(written);
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                return true;
-            }
-
-            syncIovecs();
-            if (m_iovecs.empty()) {
-                m_owner->setSendError(HttpError(kSendError, "No remaining iovec to write"));
-                return true;
-            }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            while (m_owner->m_writer->getRemainingBytes() > 0) {
-                auto* iov_data = m_owner->m_writer->getIovecsData();
-                auto iov_count = m_owner->m_writer->getIovecsCount();
-                if (iov_data == nullptr || iov_count == 0) {
-                    m_owner->setSendError(HttpError(kSendError, "No remaining iovec to write"));
-                    return true;
-                }
-
-                auto result = galay::kernel::io::handleWritev(handle,
-                                                              const_cast<iovec*>(iov_data),
-                                                              static_cast<int>(iov_count));
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                    return false;
-                }
-                if (!result) {
-                    m_owner->setSendError(result.error());
-                    return true;
-                }
-
-                size_t written = result.value();
-                if (written == 0) {
-                    return false;
-                }
-
-                m_owner->m_writer->updateRemainingWritev(written);
-            }
-            return true;
-        }
+#ifdef GALAY_HTTP_SSL_ENABLED
+template<>
+struct is_http_writer_ssl_socket<galay::ssl::SslSocket> : std::true_type {};
 #endif
 
-    private:
-        void syncIovecs() {
-            const size_t iov_count = copyBoundedIovecs(
-                m_owner->m_writer->getIovecsData(),
-                m_owner->m_writer->getIovecsCount(),
-                m_iovec_storage);
-            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
-            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
-#ifdef USE_IOURING
-            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
-            m_msg.msg_iovlen = m_iovecs.size();
-#endif
+template<typename T>
+inline constexpr bool is_http_writer_ssl_socket_v = is_http_writer_ssl_socket<T>::value;
+
+namespace detail {
+
+template<typename SocketType, bool UseWritev>
+struct HttpTcpWriteMachine {
+    using result_type = std::expected<bool, HttpError>;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Write;
+
+    explicit HttpTcpWriteMachine(HttpWriterImpl<SocketType>* writer)
+        : m_writer(writer) {}
+
+    MachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
         }
-
-        SendResponseWritevAwaitableImpl* m_owner;
-        std::array<struct iovec, 2> m_iovec_storage{};
-    };
-
-    SendResponseWritevAwaitableImpl(HttpWriterImpl<SocketType>& writer, SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_writer(&writer)
-        , m_socket(&socket)
-        , m_writev_awaitable(this)
-        , m_result(true)
-    {
-        addTask(IOEventType::WRITEV, &m_writev_awaitable);
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            HTTP_LOG_DEBUG("[writev] [fail] [{}]", m_result.error().message());
-            return std::unexpected(HttpError(kSendError, m_result.error().message()));
-        }
-
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    HttpWriterImpl<SocketType>* m_writer;
-    SocketType* m_socket;
-    ProtocolWritevAwaitable m_writev_awaitable;
-    std::optional<HttpError> m_http_error;
-
-    void setSendError(const galay::kernel::IOError& io_error) {
-        m_http_error = HttpError(kSendError, io_error.message());
-    }
-
-    void setSendError(HttpError&& error) {
-        m_http_error = std::move(error);
-    }
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
-};
-
-/**
- * @brief HTTP响应写入等待体（send 版本 - 用于 SslSocket 等）
- */
-template<typename SocketType>
-class SendResponseAwaitableImpl<SocketType, false> : public galay::kernel::TimeoutSupport<SendResponseAwaitableImpl<SocketType, false>>
-{
-public:
-    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
-
-    SendResponseAwaitableImpl(HttpWriterImpl<SocketType>& writer, SendAwaitableType&& send_awaitable)
-        : m_writer(&writer)
-        , m_send_awaitable(std::move(send_awaitable))
-    {
-    }
-
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    auto await_suspend(std::coroutine_handle<> handle) {
-        return m_send_awaitable.await_suspend(handle);
-    }
-
-    std::expected<bool, HttpError> await_resume() {
-        auto send_result = m_send_awaitable.await_resume();
-        if (!send_result) {
-            HTTP_LOG_DEBUG("[send] [fail] [{}]", send_result.error().message());
-            return std::unexpected(HttpError(kSendError, send_result.error().message()));
-        }
-
-        size_t bytes_written = send_result.value();
-        m_writer->updateRemaining(bytes_written);
 
         if (m_writer->getRemainingBytes() == 0) {
-            return true;
+            m_result = true;
+            return MachineAction<result_type>::complete(true);
         }
 
-        return false;
+        if constexpr (UseWritev) {
+            const auto* iov_data = m_writer->getIovecsData();
+            const size_t iov_count = m_writer->getIovecsCount();
+            if (iov_data == nullptr || iov_count == 0) {
+                failWithMessage("No remaining iovec to write");
+                return MachineAction<result_type>::complete(std::move(*m_result));
+            }
+            return MachineAction<result_type>::waitWritev(iov_data, iov_count);
+        } else {
+            return MachineAction<result_type>::waitWrite(
+                m_writer->bufferData() + m_writer->sentBytes(),
+                m_writer->getRemainingBytes());
+        }
+    }
+
+    void onRead(std::expected<size_t, IOError>) {}
+
+    void onWrite(std::expected<size_t, IOError> result) {
+        if (!result) {
+            failWithIo(result.error(), UseWritev ? "writev" : "send");
+            return;
+        }
+
+        const size_t written = result.value();
+        if (written > 0) {
+            if constexpr (UseWritev) {
+                m_writer->updateRemainingWritev(written);
+            } else {
+                m_writer->updateRemaining(written);
+            }
+        }
+
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+            return;
+        }
+
+        if constexpr (UseWritev) {
+            if (m_writer->getIovecsData() == nullptr || m_writer->getIovecsCount() == 0) {
+                failWithMessage("No remaining iovec to write");
+            }
+        }
+    }
+
+private:
+    void failWithIo(const IOError& io_error, const char* op) {
+        HTTP_LOG_DEBUG("[{}] [fail] [{}]", op, io_error.message());
+        m_result = std::unexpected(HttpError(kSendError, io_error.message()));
+    }
+
+    void failWithMessage(const char* message) {
+        m_result = std::unexpected(HttpError(kSendError, message));
+    }
+
+    HttpWriterImpl<SocketType>* m_writer;
+    std::optional<result_type> m_result;
+};
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+template<typename SocketType>
+struct HttpSslSendMachine {
+    using result_type = std::expected<bool, HttpError>;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Write;
+
+    explicit HttpSslSendMachine(HttpWriterImpl<SocketType>* writer)
+        : m_writer(writer) {}
+
+    galay::ssl::SslMachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+            return galay::ssl::SslMachineAction<result_type>::complete(true);
+        }
+
+        return galay::ssl::SslMachineAction<result_type>::send(
+            m_writer->bufferData() + m_writer->sentBytes(),
+            m_writer->getRemainingBytes());
+    }
+
+    void onHandshake(std::expected<void, galay::ssl::SslError>) {}
+    void onRecv(std::expected<Bytes, galay::ssl::SslError>) {}
+    void onShutdown(std::expected<void, galay::ssl::SslError>) {}
+
+    void onSend(std::expected<size_t, galay::ssl::SslError> result) {
+        if (!result) {
+            HTTP_LOG_DEBUG("[send] [fail] [{}]", result.error().message());
+            m_writer->updateRemaining(m_writer->getRemainingBytes());
+            m_result = std::unexpected(HttpError(kSendError, result.error().message()));
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_writer->updateRemaining(m_writer->getRemainingBytes());
+            m_result = std::unexpected(HttpError(kSendError, "SSL send returned zero bytes"));
+            return;
+        }
+
+        m_writer->updateRemaining(result.value());
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+        }
     }
 
 private:
     HttpWriterImpl<SocketType>* m_writer;
-    SendAwaitableType m_send_awaitable;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
+    std::optional<result_type> m_result;
 };
-
-/**
- * @brief HTTP响应写入等待体（send 版本 - TcpSocket，链式发送完成唤醒）
- */
-template<typename SocketType>
-class SendResponseAwaitableImpl<SocketType, true>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<SendResponseAwaitableImpl<SocketType, true>>
-{
-public:
-    class ProtocolSendAwaitable : public galay::kernel::SendAwaitable
-    {
-    public:
-        explicit ProtocolSendAwaitable(SendResponseAwaitableImpl* owner)
-            : galay::kernel::SendAwaitable(owner->m_socket->controller(),
-                                           owner->m_writer->bufferData() + owner->m_writer->sentBytes(),
-                                           owner->m_writer->getRemainingBytes())
-            , m_owner(owner)
-        {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                syncSendWindow();
-                return m_length == 0;
-            }
-
-            auto result = galay::kernel::io::handleSend(cqe);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                return false;
-            }
-            if (!result) {
-                m_owner->setSendError(result.error());
-                return true;
-            }
-
-            size_t written = result.value();
-            if (written == 0) {
-                return false;
-            }
-
-            m_owner->m_writer->updateRemaining(written);
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                return true;
-            }
-
-            syncSendWindow();
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            while (m_owner->m_writer->getRemainingBytes() > 0) {
-                syncSendWindow();
-                auto result = galay::kernel::io::handleSend(handle, m_buffer, m_length);
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                    return false;
-                }
-                if (!result) {
-                    m_owner->setSendError(result.error());
-                    return true;
-                }
-
-                size_t written = result.value();
-                if (written == 0) {
-                    return false;
-                }
-
-                m_owner->m_writer->updateRemaining(written);
-            }
-            return true;
-        }
 #endif
 
-    private:
-        void syncSendWindow() {
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                m_buffer = nullptr;
-                m_length = 0;
-                return;
-            }
-            m_buffer = m_owner->m_writer->bufferData() + m_owner->m_writer->sentBytes();
-            m_length = m_owner->m_writer->getRemainingBytes();
-        }
-
-        SendResponseAwaitableImpl* m_owner;
-    };
-
-    SendResponseAwaitableImpl(HttpWriterImpl<SocketType>& writer, SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_writer(&writer)
-        , m_socket(&socket)
-        , m_send_awaitable(this)
-        , m_has_send_task(false)
-        , m_result(true)
-    {
-        if (m_writer->getRemainingBytes() > 0) {
-            addTask(IOEventType::SEND, &m_send_awaitable);
-            m_has_send_task = true;
-        }
+template<typename SocketType, bool UseWritev>
+auto buildSendAwaitable(SocketType& socket, HttpWriterImpl<SocketType>& writer) {
+    using ResultType = std::expected<bool, HttpError>;
+    if constexpr (is_http_writer_ssl_socket_v<SocketType>) {
+#ifdef GALAY_HTTP_SSL_ENABLED
+        return galay::ssl::SslAwaitableBuilder<ResultType>::fromStateMachine(
+                   socket.controller(),
+                   &socket,
+                   HttpSslSendMachine<SocketType>(&writer))
+            .build();
+#else
+        static_assert(!sizeof(SocketType), "SSL support is disabled");
+#endif
+    } else {
+        return AwaitableBuilder<ResultType>::fromStateMachine(
+                   socket.controller(),
+                   HttpTcpWriteMachine<SocketType, UseWritev>(&writer))
+            .build();
     }
+}
 
-    bool await_ready() const noexcept {
-        return m_writer->getRemainingBytes() == 0;
-    }
+} // namespace detail
 
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, HttpError> await_resume() {
-        if (!m_has_send_task) {
-            return true;
-        }
-
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            HTTP_LOG_DEBUG("[send] [fail] [{}]", m_result.error().message());
-            return std::unexpected(HttpError(kSendError, m_result.error().message()));
-        }
-        if (m_http_error.has_value()) {
-            return std::unexpected(std::move(*m_http_error));
-        }
-
-        return true;
-    }
-
-private:
-    void setSendError(const galay::kernel::IOError& io_error) {
-        m_http_error = HttpError(kSendError, io_error.message());
-    }
-
-    HttpWriterImpl<SocketType>* m_writer;
-    SocketType* m_socket;
-    ProtocolSendAwaitable m_send_awaitable;
-    bool m_has_send_task;
-    std::optional<HttpError> m_http_error;
-
-public:
-    std::expected<bool, galay::kernel::IOError> m_result;
-};
-
-/**
- * @brief HTTP写入器模板类
- * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
- */
 template<typename SocketType>
 class HttpWriterImpl
 {
@@ -414,25 +224,24 @@ public:
             if constexpr (is_tcp_socket_v<SocketType>) {
                 m_body_buffer = response.getBodyStr();
 
-                if(!response.header().isChunked()) {
-                    response.header().headerPairs().addHeaderPairIfNotExist("Content-Length", std::to_string(m_body_buffer.size()));
+                if (!response.header().isChunked()) {
+                    response.header().headerPairs().addHeaderPairIfNotExist(
+                        "Content-Length",
+                        std::to_string(m_body_buffer.size()));
                 }
 
                 m_buffer = response.header().toString();
                 prepareTcpSendLayout();
             } else {
-                // SslSocket: 使用 send
                 m_buffer = response.toString();
                 m_remaining_bytes = m_buffer.size();
             }
         }
 
         if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseWritevAwaitableImpl<SocketType>(*this, *m_socket);
+            return makeWritevAwaitable();
         } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+            return makeSendAwaitable();
         }
     }
 
@@ -442,7 +251,9 @@ public:
                 m_body_buffer = request.bodyStr();
 
                 if (!request.header().isChunked()) {
-                    request.header().headerPairs().addHeaderPairIfNotExist("Content-Length", std::to_string(m_body_buffer.size()));
+                    request.header().headerPairs().addHeaderPairIfNotExist(
+                        "Content-Length",
+                        std::to_string(m_body_buffer.size()));
                 }
 
                 m_buffer = request.header().toString();
@@ -454,88 +265,56 @@ public:
         }
 
         if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseWritevAwaitableImpl<SocketType>(*this, *m_socket);
+            return makeWritevAwaitable();
         } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
+            return makeSendAwaitable();
         }
     }
 
-    SendResponseAwaitableImpl<SocketType> sendHeader(HttpResponseHeader&& header) {
+    auto sendHeader(HttpResponseHeader&& header) {
         if (m_remaining_bytes == 0) {
             logResponseStatus(header.code());
             m_buffer = header.toString();
             m_remaining_bytes = m_buffer.size();
         }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
-    SendResponseAwaitableImpl<SocketType> sendHeader(HttpRequestHeader&& header) {
+    auto sendHeader(HttpRequestHeader&& header) {
         if (m_remaining_bytes == 0) {
             m_buffer = header.toString();
             m_remaining_bytes = m_buffer.size();
         }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
-    SendResponseAwaitableImpl<SocketType> send(std::string&& data) {
+    auto send(std::string&& data) {
         if (m_remaining_bytes == 0) {
             m_buffer = std::move(data);
             m_remaining_bytes = m_buffer.size();
         }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
-    SendResponseAwaitableImpl<SocketType> send(const char* buffer, size_t length) {
+    auto send(const char* buffer, size_t length) {
         if (m_remaining_bytes == 0) {
             m_buffer.assign(buffer, length);
             m_remaining_bytes = m_buffer.size();
         }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
-    SendResponseAwaitableImpl<SocketType> sendChunk(const std::string& data, bool is_last = false) {
+    auto sendChunk(const std::string& data, bool is_last = false) {
         if (m_remaining_bytes == 0) {
             m_buffer = Chunk::toChunk(data, is_last);
             m_remaining_bytes = m_buffer.size();
         }
 
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendResponseAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendResponseAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+        return makeSendAwaitable();
     }
 
     void updateRemaining(size_t bytes_sent) {
@@ -592,6 +371,14 @@ public:
     }
 
 private:
+    auto makeSendAwaitable() {
+        return detail::buildSendAwaitable<SocketType, false>(*m_socket, *this);
+    }
+
+    auto makeWritevAwaitable() {
+        return detail::buildSendAwaitable<SocketType, true>(*m_socket, *this);
+    }
+
     void prepareTcpSendLayout() {
         const size_t total_size = m_buffer.size() + m_body_buffer.size();
         const size_t coalesce_threshold = m_setting.getWritevCoalesceThreshold();
@@ -632,24 +419,18 @@ private:
 
     HttpWriterSetting m_setting;
     SocketType* m_socket;
-    std::string m_buffer;        // TcpSocket: 存储 header; SslSocket: 存储完整响应
+    std::string m_buffer;
     size_t m_remaining_bytes;
-
-    // writev 专用成员（仅 TcpSocket 使用）
-    std::string m_body_buffer;   // 存储 body
+    std::string m_body_buffer;
     IoVecCursor m_writev_cursor;
 };
 
-// 类型别名 - HTTP (TcpSocket)
-using SendResponseAwaitable = SendResponseAwaitableImpl<TcpSocket>;
 using HttpWriter = HttpWriterImpl<TcpSocket>;
 
 } // namespace galay::http
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/SslSocket.h"
 namespace galay::http {
-using SendResponseAwaitableSsl = SendResponseAwaitableImpl<galay::ssl::SslSocket>;
 using HttpsWriter = HttpWriterImpl<galay::ssl::SslSocket>;
 } // namespace galay::http
 #endif

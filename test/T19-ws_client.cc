@@ -174,7 +174,7 @@ int main(int argc, char* argv[]) {
         runtime.start();
 
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(testClient(host, port, num_messages));
+        scheduleCoroutine(scheduler, testClient(host, port, num_messages));
 
         // Wait for completion (max 30 seconds)
         for (int i = 0; i < 300; i++) {

@@ -130,9 +130,8 @@ Coroutine runConnection(std::shared_ptr<H2cClient> client,
             stream->sendHeaders(request_headers, false, true);
             stream->sendData(kPayload, true);
 
-            Coroutine coro = handleResponse(stream);
-            co_await spawn(coro);
-            waiters.push_back(std::move(coro));
+            waiters.push_back(handleResponse(stream));
+            co_await spawn(waiters.back());
         }
 
         // 等待本轮所有 stream 完成
@@ -210,7 +209,7 @@ int main(int argc, char* argv[]) {
         auto client = std::make_shared<H2cClient>(H2cClientBuilder().buildConfig());
         client_pool.push_back(client);
         auto* sched = rt.getNextIOScheduler();
-        sched->spawn(runConnection(std::move(client), i, host, port, streams, rounds));
+        scheduleCoroutine(sched, runConnection(std::move(client), i, host, port, streams, rounds));
     }
 
     std::cout << "压测进行中";

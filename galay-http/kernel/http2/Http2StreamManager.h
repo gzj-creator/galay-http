@@ -24,6 +24,7 @@
 #include <cstring>
 #include <algorithm>
 #include <deque>
+#include <limits>
 
 namespace galay::http2
 {
@@ -374,6 +375,14 @@ public:
      */
     Coroutine start(Http2StreamHandler handler) {
         prepareForStart(false);
+        if constexpr (is_ssl_socket_v<SocketType>) {
+            Coroutine monitor = monitorLoop();
+            co_await spawn(monitor);
+            m_writer_ready.notify();
+            co_await sslServiceLoop(std::move(handler)).wait();
+            co_await finishForegroundSslRun(monitor).wait();
+            co_return;
+        }
         auto loops = createBackgroundLoops();
         co_await startBackgroundLoops(loops).wait();
         co_await readerLoop(std::move(handler)).wait();
@@ -383,6 +392,21 @@ public:
 
     Coroutine start(Http2ActiveConnHandler handler) {
         prepareForStart(true);
+        if constexpr (is_ssl_socket_v<SocketType>) {
+            Coroutine monitor = monitorLoop();
+            co_await spawn(monitor);
+            m_writer_ready.notify();
+
+            Http2ConnContext ctx(m_active_stream_mailbox);
+            m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
+            Coroutine active_handler = runActiveHandler(std::move(handler), &ctx);
+            co_await spawn(active_handler);
+
+            co_await sslServiceLoop(nullptr).wait();
+            co_await finishForegroundSslRun(monitor).wait();
+            co_return;
+        }
+
         auto loops = createBackgroundLoops();
         co_await startBackgroundLoops(loops).wait();
 
@@ -440,15 +464,21 @@ public:
      * @brief 从非协程上下文启动 StreamManager
      * @param scheduler 当前 IO 调度器
      * @param handler 用户流处理回调
-     * @details 通过 scheduler->spawn() 启动 reader/writer/monitor，
+     * @details 通过 scheduleCoroutine(scheduler, ) 启动 reader/writer/monitor，
      *          不需要协程上下文，可从 CustomAwaitable::await_resume() 等普通函数调用。
      */
     void startWithScheduler(galay::kernel::Scheduler* scheduler, Http2StreamHandler handler) {
         prepareForStart(false);
-        scheduler->spawn(writerLoop());
-        scheduler->spawn(monitorLoop());
+        if constexpr (is_ssl_socket_v<SocketType>) {
+            scheduleCoroutine(scheduler, monitorLoop());
+            m_writer_ready.notify();
+            scheduleCoroutine(scheduler, sslServiceLoopThenCleanup(std::move(handler)));
+            return;
+        }
+        scheduleCoroutine(scheduler, writerLoop());
+        scheduleCoroutine(scheduler, monitorLoop());
         m_writer_ready.notify();
-        scheduler->spawn(readerLoopThenCleanup(std::move(handler)));
+        scheduleCoroutine(scheduler, readerLoopThenCleanup(std::move(handler)));
     }
 
     /**
@@ -592,6 +622,18 @@ private:
         co_return;
     }
 
+    Coroutine finishForegroundSslRun(Coroutine& monitor) {
+        m_draining_handlers.store(true, std::memory_order_release);
+        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
+            co_await m_handler_waiter.wait();
+        }
+
+        m_running = false;
+        co_await monitor.wait();
+        m_stop_waiter.notify();
+        co_return;
+    }
+
     Coroutine readerLoopThenCleanup(Http2StreamHandler handler) {
         co_await readerLoop(std::move(handler)).wait();
 
@@ -602,6 +644,19 @@ private:
 
         m_running = false;
         m_send_channel.send(Http2OutgoingFrame{});
+        m_stop_waiter.notify();
+        co_return;
+    }
+
+    Coroutine sslServiceLoopThenCleanup(Http2StreamHandler handler) {
+        co_await sslServiceLoop(std::move(handler)).wait();
+
+        m_draining_handlers.store(true, std::memory_order_release);
+        if (m_active_handlers.load(std::memory_order_acquire) > 0) {
+            co_await m_handler_waiter.wait();
+        }
+
+        m_running = false;
         m_stop_waiter.notify();
         co_return;
     }
@@ -627,6 +682,8 @@ public:
     }
 
 private:
+    static constexpr auto kSslIoOwnerPollInterval = std::chrono::milliseconds(5);
+
     Http2Stream::ptr newStream(uint32_t stream_id) {
         auto stream = m_conn.getStream(stream_id);
         if (stream) {
@@ -820,6 +877,211 @@ private:
         });
         closeActiveStreamQueue();
 
+        co_return;
+    }
+
+    Coroutine sslServiceLoop(Http2StreamHandler handler) {
+        std::vector<Http2OutgoingFrame> outgoing_batch;
+        std::vector<std::string> flattened_buffers;
+        std::vector<Http2OutgoingFrame::WaiterPtr> waiters;
+        std::vector<uint8_t> frame_scratch;
+        outgoing_batch.reserve(64);
+        flattened_buffers.reserve(64);
+        waiters.reserve(64);
+        frame_scratch.reserve(65536);
+
+        while (true) {
+            outgoing_batch.clear();
+            flattened_buffers.clear();
+            waiters.clear();
+
+            bool has_shutdown = false;
+            while (auto item = m_send_channel.tryRecv()) {
+                if (item->isEmpty()) {
+                    has_shutdown = true;
+                    break;
+                }
+                if (item->waiter) {
+                    waiters.push_back(item->waiter);
+                }
+                outgoing_batch.push_back(std::move(*item));
+            }
+
+            for (const auto& item : outgoing_batch) {
+                flattened_buffers.push_back(item.flatten());
+            }
+
+            for (auto& buffer : flattened_buffers) {
+                size_t offset = 0;
+                while (offset < buffer.size()) {
+                    auto send_result = co_await m_conn.socket().send(
+                        buffer.data() + offset,
+                        buffer.size() - offset);
+                    if (!send_result || send_result.value() == 0) {
+                        if (m_conn.isClosing() || m_conn.isPeerClosed() ||
+                            m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
+                            HTTP_LOG_DEBUG("[stream-mgr] [ssl-owner] [send-fail] [closing]");
+                        } else if (send_result) {
+                            HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-zero]");
+                        } else {
+                            HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-fail] [{}]",
+                                           send_result.error().message());
+                        }
+                        for (auto& waiter : waiters) {
+                            if (waiter) {
+                                waiter->notify();
+                            }
+                        }
+                        m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
+                            stream->closeFrameQueue();
+                        });
+                        closeActiveStreamQueue();
+                        co_return;
+                    }
+                    offset += send_result.value();
+                }
+            }
+
+            for (auto& waiter : waiters) {
+                if (waiter) {
+                    waiter->notify();
+                }
+            }
+
+            bool exit_loop = false;
+            while (!exit_loop) {
+                auto frames_result = detail::parseBufferedFrameBatch(
+                    m_conn.ringBuffer(),
+                    m_conn.peerSettings().max_frame_size,
+                    std::numeric_limits<size_t>::max(),
+                    frame_scratch);
+                if (!frames_result) {
+                    if (m_conn.isClosing() || m_conn.isPeerClosed()) {
+                        HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [{}] [{}]",
+                                      m_conn.isPeerClosed() ? "peer-closed" : "closing",
+                                      m_conn.lastReadError());
+                        exit_loop = true;
+                        break;
+                    }
+                    if (frames_result.error() == Http2ErrorCode::NoError) {
+                        break;
+                    }
+                    if (m_conn.lastReadError().empty()) {
+                        HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
+                                       http2ErrorCodeToString(frames_result.error()));
+                    } else {
+                        HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
+                                       http2ErrorCodeToString(frames_result.error()),
+                                       m_conn.lastReadError());
+                    }
+                    enqueueGoaway(frames_result.error());
+                    exit_loop = true;
+                    break;
+                }
+                if (frames_result->empty()) {
+                    break;
+                }
+
+                auto& frames = *frames_result;
+                for (auto& frame : frames) {
+                    uint32_t stream_id = frame->streamId();
+                    m_last_frame_recv_at = std::chrono::steady_clock::now();
+
+                    HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
+                                   http2FrameTypeToString(frame->type()),
+                                   stream_id,
+                                   frame->header().flags);
+
+                    if (m_conn.isExpectingContinuation()) {
+                        if (!frame->isContinuation() || stream_id != m_conn.continuationStreamId()) {
+                            enqueueGoaway(Http2ErrorCode::ProtocolError);
+                            exit_loop = true;
+                            break;
+                        }
+                    }
+
+                    if (frame->isSettings() || frame->isPing() || frame->isGoAway() ||
+                        (frame->isWindowUpdate() && stream_id == 0)) {
+                        handleConnectionFrame(std::move(frame));
+                        continue;
+                    }
+
+                    dispatchStreamFrame(std::move(frame));
+                }
+
+                processPendingActions();
+                flushActiveStreams();
+
+                while (!m_pending_spawns.empty()) {
+                    auto stream = m_pending_spawns.top();
+                    m_pending_spawns.pop();
+                    m_active_handlers.fetch_add(1, std::memory_order_acq_rel);
+                    co_await spawn(runHandler(handler, stream));
+                }
+            }
+
+            if (exit_loop || has_shutdown) {
+                break;
+            }
+
+            if (!m_send_channel.empty()) {
+                continue;
+            }
+
+            char* recv_buffer = nullptr;
+            size_t recv_length = 0;
+            auto write_iovecs = borrowWriteIovecs(m_conn.ringBuffer());
+            if (!IoVecWindow::bindFirstNonEmpty(write_iovecs, recv_buffer, recv_length) || recv_length == 0) {
+                m_conn.setLastReadError("RingBuffer is full");
+                HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-window-full]");
+                enqueueGoaway(Http2ErrorCode::ProtocolError);
+                break;
+            }
+
+            auto recv_result = co_await m_conn.socket().recv(recv_buffer, recv_length)
+                .timeout(kSslIoOwnerPollInterval);
+            if (!recv_result) {
+                const auto& error = recv_result.error();
+#ifdef GALAY_HTTP_SSL_ENABLED
+                if (error.code() == galay::ssl::SslErrorCode::kTimeout) {
+                    continue;
+                }
+                if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
+                    m_conn.markPeerClosed(error.message());
+                    HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [peer-closed] [{}]",
+                                  m_conn.lastReadError());
+                    break;
+                }
+#endif
+                if (m_conn.isClosing()) {
+                    m_conn.setLastReadError(error.message());
+                    HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [closing] [{}]",
+                                  m_conn.lastReadError());
+                    break;
+                }
+                m_conn.setLastReadError(error.message());
+                HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-fail] [{}]",
+                               m_conn.lastReadError());
+                enqueueGoaway(Http2ErrorCode::ProtocolError);
+                break;
+            }
+
+            const size_t bytes_read = recv_result->size();
+            if (bytes_read == 0) {
+                m_conn.markPeerClosed();
+                HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [peer-closed] [{}]",
+                              m_conn.lastReadError());
+                break;
+            }
+
+            m_conn.clearLastReadError();
+            m_conn.ringBuffer().produce(bytes_read);
+        }
+
+        m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
+            stream->closeFrameQueue();
+        });
+        closeActiveStreamQueue();
         co_return;
     }
 

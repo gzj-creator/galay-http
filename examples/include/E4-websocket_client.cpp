@@ -230,7 +230,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        scheduler->spawn(runWebSocketClient(url));
+        scheduleCoroutine(scheduler, runWebSocketClient(url));
 
         // 等待足够的时间让 WebSocket 通信完成
         std::this_thread::sleep_for(std::chrono::seconds(10));

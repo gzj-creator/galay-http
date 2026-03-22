@@ -112,9 +112,8 @@ Coroutine runClient(int id,
                 fail_count++;
                 continue;
             }
-            Coroutine coro = handleResponse(stream);
-            co_await spawn(coro);
-            waiters.push_back(std::move(coro));
+            waiters.push_back(handleResponse(stream));
+            co_await spawn(waiters.back());
         }
 
         for (auto& waiter : waiters) {
@@ -161,7 +160,7 @@ void runBenchmark(const std::string& host,
 
     for (int i = 0; i < concurrent_clients; i++) {
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(runClient(i, host, port, requests_per_client, streams_per_batch));
+        scheduleCoroutine(scheduler, runClient(i, host, port, requests_per_client, streams_per_batch));
     }
 
     std::cout << "压测进行中";

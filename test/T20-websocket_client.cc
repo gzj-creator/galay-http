@@ -181,7 +181,7 @@ int main() {
         return 1;
     }
 
-    scheduler->spawn(testWebSocketClient(scheduler));
+    scheduleCoroutine(scheduler, testWebSocketClient(scheduler));
 
     // 等待测试完成（这里简单地等待一段时间）
     std::this_thread::sleep_for(std::chrono::seconds(30));

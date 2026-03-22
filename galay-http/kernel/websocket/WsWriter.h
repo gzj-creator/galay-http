@@ -6,16 +6,20 @@
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-http/protoc/websocket/WebSocketError.h"
 #include "galay-kernel/kernel/Awaitable.h"
-#include "galay-kernel/kernel/Timeout.hpp"
 #include "galay-kernel/async/TcpSocket.h"
 #include <expected>
-#include <array>
-#include <coroutine>
 #include <optional>
 #include <string>
-#include <cstring>
+#include <string_view>
+#include <type_traits>
 #include <utility>
+#include <vector>
 #include <sys/uio.h>
+
+#ifdef GALAY_HTTP_SSL_ENABLED
+#include "galay-ssl/async/SslAwaitableCore.h"
+#include "galay-ssl/async/SslSocket.h"
+#endif
 
 namespace galay::websocket
 {
@@ -23,11 +27,9 @@ namespace galay::websocket
 using namespace galay::kernel;
 using namespace galay::async;
 
-// 前向声明
 template<typename SocketType>
 class WsWriterImpl;
 
-// 类型萃取：判断是否为 TcpSocket
 template<typename T>
 struct is_tcp_socket : std::false_type {};
 
@@ -37,218 +39,155 @@ struct is_tcp_socket<TcpSocket> : std::true_type {};
 template<typename T>
 inline constexpr bool is_tcp_socket_v = is_tcp_socket<T>::value;
 
-template<typename SocketType, bool IsTcp = is_tcp_socket_v<SocketType>>
-class SendFrameAwaitableImpl;
+template<typename T>
+struct is_ws_writer_ssl_socket : std::false_type {};
 
-/**
- * @brief WebSocket帧发送等待体（TcpSocket: CustomAwaitable + WritevAwaitable）
- */
+#ifdef GALAY_HTTP_SSL_ENABLED
+template<>
+struct is_ws_writer_ssl_socket<galay::ssl::SslSocket> : std::true_type {};
+#endif
+
+template<typename T>
+inline constexpr bool is_ws_writer_ssl_socket_v = is_ws_writer_ssl_socket<T>::value;
+
+namespace detail {
+
 template<typename SocketType>
-class SendFrameAwaitableImpl<SocketType, true>
-    : public galay::kernel::CustomAwaitable
-    , public galay::kernel::TimeoutSupport<SendFrameAwaitableImpl<SocketType, true>>
-{
-public:
-    class ProtocolWritevAwaitable : public galay::kernel::WritevAwaitable
-    {
-    public:
-        explicit ProtocolWritevAwaitable(SendFrameAwaitableImpl* owner)
-            : galay::kernel::WritevAwaitable(owner->m_socket->controller(), m_iovec_storage, 0)
-            , m_owner(owner)
-        {
-            syncIovecs();
+struct WsTcpWritevMachine {
+    using result_type = std::expected<bool, WsError>;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Write;
+
+    explicit WsTcpWritevMachine(WsWriterImpl<SocketType>* writer)
+        : m_writer(writer) {}
+
+    MachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
         }
 
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                return true;
-            }
-
-            if (cqe == nullptr) {
-                syncIovecs();
-                if (m_iovecs.empty()) {
-                    m_owner->setSendError(WsError(kWsSendError, "No data to write"));
-                    return true;
-                }
-                return false;
-            }
-
-            auto result = galay::kernel::io::handleWritev(cqe);
-            if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                return false;
-            }
-            if (!result) {
-                m_owner->setSendError(result.error());
-                return true;
-            }
-
-            size_t bytes_written = result.value();
-            if (bytes_written == 0) {
-                return false;
-            }
-
-            m_owner->m_writer->updateRemainingWritev(bytes_written);
-            if (m_owner->m_writer->getRemainingBytes() == 0) {
-                return true;
-            }
-
-            syncIovecs();
-            if (m_iovecs.empty()) {
-                m_owner->setSendError(WsError(kWsSendError, "No remaining iovec to write"));
-                return true;
-            }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            while (m_owner->m_writer->getRemainingBytes() > 0) {
-                const auto* iov_data = m_owner->m_writer->getIovecsData();
-                const auto iov_count = m_owner->m_writer->getIovecsCount();
-                if (iov_data == nullptr || iov_count == 0) {
-                    m_owner->setSendError(WsError(kWsSendError, "No remaining iovec to write"));
-                    return true;
-                }
-
-                auto result = galay::kernel::io::handleWritev(handle,
-                                                              const_cast<iovec*>(iov_data),
-                                                              static_cast<int>(iov_count));
-                if (!result && galay::kernel::IOError::contains(result.error().code(), galay::kernel::kNotReady)) {
-                    return false;
-                }
-                if (!result) {
-                    m_owner->setSendError(result.error());
-                    return true;
-                }
-
-                size_t bytes_written = result.value();
-                if (bytes_written == 0) {
-                    return false;
-                }
-
-                m_owner->m_writer->updateRemainingWritev(bytes_written);
-            }
-
-            return true;
-        }
-#endif
-
-    private:
-        void syncIovecs() {
-            const size_t iov_count = copyBoundedIovecs(
-                m_owner->m_writer->getIovecsData(),
-                m_owner->m_writer->getIovecsCount(),
-                m_iovec_storage);
-            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
-            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
-#ifdef USE_IOURING
-            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
-            m_msg.msg_iovlen = m_iovecs.size();
-#endif
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+            return MachineAction<result_type>::complete(true);
         }
 
-        SendFrameAwaitableImpl* m_owner;
-        std::array<struct iovec, 2> m_iovec_storage{};
-    };
+        const auto* iov_data = m_writer->getIovecsData();
+        const auto iov_count = m_writer->getIovecsCount();
+        if (iov_data == nullptr || iov_count == 0) {
+            failWithMessage("No remaining iovec to write");
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
 
-    SendFrameAwaitableImpl(WsWriterImpl<SocketType>& writer, SocketType& socket)
-        : galay::kernel::CustomAwaitable(socket.controller())
-        , m_writer(&writer)
-        , m_socket(&socket)
-        , m_writev_awaitable(this)
-        , m_result(0)
-    {
-        addTask(IOEventType::WRITEV, &m_writev_awaitable);
+        return MachineAction<result_type>::waitWritev(iov_data, iov_count);
     }
 
-    bool await_ready() const noexcept {
-        return false;
-    }
+    void onRead(std::expected<size_t, IOError>) {}
 
-    using galay::kernel::CustomAwaitable::await_suspend;
-
-    std::expected<bool, WsError> await_resume() {
-        onCompleted();
-
-        if (!m_result.has_value()) {
-            return std::unexpected(WsError(kWsSendError, m_result.error().message()));
+    void onWrite(std::expected<size_t, IOError> result) {
+        if (!result) {
+            m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
+            return;
         }
 
-        if (m_ws_error.has_value()) {
-            return std::unexpected(std::move(*m_ws_error));
+        const size_t written = result.value();
+        if (written > 0) {
+            m_writer->updateRemainingWritev(written);
         }
 
-        return true;
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+            return;
+        }
+
+        if (m_writer->getIovecsData() == nullptr || m_writer->getIovecsCount() == 0) {
+            failWithMessage("No remaining iovec to write");
+        }
     }
 
 private:
-    void setSendError(const galay::kernel::IOError& io_error) {
-        m_ws_error = WsError(kWsSendError, io_error.message());
-    }
-
-    void setSendError(WsError&& ws_error) {
-        m_ws_error = std::move(ws_error);
+    void failWithMessage(const char* message) {
+        m_result = std::unexpected(WsError(kWsSendError, message));
     }
 
     WsWriterImpl<SocketType>* m_writer;
-    SocketType* m_socket;
-    ProtocolWritevAwaitable m_writev_awaitable;
-    std::optional<WsError> m_ws_error;
-
-public:
-    std::expected<size_t, galay::kernel::IOError> m_result;
+    std::optional<result_type> m_result;
 };
 
-/**
- * @brief WebSocket帧发送等待体（非 TcpSocket: send 版本）
- */
+#ifdef GALAY_HTTP_SSL_ENABLED
 template<typename SocketType>
-class SendFrameAwaitableImpl<SocketType, false>
-    : public galay::kernel::TimeoutSupport<SendFrameAwaitableImpl<SocketType, false>>
-{
-public:
-    using SendAwaitableType = decltype(std::declval<SocketType>().send(std::declval<const char*>(), std::declval<size_t>()));
+struct WsSslSendMachine {
+    using result_type = std::expected<bool, WsError>;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Write;
 
-    SendFrameAwaitableImpl(WsWriterImpl<SocketType>& writer, SendAwaitableType&& send_awaitable)
-        : m_writer(writer)
-        , m_send_awaitable(std::move(send_awaitable))
-    {
-    }
+    explicit WsSslSendMachine(WsWriterImpl<SocketType>* writer)
+        : m_writer(writer) {}
 
-    bool await_ready() const noexcept {
-        return false;
-    }
-
-    auto await_suspend(std::coroutine_handle<> handle) {
-        return m_send_awaitable.await_suspend(handle);
-    }
-
-    std::expected<bool, WsError> await_resume() {
-        auto send_result = m_send_awaitable.await_resume();
-        if (!send_result) {
-            return std::unexpected(WsError(kWsSendError, send_result.error().message()));
+    galay::ssl::SslMachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
         }
 
-        size_t bytes_written = send_result.value();
-        m_writer.updateRemaining(bytes_written);
-
-        if (m_writer.getRemainingBytes() == 0) {
-            return true;
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+            return galay::ssl::SslMachineAction<result_type>::complete(true);
         }
-        return false;
+
+        return galay::ssl::SslMachineAction<result_type>::send(
+            m_writer->bufferData() + m_writer->sentBytes(),
+            m_writer->getRemainingBytes());
+    }
+
+    void onHandshake(std::expected<void, galay::ssl::SslError>) {}
+    void onRecv(std::expected<Bytes, galay::ssl::SslError>) {}
+    void onShutdown(std::expected<void, galay::ssl::SslError>) {}
+
+    void onSend(std::expected<size_t, galay::ssl::SslError> result) {
+        if (!result) {
+            m_writer->resetPendingState();
+            m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_writer->resetPendingState();
+            m_result = std::unexpected(WsError(kWsSendError, "SSL send returned zero bytes"));
+            return;
+        }
+
+        m_writer->updateRemaining(result.value());
+        if (m_writer->getRemainingBytes() == 0) {
+            m_result = true;
+        }
     }
 
 private:
-    WsWriterImpl<SocketType>& m_writer;
-    SendAwaitableType m_send_awaitable;
-
-public:
-    std::expected<size_t, galay::kernel::IOError> m_result;
+    WsWriterImpl<SocketType>* m_writer;
+    std::optional<result_type> m_result;
 };
+#endif
 
-/**
- * @brief WebSocket写入器模板类
- */
+template<typename SocketType>
+auto buildSendAwaitable(SocketType& socket, WsWriterImpl<SocketType>& writer) {
+    using ResultType = std::expected<bool, WsError>;
+    if constexpr (is_ws_writer_ssl_socket_v<SocketType>) {
+#ifdef GALAY_HTTP_SSL_ENABLED
+        return galay::ssl::SslAwaitableBuilder<ResultType>::fromStateMachine(
+                   socket.controller(),
+                   &socket,
+                   WsSslSendMachine<SocketType>(&writer))
+            .build();
+#else
+        static_assert(!sizeof(SocketType), "SSL support is disabled");
+#endif
+    } else {
+        return AwaitableBuilder<ResultType>::fromStateMachine(
+                   socket.controller(),
+                   WsTcpWritevMachine<SocketType>(&writer))
+            .build();
+    }
+}
+
+} // namespace detail
+
 template<typename SocketType>
 class WsWriterImpl
 {
@@ -330,15 +269,19 @@ public:
         return makeSendAwaitable();
     }
 
+    void prepareSslMessage(WsOpcode opcode, std::string_view payload, bool fin = true) {
+        resetPendingState();
+        WsFrame frame = WsFrameBuilder()
+            .opcode(opcode)
+            .fin(fin)
+            .payload(std::string(payload))
+            .buildMove();
+        prepareSendFrame(std::move(frame));
+    }
+
 private:
-    SendFrameAwaitableImpl<SocketType> makeSendAwaitable() {
-        if constexpr (is_tcp_socket_v<SocketType>) {
-            return SendFrameAwaitableImpl<SocketType>(*this, *m_socket);
-        } else {
-            const size_t sent_bytes = m_buffer.size() - m_remaining_bytes;
-            const char* send_ptr = m_buffer.data() + sent_bytes;
-            return SendFrameAwaitableImpl<SocketType>(*this, m_socket->send(send_ptr, m_remaining_bytes));
-        }
+    auto makeSendAwaitable() {
+        return detail::buildSendAwaitable(*m_socket, *this);
     }
 
     void prepareSendFrame(const WsFrame& frame) {
@@ -388,6 +331,12 @@ private:
     }
 
 public:
+    void resetPendingState() {
+        m_buffer.clear();
+        m_payload_buffer.clear();
+        m_writev_cursor.reset(std::vector<iovec>{});
+        m_remaining_bytes = 0;
+    }
 
     void updateRemaining(size_t bytes_sent) {
         if (bytes_sent >= m_remaining_bytes) {
@@ -415,6 +364,14 @@ public:
         return m_remaining_bytes;
     }
 
+    const char* bufferData() const {
+        return m_buffer.data();
+    }
+
+    size_t sentBytes() const {
+        return m_buffer.size() - m_remaining_bytes;
+    }
+
     const iovec* getIovecsData() const {
         return m_writev_cursor.data();
     }
@@ -426,23 +383,19 @@ public:
 private:
     WsWriterSetting m_setting;
     SocketType* m_socket;
-    std::string m_buffer;           // 存储 header
-    std::string m_payload_buffer;   // 存储 payload（用于 writev）
-    IoVecCursor m_writev_cursor;    // iovec 游标（用于 writev）
+    std::string m_buffer;
+    std::string m_payload_buffer;
+    IoVecCursor m_writev_cursor;
     size_t m_remaining_bytes;
-    uint8_t m_masking_key[4];       // 掩码密钥
+    uint8_t m_masking_key[4];
 };
 
-// 类型别名 - WebSocket over TCP
-using SendFrameAwaitable = SendFrameAwaitableImpl<TcpSocket>;
 using WsWriter = WsWriterImpl<TcpSocket>;
 
 } // namespace galay::websocket
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/SslSocket.h"
 namespace galay::websocket {
-using SendFrameAwaitableSsl = SendFrameAwaitableImpl<galay::ssl::SslSocket>;
 using WssWriter = WsWriterImpl<galay::ssl::SslSocket>;
 } // namespace galay::websocket
 #endif

@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        scheduler->spawn(sendEchoRequest(url, message));
+        scheduleCoroutine(scheduler, sendEchoRequest(url, message));
 
         // 等待一段时间让请求完成
         std::this_thread::sleep_for(std::chrono::seconds(3));

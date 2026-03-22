@@ -175,7 +175,7 @@ void runBenchmark(const std::string& host,
         auto client = std::make_shared<H2cClient>(H2cClientBuilder().buildConfig());
         client_pool.push_back(client);
         auto* scheduler = runtime.getNextIOScheduler();
-        scheduler->spawn(runClient(std::move(client), i, host, port, requests_per_client));
+        scheduleCoroutine(scheduler, runClient(std::move(client), i, host, port, requests_per_client));
     }
 
     // 等待所有客户端完成

@@ -116,7 +116,7 @@ int main() {
     for (int i = 0; i < 20; i++) {
         auto* scheduler = rt.getNextIOScheduler();
         if (scheduler) {
-            scheduler->spawn(singleRequest(i));
+            scheduleCoroutine(scheduler, singleRequest(i));
         }
         // 等待每个请求完成
         std::this_thread::sleep_for(std::chrono::milliseconds(200));

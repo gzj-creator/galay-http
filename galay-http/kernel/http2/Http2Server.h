@@ -303,7 +303,7 @@ private:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduler->spawn(serverLoop(scheduler));
+                scheduleCoroutine(scheduler, serverLoop(scheduler));
             }
         }
 
@@ -366,7 +366,7 @@ private:
             }
 
             // Handle connection on the same scheduler
-            scheduler->spawn(handleConnection(std::move(client_socket)));
+            scheduleCoroutine(scheduler, handleConnection(std::move(client_socket)));
         }
 
         co_return;
@@ -811,7 +811,7 @@ private:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduler->spawn(serverLoop(scheduler));
+                scheduleCoroutine(scheduler, serverLoop(scheduler));
             }
         }
         return true;
@@ -920,7 +920,7 @@ private:
                 continue;
             }
 
-            scheduler->spawn(handleConnection(std::move(client_socket)));
+            scheduleCoroutine(scheduler, handleConnection(std::move(client_socket)));
         }
 
         co_return;

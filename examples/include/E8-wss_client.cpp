@@ -170,7 +170,7 @@ int main(int argc, char* argv[]) {
             return 1;
         }
 
-        scheduler->spawn(wssClientCoroutine(url, message_count));
+        scheduleCoroutine(scheduler, wssClientCoroutine(url, message_count));
 
         // 等待完成
         while (!g_done) {

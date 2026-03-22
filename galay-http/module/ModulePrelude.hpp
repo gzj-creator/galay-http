@@ -155,9 +155,6 @@
 #if __has_include(<vector>)
 #include <vector>
 #endif
-#if __has_include("galay-http/kernel/SslRecvCompatAwaitable.h")
-#include "galay-http/kernel/SslRecvCompatAwaitable.h"
-#endif
 #if __has_include("galay-http/kernel/http/HttpClient.h")
 #include "galay-http/kernel/http/HttpClient.h"
 #endif
@@ -305,8 +302,8 @@
 #if __has_include("galay-kernel/kernel/Awaitable.h")
 #include "galay-kernel/kernel/Awaitable.h"
 #endif
-#if __has_include("galay-kernel/kernel/Coroutine.h")
-#include "galay-kernel/kernel/Coroutine.h"
+#if __has_include("galay-kernel/kernel/Task.h")
+#include "galay-kernel/kernel/Task.h"
 #endif
 #if __has_include("galay-kernel/kernel/IOHandlers.hpp")
 #include "galay-kernel/kernel/IOHandlers.hpp"

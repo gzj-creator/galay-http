@@ -252,19 +252,19 @@ int main()
         }
 
         // 运行所有测试
-        scheduler->spawn(testTcpSocketAwaitableTimeout(scheduler));
+        scheduleCoroutine(scheduler, testTcpSocketAwaitableTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(4));
 
-        scheduler->spawn(testHttpClientAwaitableTimeout(scheduler));
+        scheduleCoroutine(scheduler, testHttpClientAwaitableTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testReaderWriterAwaitableTimeout(scheduler));
+        scheduleCoroutine(scheduler, testReaderWriterAwaitableTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(3));
 
-        scheduler->spawn(testGetRequestAwaitableTimeout(scheduler));
+        scheduleCoroutine(scheduler, testGetRequestAwaitableTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
-        scheduler->spawn(testGetChunkAwaitableTimeout(scheduler));
+        scheduleCoroutine(scheduler, testGetChunkAwaitableTimeout(scheduler));
         std::this_thread::sleep_for(std::chrono::seconds(1));
 
         runtime.stop();

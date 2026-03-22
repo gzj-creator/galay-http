@@ -127,7 +127,7 @@ bool runKeepAliveTest(Runtime& rt, int total_requests, int connections, const st
     for (int i = 0; i < connections; i++) {
         auto* scheduler = rt.getNextIOScheduler();
         if (scheduler) {
-            scheduler->spawn(keepAliveRequests(i, requests_per_conn));
+            scheduleCoroutine(scheduler, keepAliveRequests(i, requests_per_conn));
         }
     }
 

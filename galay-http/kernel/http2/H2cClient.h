@@ -326,7 +326,6 @@ public:
     bool await_ready() const noexcept { return m_error.has_value(); }
     bool await_suspend(std::coroutine_handle<PromiseType> handle) {
         m_scheduler = handle.promise().getCoroutine().belongScheduler();
-        m_registered = true;
         return CustomAwaitable::await_suspend(handle);
     }
 
@@ -416,7 +415,6 @@ private:
     ProtocolSendAwaitable m_ack_send;
     std::optional<Http2Error> m_error;
     Scheduler* m_scheduler = nullptr;
-    bool m_registered = false;
 
 public:
     std::expected<bool, IOError> m_result;
@@ -510,19 +508,34 @@ private:
 inline H2cClient H2cClientBuilder::build() const { return H2cClient(m_config); }
 
 inline std::expected<bool, Http2Error> H2cUpgradeAwaitable::await_resume() {
-    if (m_registered) {
-        onCompleted();
-    }
+    // Release the upgrade sequence's ReadWrite ownership before starting the
+    // HTTP/2 stream manager. Otherwise the freshly scheduled reader loop will
+    // race with this awaitable for the same socket controller and fail with
+    // kNotReady.
+    onCompleted();
     if (m_error.has_value()) {
         m_client->m_upgraded = false;
         m_client->m_upgrade_result = std::unexpected(*m_error);
         return std::unexpected(std::move(*m_error));
     }
 
+    auto* manager = m_client->m_conn ? m_client->m_conn->streamManager() : nullptr;
+    if (manager == nullptr) {
+        auto error = Http2Error(Http2ErrorCode::InternalError, "missing stream manager");
+        m_client->m_upgraded = false;
+        m_client->m_upgrade_result = std::unexpected(error);
+        return std::unexpected(std::move(error));
+    }
+
+    manager->startWithScheduler(
+        m_scheduler,
+        [](Http2Stream::ptr) -> Coroutine { co_return; });
+
     m_client->m_socket.reset();
     m_client->m_ring_buffer.reset();
     m_client->m_upgraded = true;
     m_client->m_upgrade_result = true;
+    HTTP_LOG_INFO("[h2c] [upgrade] [conn-ready]");
     HTTP_LOG_INFO("[h2c] [upgrade] [done]");
     return true;
 }
@@ -600,6 +613,12 @@ inline bool H2cUpgradeAwaitable::finishUpgrade() {
         return true;
     }
 
+    // TcpSocket move also moves IOController state, including sequence owners.
+    // Release the upgrade awaitable's ReadWrite ownership before moving the
+    // socket into Http2Conn, otherwise the new controller inherits a stale
+    // owner pointer and every later readFramesBatch() aborts with kNotReady.
+    onCompleted();
+
     m_client->m_conn = std::make_unique<Http2ConnImpl<TcpSocket>>(
         std::move(*m_client->m_socket), std::move(*m_client->m_ring_buffer));
     m_client->m_conn->localSettings().from(m_client->m_config);
@@ -607,11 +626,6 @@ inline bool H2cUpgradeAwaitable::finishUpgrade() {
     m_client->m_conn->markSettingsSent();
     m_client->m_conn->setIsClient(true);
     m_client->m_conn->initStreamManager();
-    m_client->m_conn->streamManager()->startWithScheduler(
-        m_scheduler,
-        [](Http2Stream::ptr) -> Coroutine { co_return; });
-
-    HTTP_LOG_INFO("[h2c] [upgrade] [conn-ready]");
     return true;
 }
 
@@ -630,6 +644,7 @@ inline bool H2cShutdownAwaitable::await_suspend(Handle handle) {
         return false;
     }
     m_started = true;
+    m_client.m_shutdown_result = true;
 
     HTTP_LOG_INFO("[h2c] [shutdown] [begin] [has-conn={}] [upgraded={}]",
                   m_client.m_conn != nullptr, m_client.m_upgraded);
@@ -648,6 +663,10 @@ inline bool H2cShutdownAwaitable::await_suspend(Handle handle) {
 }
 
 inline std::expected<bool, Http2Error> H2cShutdownAwaitable::await_resume() {
+    if (m_manager_shutdown.has_value()) {
+        m_manager_shutdown->await_resume();
+    }
+
     if (m_socket_close.has_value()) {
         auto close_result = m_socket_close->await_resume();
         if (!close_result) {
