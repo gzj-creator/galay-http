@@ -33,32 +33,6 @@ This means:
 - the severe regression is concentrated in the TLS variants, especially `h2`
 - `h2c` proving strong performance is evidence that the HTTP/2 core is not the primary bottleneck by itself
 
-## Latest Focused Evidence
-
-The latest focused rerun is recorded in:
-
-- `benchmark/results/20260322-195833-galay-go-rust-http-proto-compare/summary.md`
-- `benchmark/results/20260322-200458-galay-go-rust-http-proto-compare/summary.md`
-
-The first focused run showed:
-
-- `wss`: Galay `73265.38 rps`, Go `125146.88 rps`, Rust `127623.88 rps`
-- `h2`: Galay `73585.38 rps`, Go `48746.38 rps`, Rust `68255.25 rps`
-
-That narrowed the remaining problem to `wss` only.
-
-After reusing the H2-side accepted-socket policy in `HttpsServer`:
-
-- enable `TCP_NODELAY` on accepted TLS sockets
-- rotate TLS connection handling with `m_runtime.getNextIOScheduler()`
-
-the second focused run showed:
-
-- `wss`: Galay `144561.12 rps`, Go `130321.50 rps`, Rust `130145.88 rps`
-- `h2`: Galay `78578.88 rps`, Go `49257.62 rps`, Rust `66376.88 rps`
-
-This is strong evidence that the previous `wss` gap was primarily a shared TLS accepted-connection policy issue rather than a remaining WebSocket parser/writer architecture problem.
-
 ## Current Architecture Comparison
 
 ### Go
