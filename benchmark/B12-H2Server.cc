@@ -11,6 +11,7 @@
 #include <thread>
 #include <chrono>
 #include <cstdlib>
+#include <limits>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 
@@ -18,12 +19,35 @@ using namespace galay::http2;
 using namespace galay::kernel;
 
 static volatile bool g_running = true;
-static const Http2HeaderField kStatus200{":status", "200"};
-static const Http2HeaderField kContentTypeTextPlain{"content-type", "text/plain"};
 static constexpr size_t kBenchmarkEchoBodySize = 128;
+static bool g_debug_log = false;
+static bool g_debug_stats = false;
+static std::atomic<uint64_t> g_active_conn_handlers_started{0};
+static std::atomic<uint64_t> g_active_conn_handlers_finished{0};
+static std::atomic<uint64_t> g_active_conn_handlers_finished_while_running{0};
+static std::atomic<uint64_t> g_active_conn_handlers_without_request{0};
+static std::atomic<uint64_t> g_headers_ready_events{0};
+static std::atomic<uint64_t> g_data_arrived_events{0};
+static std::atomic<uint64_t> g_request_complete_events{0};
+static std::atomic<uint64_t> g_conn_requests_lt_256{0};
+static std::atomic<uint64_t> g_conn_requests_lt_512{0};
+static std::atomic<uint64_t> g_conn_requests_lt_768{0};
+static std::atomic<uint64_t> g_conn_requests_lt_1024{0};
+static std::atomic<uint64_t> g_conn_requests_lt_1280{0};
+static std::atomic<uint64_t> g_conn_requests_ge_1280{0};
+static std::atomic<uint64_t> g_min_conn_requests{std::numeric_limits<uint64_t>::max()};
+static std::atomic<uint64_t> g_max_conn_requests{0};
 
-static const std::string& cachedBenchmarkResponseHeaderBlock() {
-    static const std::string block = [] {
+static const std::string& encodedEchoHeaders(size_t body_size) {
+    static const std::string kEncoded0 = [] {
+        HpackEncoder encoder;
+        return encoder.encodeStateless({
+            {":status", "200"},
+            {"content-type", "text/plain"},
+            {"content-length", "0"},
+        });
+    }();
+    static const std::string kEncoded128 = [] {
         HpackEncoder encoder;
         return encoder.encodeStateless({
             {":status", "200"},
@@ -31,50 +55,123 @@ static const std::string& cachedBenchmarkResponseHeaderBlock() {
             {"content-length", std::to_string(kBenchmarkEchoBodySize)},
         });
     }();
-    return block;
+
+    if (body_size == 0) {
+        return kEncoded0;
+    }
+    if (body_size == kBenchmarkEchoBodySize) {
+        return kEncoded128;
+    }
+
+    static thread_local std::string dynamic_headers;
+    HpackEncoder encoder;
+    dynamic_headers = encoder.encodeStateless({
+        {":status", "200"},
+        {"content-type", "text/plain"},
+        {"content-length", std::to_string(body_size)},
+    });
+    return dynamic_headers;
+}
+
+static std::shared_ptr<const std::string> sharedEncodedEchoHeaders(size_t body_size) {
+    static const auto kEncoded0 = std::make_shared<const std::string>(encodedEchoHeaders(0));
+    static const auto kEncoded128 =
+        std::make_shared<const std::string>(encodedEchoHeaders(kBenchmarkEchoBodySize));
+
+    if (body_size == 0) {
+        return kEncoded0;
+    }
+    if (body_size == kBenchmarkEchoBodySize) {
+        return kEncoded128;
+    }
+    return std::make_shared<const std::string>(encodedEchoHeaders(body_size));
 }
 
 void signalHandler(int) {
     g_running = false;
 }
 
-Task<void> handleStream(Http2Stream::ptr stream) {
-    std::string body;
+Task<void> handleActiveConn(Http2ConnContext& ctx) {
+    g_active_conn_handlers_started.fetch_add(1, std::memory_order_relaxed);
+    bool saw_request = false;
+    uint64_t local_request_count = 0;
 
-    bool end_stream = false;
-    while (!end_stream) {
-        auto frame_result = co_await stream->getFrame();
-        if (!frame_result) {
+    while (true) {
+        auto streams = co_await ctx.getActiveStreams(64);
+        if (!streams) {
             break;
         }
 
-        auto frame = std::move(frame_result.value());
-        if (!frame) {
-            end_stream = true;
-            break;
-        }
-        if (frame->isData()) {
-            body.append(frame->asData()->data());
-        }
-        if (frame->isEndStream()) {
-            end_stream = true;
+        for (auto& stream : *streams) {
+            auto events = stream->takeEvents();
+            if (hasHttp2StreamEvent(events, Http2StreamEvent::HeadersReady)) {
+                g_headers_ready_events.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (hasHttp2StreamEvent(events, Http2StreamEvent::DataArrived)) {
+                g_data_arrived_events.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (!hasHttp2StreamEvent(events, Http2StreamEvent::RequestComplete)) {
+                continue;
+            }
+
+            saw_request = true;
+            ++local_request_count;
+            g_request_complete_events.fetch_add(1, std::memory_order_relaxed);
+            const size_t body_size = stream->request().bodySize();
+            const size_t body_chunk_count = stream->request().bodyChunkCount();
+            auto response_headers = sharedEncodedEchoHeaders(body_size);
+
+            if (body_chunk_count == 1) {
+                stream->sendEncodedHeadersAndData(
+                    std::move(response_headers),
+                    stream->request().takeSingleBodyChunk(),
+                    true);
+            } else if (body_chunk_count > 1) {
+                stream->sendEncodedHeadersAndDataChunks(
+                    std::string(*response_headers),
+                    stream->request().takeBodyChunks(),
+                    true);
+            } else {
+                stream->sendEncodedHeadersAndData(
+                    std::move(response_headers),
+                    std::string(),
+                    true);
+            }
         }
     }
 
-    if (body.size() == kBenchmarkEchoBodySize) {
-        stream->sendEncodedHeaders(cachedBenchmarkResponseHeaderBlock(), false, true);
+    if (!saw_request) {
+        g_active_conn_handlers_without_request.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (local_request_count < 256) {
+        g_conn_requests_lt_256.fetch_add(1, std::memory_order_relaxed);
+    } else if (local_request_count < 512) {
+        g_conn_requests_lt_512.fetch_add(1, std::memory_order_relaxed);
+    } else if (local_request_count < 768) {
+        g_conn_requests_lt_768.fetch_add(1, std::memory_order_relaxed);
+    } else if (local_request_count < 1024) {
+        g_conn_requests_lt_1024.fetch_add(1, std::memory_order_relaxed);
+    } else if (local_request_count < 1280) {
+        g_conn_requests_lt_1280.fetch_add(1, std::memory_order_relaxed);
     } else {
-        std::vector<Http2HeaderField> headers;
-        headers.reserve(3);
-        headers.push_back(kStatus200);
-        headers.push_back(kContentTypeTextPlain);
-        headers.push_back({"content-length", std::to_string(body.size())});
-        stream->sendHeaders(headers, body.empty(), true);
-    }
-    if (!body.empty()) {
-        stream->sendData(std::move(body), true);
+        g_conn_requests_ge_1280.fetch_add(1, std::memory_order_relaxed);
     }
 
+    auto min_seen = g_min_conn_requests.load(std::memory_order_relaxed);
+    while (local_request_count < min_seen &&
+           !g_min_conn_requests.compare_exchange_weak(
+               min_seen, local_request_count, std::memory_order_relaxed)) {
+    }
+    auto max_seen = g_max_conn_requests.load(std::memory_order_relaxed);
+    while (local_request_count > max_seen &&
+           !g_max_conn_requests.compare_exchange_weak(
+               max_seen, local_request_count, std::memory_order_relaxed)) {
+    }
+
+    if (g_running) {
+        g_active_conn_handlers_finished_while_running.fetch_add(1, std::memory_order_relaxed);
+    }
+    g_active_conn_handlers_finished.fetch_add(1, std::memory_order_relaxed);
     co_return;
 }
 
@@ -88,8 +185,18 @@ int main(int argc, char* argv[]) {
     if (argc > 2) io_threads = std::atoi(argv[2]);
     if (argc > 3) cert_path = argv[3];
     if (argc > 4) key_path = argv[4];
+    if (const char* debug_log = std::getenv("GALAY_H2_DEBUG_LOG")) {
+        g_debug_log = std::atoi(debug_log) != 0;
+    }
+    if (const char* debug_stats = std::getenv("GALAY_H2_DEBUG_STATS")) {
+        g_debug_stats = std::atoi(debug_stats) != 0;
+    }
 
-    galay::http::HttpLogger::disable();
+    if (g_debug_log) {
+        galay::http::HttpLogger::console();
+    } else {
+        galay::http::HttpLogger::disable();
+    }
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);
 
@@ -114,9 +221,11 @@ int main(int argc, char* argv[]) {
             .computeSchedulerCount(0)
             .maxConcurrentStreams(1000)
             .initialWindowSize(65535)
+            .flowControlTargetWindow(1u << 20)
+            .activeConnHandler(handleActiveConn)
             .build());
 
-        server.start(handleStream);
+        server.start();
         std::cout << "Server started successfully!\n";
         std::cout << "Runtime Config: io=" << server.getRuntime().getIOSchedulerCount()
                   << " compute=" << server.getRuntime().getComputeSchedulerCount()
@@ -125,6 +234,40 @@ int main(int argc, char* argv[]) {
 
         while (g_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        if (g_debug_stats) {
+            std::cerr << "[debug-stats] active_started="
+                      << g_active_conn_handlers_started.load(std::memory_order_relaxed)
+                      << " active_finished="
+                      << g_active_conn_handlers_finished.load(std::memory_order_relaxed)
+                      << " active_finished_while_running="
+                      << g_active_conn_handlers_finished_while_running.load(std::memory_order_relaxed)
+                      << " active_without_request="
+                      << g_active_conn_handlers_without_request.load(std::memory_order_relaxed)
+                      << " headers_ready_events="
+                      << g_headers_ready_events.load(std::memory_order_relaxed)
+                      << " data_arrived_events="
+                      << g_data_arrived_events.load(std::memory_order_relaxed)
+                      << " request_complete_events="
+                      << g_request_complete_events.load(std::memory_order_relaxed)
+                      << " conn_req_lt_256="
+                      << g_conn_requests_lt_256.load(std::memory_order_relaxed)
+                      << " conn_req_lt_512="
+                      << g_conn_requests_lt_512.load(std::memory_order_relaxed)
+                      << " conn_req_lt_768="
+                      << g_conn_requests_lt_768.load(std::memory_order_relaxed)
+                      << " conn_req_lt_1024="
+                      << g_conn_requests_lt_1024.load(std::memory_order_relaxed)
+                      << " conn_req_lt_1280="
+                      << g_conn_requests_lt_1280.load(std::memory_order_relaxed)
+                      << " conn_req_ge_1280="
+                      << g_conn_requests_ge_1280.load(std::memory_order_relaxed)
+                      << " min_conn_requests="
+                      << g_min_conn_requests.load(std::memory_order_relaxed)
+                      << " max_conn_requests="
+                      << g_max_conn_requests.load(std::memory_order_relaxed)
+                      << "\n";
         }
 
         std::cout << "\nShutting down...\n";

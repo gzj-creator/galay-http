@@ -8,6 +8,7 @@ RUST_SERVER_DIR="$COMPARE_ROOT/rust-server"
 GO_CLIENT_DIR="$COMPARE_ROOT/go-client"
 GALAY_BUILD_DIR="${GALAY_BUILD_DIR:-$ROOT/build-ssl-nolog}"
 BENCH_THREADS="${BENCH_THREADS:-4}"
+PROTO_FILTER="${PROTO_FILTER:-http https ws wss h2c h2}"
 
 OUT_DIR="$ROOT/benchmark/results/$(date +%Y%m%d-%H%M%S)-galay-go-rust-http-proto-compare"
 mkdir -p "$OUT_DIR"
@@ -57,6 +58,7 @@ cmake --build "$GALAY_BUILD_DIR" --parallel \
   --target B1-HttpServer B14-HttpsServer B5-WebsocketServer B7-WssServer B3-H2cServer B12-H2Server >/dev/null
 
 echo "[config] unified worker threads: $BENCH_THREADS"
+echo "[config] proto filter: $PROTO_FILTER"
 
 echo "language,proto,addr,conns,duration,success,fail,rps,avg_ms" > "$CSV_FILE"
 
@@ -289,7 +291,7 @@ run_case() {
 }
 
 for language in galay go rust; do
-  for proto in http https ws wss h2c h2; do
+  for proto in $PROTO_FILTER; do
     run_case "$language" "$proto"
   done
 done

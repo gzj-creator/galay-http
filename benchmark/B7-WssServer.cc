@@ -6,12 +6,12 @@
  */
 
 #include <chrono>
-#include <array>
 #include <csignal>
 #include <iostream>
 #include "galay-http/kernel/http/HttpServer.h"
+#include "galay-http/kernel/websocket/WsConn.h"
 #include "galay-http/kernel/websocket/WsUpgrade.h"
-#include "galay-http/protoc/websocket/WebSocketFrame.h"
+#include "galay-http/kernel/websocket/WsWriterSetting.h"
 #include "galay-http/protoc/http/HttpRequest.h"
 #include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
@@ -28,126 +28,59 @@ void signalHandler(int) {
     g_running = false;
 }
 
-namespace {
-
-void compactConsumedPrefix(std::string& buffer, size_t& offset) {
-    if (offset == 0) {
-        return;
-    }
-    if (offset >= buffer.size()) {
-        buffer.clear();
-        offset = 0;
-        return;
-    }
-    if (offset >= 4096 || offset * 2 >= buffer.size()) {
-        buffer.erase(0, offset);
-        offset = 0;
-    }
-}
-
-void encodeServerFrame(std::string& out, WsFrame& frame) {
-    frame.header.mask = false;
-    frame.header.payload_length = frame.payload.size();
-    WsFrameParser::encodeInto(out, frame, false);
-}
-
-} // namespace
-
-/**
- * @brief 处理 WSS 连接（使用底层帧处理）
- */
-Task<void> handleWssConnection(galay::ssl::SslSocket& socket) {
+Task<void> handleWssConnection(WssConn& ws_conn) {
     HTTP_LOG_DEBUG("[wss] [conn] [open]");
 
-    std::string send_buffer;
-    send_buffer.reserve(2048);
+    auto reader = ws_conn.getReader();
+    auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
-    WsFrame welcome_frame = WsFrameParser::createTextFrame("Welcome to WSS Benchmark Server!");
-    encodeServerFrame(send_buffer, welcome_frame);
-
-    auto result = co_await socket.send(send_buffer.data(), send_buffer.size());
-    if (!result) {
-        HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", result.error().message());
+    auto welcome_result = co_await writer.sendText("Welcome to WSS Benchmark Server!");
+    if (!welcome_result) {
+        HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", welcome_result.error().message());
         co_return;
     }
 
-    std::array<char, 8192> buffer{};
-    std::string accumulated;
-    accumulated.reserve(buffer.size() * 2);
-    size_t parse_offset = 0;
-
-    // 消息循环
+    std::string message;
+    WsOpcode opcode = WsOpcode::Text;
     while (true) {
-        compactConsumedPrefix(accumulated, parse_offset);
-
-        auto recv_result = co_await socket.recv(buffer.data(), buffer.size());
-        if (!recv_result) {
-            HTTP_LOG_DEBUG("[wss] [recv-fail] [{}]", recv_result.error().message());
+        message.clear();
+        auto read_result = co_await reader.getMessage(message, opcode);
+        if (!read_result) {
+            HTTP_LOG_DEBUG("[wss] [recv-fail] [{}]", read_result.error().message());
             break;
         }
-
-        size_t bytes_received = recv_result.value().size();
-        if (bytes_received == 0) {
-            HTTP_LOG_DEBUG("[wss] [conn] [closed]");
-            break;
+        if (!read_result.value()) {
+            continue;
         }
 
-        accumulated.append(buffer.data(), bytes_received);
-
-        // 尝试解析帧
-        while (parse_offset < accumulated.size()) {
-            WsFrame frame;
-            std::array<iovec, 1> iovecs{{
-                {
-                    .iov_base = const_cast<char*>(accumulated.data() + parse_offset),
-                    .iov_len = accumulated.size() - parse_offset,
-                }
-            }};
-
-            auto parse_result = WsFrameParser::fromIOVec(iovecs.data(), iovecs.size(), frame, true);
-            if (!parse_result) {
-                if (parse_result.error().code() == kWsIncomplete) {
-                    break;  // 需要更多数据
-                }
-                HTTP_LOG_ERROR("[wss] [frame] [parse-fail] [{}]", parse_result.error().message());
-                goto cleanup;
+        if (opcode == WsOpcode::Text) {
+            auto send_result = co_await writer.sendText(std::move(message));
+            if (!send_result) {
+                HTTP_LOG_ERROR("[wss] [echo-text] [send-fail] [{}]", send_result.error().message());
+                break;
             }
-
-            size_t consumed = parse_result.value();
-            parse_offset += consumed;
-
-            // 处理帧
-            if (frame.header.opcode == WsOpcode::Close) {
-                HTTP_LOG_DEBUG("[wss] [close] [recv]");
-                WsFrame close_frame = WsFrameParser::createCloseFrame(WsCloseCode::Normal);
-                encodeServerFrame(send_buffer, close_frame);
-                auto result = co_await socket.send(send_buffer.data(), send_buffer.size());
-                if (!result) {
-                    HTTP_LOG_WARN("[close] [fail] [{}]", result.error().message());
-                }
-                goto cleanup;
+        } else if (opcode == WsOpcode::Binary) {
+            auto send_result = co_await writer.sendBinary(std::move(message));
+            if (!send_result) {
+                HTTP_LOG_ERROR("[wss] [echo-binary] [send-fail] [{}]", send_result.error().message());
+                break;
             }
-            else if (frame.header.opcode == WsOpcode::Ping) {
-                HTTP_LOG_DEBUG("[wss] [ping] [recv] [pong] [send]");
-                frame.header.opcode = WsOpcode::Pong;
-                encodeServerFrame(send_buffer, frame);
-                auto result = co_await socket.send(send_buffer.data(), send_buffer.size());
-                if (!result) {
-                    HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
-                }
+        } else if (opcode == WsOpcode::Ping) {
+            auto pong_result = co_await writer.sendPong(message);
+            if (!pong_result) {
+                HTTP_LOG_ERROR("[wss] [pong] [send-fail] [{}]", pong_result.error().message());
+                break;
             }
-            else if (frame.header.opcode == WsOpcode::Text || frame.header.opcode == WsOpcode::Binary) {
-                encodeServerFrame(send_buffer, frame);
-                auto r = co_await socket.send(send_buffer.data(), send_buffer.size());
-                if (!r) break;
+        } else if (opcode == WsOpcode::Close) {
+            auto close_result = co_await writer.sendClose();
+            if (!close_result) {
+                HTTP_LOG_WARN("[wss] [close] [send-fail] [{}]", close_result.error().message());
             }
-
-            compactConsumedPrefix(accumulated, parse_offset);
+            break;
         }
     }
 
-cleanup:
-    co_await socket.close();
+    co_await ws_conn.close();
     HTTP_LOG_DEBUG("[wss] [conn] [closed]");
     co_return;
 }
@@ -200,9 +133,8 @@ Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
             co_return;
         }
 
-        // 获取底层 socket 并处理 WebSocket 连接
-        auto& socket = conn.getSocket();
-        co_await handleWssConnection(socket);
+        WssConn ws_conn = WssConn::from(std::move(conn), true);
+        co_await handleWssConnection(ws_conn);
         co_return;
     }
 

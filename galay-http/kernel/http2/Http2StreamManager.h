@@ -525,6 +525,16 @@ private:
         if (m_next_local_stream_id == 0) {
             m_next_local_stream_id = m_conn.isClient() ? 3 : 2;
         }
+        if (!m_conn.isClient()) {
+            const uint32_t target_window = m_conn.runtimeConfig().flow_control_target_window;
+            const int32_t current_window = m_conn.connRecvWindow();
+            if (target_window > 0 && static_cast<int32_t>(target_window) > current_window) {
+                const auto increment = static_cast<uint32_t>(
+                    static_cast<int64_t>(target_window) - current_window);
+                enqueueWindowUpdateAction(0, increment);
+                m_conn.adjustConnRecvWindow(static_cast<int32_t>(increment));
+            }
+        }
         m_conn.reserveStreams(
             static_cast<size_t>(std::max<uint32_t>(m_conn.localSettings().max_concurrent_streams, 64u)) + 8);
     }
@@ -613,7 +623,122 @@ public:
     }
 
 private:
-    static constexpr auto kSslIoOwnerPollInterval = std::chrono::milliseconds(5);
+    static constexpr size_t kSslIoOwnerBatchSize = 64;
+    static constexpr auto kSslIoOwnerHotWaitInterval = std::chrono::milliseconds(1);
+    static constexpr auto kSslIoOwnerActivePollInterval = std::chrono::milliseconds(1);
+    static constexpr auto kSslIoOwnerIdlePollInterval = std::chrono::milliseconds(5);
+
+    void collectOutgoingFrame(Http2OutgoingFrame&& item,
+                              std::vector<Http2OutgoingFrame>& outgoing_batch,
+                              std::vector<Http2OutgoingFrame::WaiterPtr>& waiters,
+                              bool& has_shutdown) {
+        if (item.isEmpty()) {
+            has_shutdown = true;
+            return;
+        }
+        if (item.waiter) {
+            waiters.push_back(item.waiter);
+        }
+        outgoing_batch.push_back(std::move(item));
+    }
+
+    void drainOutgoingChannel(std::vector<Http2OutgoingFrame>& outgoing_batch,
+                              std::vector<Http2OutgoingFrame::WaiterPtr>& waiters,
+                              bool& has_shutdown) {
+        while (!has_shutdown) {
+            auto item = m_send_channel.tryRecv();
+            if (!item) {
+                break;
+            }
+            collectOutgoingFrame(std::move(*item), outgoing_batch, waiters, has_shutdown);
+        }
+    }
+
+    void notifyWaiters(std::vector<Http2OutgoingFrame::WaiterPtr>& waiters) {
+        for (auto& waiter : waiters) {
+            if (waiter) {
+                waiter->notify();
+            }
+        }
+    }
+
+    bool shouldHotWaitForOutgoing(bool had_ready_active_streams,
+                                  bool had_pending_spawns) const {
+        if (had_ready_active_streams || had_pending_spawns) {
+            return true;
+        }
+        if (m_active_conn_mode) {
+            return false;
+        }
+        return m_active_handlers.load(std::memory_order_acquire) > 0;
+    }
+
+    std::chrono::milliseconds sslIoOwnerPollInterval(bool low_latency_mode) const {
+        return low_latency_mode ? kSslIoOwnerActivePollInterval : kSslIoOwnerIdlePollInterval;
+    }
+
+    bool shouldEnforceSettingsAckTimeout(std::chrono::steady_clock::time_point now) const {
+        const auto settings_timeout = m_conn.runtimeConfig().settings_ack_timeout;
+        if (settings_timeout.count() <= 0 || !m_conn.isSettingsAckPending()) {
+            return false;
+        }
+        if (now - m_conn.settingsSentAt() <= settings_timeout) {
+            return false;
+        }
+
+        // Once the peer is actively sending frames after our SETTINGS, prefer to
+        // keep the connection alive and validate behavior via actual frame-level
+        // protocol checks instead of timing out a missing ACK.
+        return m_last_frame_recv_at <= m_conn.settingsSentAt();
+    }
+
+    Task<bool> sendSslOutgoingBatch(const std::vector<Http2OutgoingFrame>& outgoing_batch,
+                                    std::vector<Http2OutgoingFrame::WaiterPtr>& waiters,
+                                    std::string& coalesced_buffer) {
+        if (outgoing_batch.empty()) {
+            co_return true;
+        }
+
+        size_t total_bytes = 0;
+        for (const auto& item : outgoing_batch) {
+            total_bytes += item.serializedSize();
+        }
+
+        coalesced_buffer.clear();
+        if (coalesced_buffer.capacity() < total_bytes) {
+            coalesced_buffer.reserve(total_bytes);
+        }
+        for (const auto& item : outgoing_batch) {
+            item.appendTo(coalesced_buffer);
+        }
+
+        size_t offset = 0;
+        while (offset < coalesced_buffer.size()) {
+            auto send_result = co_await m_conn.socket().send(
+                coalesced_buffer.data() + offset,
+                coalesced_buffer.size() - offset);
+            if (!send_result || send_result.value() == 0) {
+                if (m_conn.isClosing() || m_conn.isPeerClosed() ||
+                    m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
+                    HTTP_LOG_DEBUG("[stream-mgr] [ssl-owner] [send-fail] [closing]");
+                } else if (send_result) {
+                    HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-zero]");
+                } else {
+                    HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-fail] [{}]",
+                                   send_result.error().message());
+                }
+                notifyWaiters(waiters);
+                m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
+                    stream->closeFrameQueue();
+                });
+                closeActiveStreamQueue();
+                co_return false;
+            }
+            offset += send_result.value();
+        }
+
+        co_return true;
+    }
 
     Task<void> writerLoopThenNotify(AsyncWaiter<void>* done) {
         try {
@@ -843,74 +968,116 @@ private:
 
     Task<void> sslServiceLoop(Http2StreamHandler handler) {
         std::vector<Http2OutgoingFrame> outgoing_batch;
-        std::vector<std::string> flattened_buffers;
         std::vector<Http2OutgoingFrame::WaiterPtr> waiters;
         std::vector<uint8_t> frame_scratch;
+        std::string coalesced_buffer;
         outgoing_batch.reserve(64);
-        flattened_buffers.reserve(64);
         waiters.reserve(64);
         frame_scratch.reserve(65536);
+        coalesced_buffer.reserve(65536);
 
         while (true) {
             outgoing_batch.clear();
-            flattened_buffers.clear();
             waiters.clear();
 
             bool has_shutdown = false;
-            while (auto item = m_send_channel.tryRecv()) {
-                if (item->isEmpty()) {
-                    has_shutdown = true;
-                    break;
-                }
-                if (item->waiter) {
-                    waiters.push_back(item->waiter);
-                }
-                outgoing_batch.push_back(std::move(*item));
-            }
+            drainOutgoingChannel(outgoing_batch, waiters, has_shutdown);
 
-            for (const auto& item : outgoing_batch) {
-                flattened_buffers.push_back(item.flatten());
-            }
-
-            for (auto& buffer : flattened_buffers) {
-                size_t offset = 0;
-                while (offset < buffer.size()) {
-                    auto send_result = co_await m_conn.socket().send(
-                        buffer.data() + offset,
-                        buffer.size() - offset);
-                    if (!send_result || send_result.value() == 0) {
-                        if (m_conn.isClosing() || m_conn.isPeerClosed() ||
-                            m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
-                            HTTP_LOG_DEBUG("[stream-mgr] [ssl-owner] [send-fail] [closing]");
-                        } else if (send_result) {
-                            HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-zero]");
-                        } else {
-                            HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-fail] [{}]",
-                                           send_result.error().message());
-                        }
-                        for (auto& waiter : waiters) {
-                            if (waiter) {
-                                waiter->notify();
-                            }
-                        }
-                        m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
-                            stream->closeFrameQueue();
-                        });
-                        closeActiveStreamQueue();
-                        co_return;
-                    }
-                    offset += send_result.value();
+            if (!outgoing_batch.empty()) {
+                if (!co_await sendSslOutgoingBatch(outgoing_batch, waiters, coalesced_buffer)) {
+                    co_return;
                 }
             }
-
-            for (auto& waiter : waiters) {
-                if (waiter) {
-                    waiter->notify();
-                }
-            }
+            notifyWaiters(waiters);
 
             bool exit_loop = false;
+            bool had_ready_active_streams = false;
+            bool had_pending_spawns = false;
             while (!exit_loop) {
+                if (m_active_conn_mode && !m_conn.isClient()) {
+                    auto frame_views_result = detail::parseBufferedFrameViewBatch(
+                        m_conn.ringBuffer(),
+                        m_conn.peerSettings().max_frame_size,
+                        std::numeric_limits<size_t>::max());
+                    if (!frame_views_result) {
+                        if (m_conn.isClosing() || m_conn.isPeerClosed()) {
+                            HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [{}] [{}]",
+                                          m_conn.isPeerClosed() ? "peer-closed" : "closing",
+                                          m_conn.lastReadError());
+                            exit_loop = true;
+                            break;
+                        }
+                        if (frame_views_result.error() == Http2ErrorCode::NoError) {
+                            break;
+                        }
+                        if (m_conn.lastReadError().empty()) {
+                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
+                                           http2ErrorCodeToString(frame_views_result.error()));
+                        } else {
+                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
+                                           http2ErrorCodeToString(frame_views_result.error()),
+                                           m_conn.lastReadError());
+                        }
+                        enqueueGoaway(frame_views_result.error());
+                        exit_loop = true;
+                        break;
+                    }
+                    if (frame_views_result->empty()) {
+                        break;
+                    }
+
+                    auto& frame_views = *frame_views_result;
+                    for (auto& frame_view : frame_views) {
+                        const uint32_t stream_id = frame_view.streamId();
+                        m_last_frame_recv_at = std::chrono::steady_clock::now();
+
+                        HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv-raw] [type={}] [stream={}] [flags=0x{:02x}]",
+                                       http2FrameTypeToString(frame_view.header.type),
+                                       stream_id,
+                                       frame_view.header.flags);
+
+                        if (m_conn.isExpectingContinuation()) {
+                            if (!frame_view.isContinuation() ||
+                                stream_id != m_conn.continuationStreamId()) {
+                                enqueueGoaway(Http2ErrorCode::ProtocolError);
+                                exit_loop = true;
+                                break;
+                            }
+                        }
+
+                        if (frame_view.isConnectionFrame()) {
+                            auto frame = materializeFrameView(frame_view);
+                            if (!frame) {
+                                enqueueGoaway(frame.error());
+                                exit_loop = true;
+                                break;
+                            }
+                            handleConnectionFrame(std::move(*frame));
+                            continue;
+                        }
+
+                        if (tryDispatchServerActiveFrameView(std::move(frame_view))) {
+                            continue;
+                        }
+
+                        auto frame = materializeFrameView(frame_view);
+                        if (!frame) {
+                            enqueueGoaway(frame.error());
+                            exit_loop = true;
+                            break;
+                        }
+                        dispatchStreamFrame(std::move(*frame));
+                    }
+
+                    had_ready_active_streams = had_ready_active_streams || !m_active_batch.empty();
+                    processPendingActions();
+                    flushActiveStreams();
+                    if (exit_loop) {
+                        break;
+                    }
+                    continue;
+                }
+
                 auto frames_result = detail::parseBufferedFrameBatch(
                     m_conn.ringBuffer(),
                     m_conn.peerSettings().max_frame_size,
@@ -970,9 +1137,12 @@ private:
                     dispatchStreamFrame(std::move(frame));
                 }
 
+                had_ready_active_streams =
+                    had_ready_active_streams || (m_active_conn_mode && !m_active_batch.empty());
                 processPendingActions();
                 flushActiveStreams();
 
+                had_pending_spawns = had_pending_spawns || !m_pending_spawns.empty();
                 while (!m_pending_spawns.empty()) {
                     auto stream = m_pending_spawns.top();
                     m_pending_spawns.pop();
@@ -989,6 +1159,45 @@ private:
                 continue;
             }
 
+            const bool hot_wait_outgoing =
+                shouldHotWaitForOutgoing(had_ready_active_streams, had_pending_spawns);
+            if (hot_wait_outgoing) {
+                auto hot_batch_result = co_await m_send_channel.recvBatch(kSslIoOwnerBatchSize)
+                    .timeout(kSslIoOwnerHotWaitInterval);
+                if (hot_batch_result) {
+                    outgoing_batch.clear();
+                    waiters.clear();
+                    has_shutdown = false;
+
+                    for (auto& item : *hot_batch_result) {
+                        collectOutgoingFrame(std::move(item), outgoing_batch, waiters, has_shutdown);
+                        if (has_shutdown) {
+                            break;
+                        }
+                    }
+                    drainOutgoingChannel(outgoing_batch, waiters, has_shutdown);
+
+                    if (!outgoing_batch.empty()) {
+                        if (!co_await sendSslOutgoingBatch(outgoing_batch, waiters, coalesced_buffer)) {
+                            co_return;
+                        }
+                    }
+                    notifyWaiters(waiters);
+                    if (has_shutdown) {
+                        break;
+                    }
+                    continue;
+                }
+                if (hot_batch_result.error().code() != kTimeout) {
+                    HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [channel-fail] [{}]",
+                                   hot_batch_result.error().message());
+                    break;
+                }
+                if (!m_send_channel.empty()) {
+                    continue;
+                }
+            }
+
             char* recv_buffer = nullptr;
             size_t recv_length = 0;
             auto write_iovecs = borrowWriteIovecs(m_conn.ringBuffer());
@@ -999,8 +1208,16 @@ private:
                 break;
             }
 
-            auto recv_result = co_await m_conn.socket().recv(recv_buffer, recv_length)
-                .timeout(kSslIoOwnerPollInterval);
+            bool has_ssl_pending_plaintext = false;
+            if constexpr (requires(SocketType& socket) { socket.engine(); }) {
+                auto* engine = m_conn.socket().engine();
+                has_ssl_pending_plaintext = engine != nullptr && engine->pending() > 0;
+            }
+
+            auto recv_result = has_ssl_pending_plaintext
+                ? (co_await m_conn.socket().recv(recv_buffer, recv_length))
+                : (co_await m_conn.socket().recv(recv_buffer, recv_length)
+                    .timeout(sslIoOwnerPollInterval(hot_wait_outgoing)));
             if (!recv_result) {
                 const auto& error = recv_result.error();
 #ifdef GALAY_HTTP_SSL_ENABLED
@@ -1078,10 +1295,7 @@ private:
 
             auto now = std::chrono::steady_clock::now();
 
-            const auto settings_timeout = m_conn.runtimeConfig().settings_ack_timeout;
-            if (settings_timeout.count() > 0 &&
-                m_conn.isSettingsAckPending() &&
-                now - m_conn.settingsSentAt() > settings_timeout) {
+            if (shouldEnforceSettingsAckTimeout(now)) {
                 HTTP_LOG_WARN("[stream-mgr] [settings-timeout] [ack-missing]");
                 enqueueGoaway(Http2ErrorCode::SettingsTimeout, "SETTINGS ACK timeout");
                 m_conn.initiateClose();
@@ -1926,12 +2140,8 @@ private:
 
     Http2Stream::ptr createStreamInternal(uint32_t stream_id) {
         Http2Stream::ptr stream;
-        if constexpr (!is_ssl_socket_v<SocketType>) {
-            if (m_active_conn_mode && !m_conn.isClient()) {
-                stream = m_conn.createStream(stream_id, m_stream_pool.acquire(stream_id));
-            } else {
-                stream = m_conn.createStream(stream_id);
-            }
+        if (m_active_conn_mode && !m_conn.isClient()) {
+            stream = m_conn.createStream(stream_id, m_stream_pool.acquire(stream_id));
         } else {
             stream = m_conn.createStream(stream_id);
         }

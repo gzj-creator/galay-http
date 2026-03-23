@@ -17,7 +17,7 @@ using namespace galay::kernel;
 #if defined(__GNUC__) && !defined(__clang__)
 __attribute__((noinline))
 #endif
-Task<void> sendEchoRequest(const std::string& url, const std::string& message) {
+Task<bool> sendEchoRequest(const std::string& url, const std::string& message) {
     std::cout << "Connecting to " << url << "...\n";
 
     // 创建 HttpClient 并连接
@@ -25,7 +25,7 @@ Task<void> sendEchoRequest(const std::string& url, const std::string& message) {
     auto connect_result = co_await client.connect(url);
     if (!connect_result) {
         std::cerr << "Failed to connect to server: " << connect_result.error().message() << "\n";
-        co_return;
+        co_return false;
     }
 
     std::cout << "Connected to server successfully\n";
@@ -42,13 +42,13 @@ Task<void> sendEchoRequest(const std::string& url, const std::string& message) {
     auto result = co_await session.post(request_path, message, "text/plain", headers);
     if (!result) {
         std::cerr << "Failed to send/receive: " << result.error().message() << "\n";
-        co_return;
+        co_return false;
     }
 
     auto response_opt = result.value();
     if (!response_opt.has_value()) {
         std::cerr << "Request incomplete\n";
-        co_return;
+        co_return false;
     }
 
     auto& response = response_opt.value();
@@ -62,7 +62,7 @@ Task<void> sendEchoRequest(const std::string& url, const std::string& message) {
     // GCC13 协程在复杂析构路径上可能触发 ICE，这里依赖析构关闭连接。
     std::cout << "Connection closed\n";
 
-    co_return;
+    co_return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -86,17 +86,21 @@ int main(int argc, char* argv[]) {
 
     try {
         // 创建 Runtime
-        Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(1).build();
+        Runtime runtime = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
         runtime.start();
 
         std::cout << "Runtime started\n";
 
         auto join = runtime.spawn(sendEchoRequest(url, message));
-        join.join();
+        bool ok = join.join();
 
         // 停止 Runtime
         runtime.stop();
         std::cout << "Runtime stopped\n";
+
+        if (!ok) {
+            return 1;
+        }
 
     } catch (const std::exception& e) {
         std::cerr << "Client error: " << e.what() << "\n";

@@ -1199,25 +1199,29 @@ public:
     void adjustConnSendWindow(int32_t delta) { m_conn_send_window += delta; }
     void adjustConnRecvWindow(int32_t delta) { m_conn_recv_window += delta; }
     Http2FlowControlUpdate evaluateRecvWindowUpdate(int32_t stream_recv_window, size_t data_size) const {
-        uint32_t target = m_runtime_config.flow_control_target_window == 0
+        uint32_t conn_target = m_runtime_config.flow_control_target_window == 0
             ? m_local_settings.initial_window_size
             : m_runtime_config.flow_control_target_window;
-        if (target == 0) {
-            target = kDefaultInitialWindowSize;
+        if (conn_target == 0) {
+            conn_target = kDefaultInitialWindowSize;
         }
+        uint32_t stream_target = m_local_settings.initial_window_size == 0
+            ? kDefaultInitialWindowSize
+            : m_local_settings.initial_window_size;
 
         if (m_runtime_config.flow_control_strategy) {
             return m_runtime_config.flow_control_strategy(
-                m_conn_recv_window, stream_recv_window, target, data_size);
+                m_conn_recv_window, stream_recv_window, conn_target, data_size);
         }
 
         Http2FlowControlUpdate update;
-        const int32_t low_watermark = static_cast<int32_t>(target / 2);
-        if (m_conn_recv_window < low_watermark) {
-            update.conn_increment = static_cast<uint32_t>(target - m_conn_recv_window);
+        const int32_t conn_low_watermark = static_cast<int32_t>((conn_target * 3) / 4);
+        const int32_t stream_low_watermark = static_cast<int32_t>((stream_target * 3) / 4);
+        if (m_conn_recv_window < conn_low_watermark) {
+            update.conn_increment = static_cast<uint32_t>(conn_target - m_conn_recv_window);
         }
-        if (stream_recv_window < low_watermark) {
-            update.stream_increment = static_cast<uint32_t>(target - stream_recv_window);
+        if (stream_recv_window < stream_low_watermark) {
+            update.stream_increment = static_cast<uint32_t>(stream_target - stream_recv_window);
         }
         return update;
     }

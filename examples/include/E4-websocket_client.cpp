@@ -17,7 +17,7 @@ using namespace galay::kernel;
 /**
  * @brief WebSocket 客户端协程
  */
-Task<void> runWebSocketClient(const std::string& url) {
+Task<bool> runWebSocketClient(const std::string& url) {
     HTTP_LOG_INFO("Connecting to {}", url);
 
     // 1. 创建 WsClient
@@ -27,7 +27,7 @@ Task<void> runWebSocketClient(const std::string& url) {
     auto connect_result = co_await client.connect(url);
     if (!connect_result) {
         HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
-        co_return;
+        co_return false;
     }
     HTTP_LOG_INFO("TCP connection established");
 
@@ -43,11 +43,11 @@ Task<void> runWebSocketClient(const std::string& url) {
     auto result = co_await upgrader();
     if (!result) {
         HTTP_LOG_ERROR("Upgrade failed: {}", result.error().message());
-        co_return;
+        co_return false;
     }
     if (!result.value()) {
         HTTP_LOG_ERROR("Upgrade failed: incomplete result");
-        co_return;
+        co_return false;
     }
     HTTP_LOG_INFO("WebSocket upgrade successful");
 
@@ -65,13 +65,14 @@ Task<void> runWebSocketClient(const std::string& url) {
         if (!result) {
             HTTP_LOG_ERROR("Failed to receive welcome message: {}", result.error().message());
             co_await client.close();
-            co_return;
+            co_return false;
         }
         if (result.value()) {
             break;  // 消息接收完成
         }
     }
     HTTP_LOG_INFO("Received welcome message: {}", welcome_message);
+    std::cout << "Received welcome message: " << welcome_message << "\n";
 
     // 7. 发送测试消息
     std::vector<std::string> test_messages = {
@@ -89,7 +90,7 @@ Task<void> runWebSocketClient(const std::string& url) {
             if (!send_result) {
                 HTTP_LOG_ERROR("Failed to send message: {}", send_result.error().message());
                 co_await client.close();
-                co_return;
+                co_return false;
             }
             if (send_result.value()) {
                 break;
@@ -106,11 +107,11 @@ Task<void> runWebSocketClient(const std::string& url) {
                 if (result.error().code() == kWsConnectionClosed) {
                     HTTP_LOG_INFO("WebSocket connection closed by server");
                     co_await client.close();
-                    co_return;
+                    co_return false;
                 }
                 HTTP_LOG_ERROR("Failed to read message: {}", result.error().message());
                 co_await client.close();
-                co_return;
+                co_return false;
             }
 
             if (!result.value()) {
@@ -125,7 +126,7 @@ Task<void> runWebSocketClient(const std::string& url) {
                     if (!pong_result) {
                         HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
                         co_await client.close();
-                        co_return;
+                        co_return false;
                     }
                     if (pong_result.value()) {
                         break;
@@ -146,7 +147,7 @@ Task<void> runWebSocketClient(const std::string& url) {
                     }
                 }
                 co_await client.close();
-                co_return;
+                co_return false;
             }
             else if (echo_opcode == WsOpcode::Text || echo_opcode == WsOpcode::Binary) {
                 break;  // 收到数据消息
@@ -154,6 +155,7 @@ Task<void> runWebSocketClient(const std::string& url) {
         }
 
         HTTP_LOG_INFO("Received echo: {}", echo_message);
+        std::cout << "Received echo: " << echo_message << "\n";
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
 
@@ -163,7 +165,8 @@ Task<void> runWebSocketClient(const std::string& url) {
         auto ping_result = co_await writer.sendPing("ping");
         if (!ping_result) {
             HTTP_LOG_ERROR("Failed to send Ping: {}", ping_result.error().message());
-            break;
+            co_await client.close();
+            co_return false;
         }
         if (ping_result.value()) {
             HTTP_LOG_INFO("Ping sent successfully");
@@ -178,13 +181,15 @@ Task<void> runWebSocketClient(const std::string& url) {
         auto result = co_await reader.getMessage(pong_message, pong_opcode);
         if (!result) {
             HTTP_LOG_ERROR("Failed to receive Pong: {}", result.error().message());
-            break;
+            co_await client.close();
+            co_return false;
         }
         if (!result.value()) {
             continue;
         }
         if (pong_opcode == WsOpcode::Pong) {
             HTTP_LOG_INFO("Received Pong response");
+            std::cout << "Received Pong response\n";
             break;
         }
     }
@@ -199,7 +204,8 @@ Task<void> runWebSocketClient(const std::string& url) {
     }
     co_await client.close();
     HTTP_LOG_INFO("WebSocket client finished");
-    co_return;
+    std::cout << "WebSocket client finished\n";
+    co_return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -224,11 +230,15 @@ int main(int argc, char* argv[]) {
         HTTP_LOG_INFO("Runtime started");
 
         auto join = runtime.spawn(runWebSocketClient(url));
-        join.join();
+        bool ok = join.join();
 
         // 停止 Runtime
         runtime.stop();
         HTTP_LOG_INFO("Runtime stopped");
+
+        if (!ok) {
+            return 1;
+        }
 
     } catch (const std::exception& e) {
         HTTP_LOG_ERROR("Client error: {}", e.what());

@@ -87,23 +87,41 @@ struct Http2OutgoingFrame {
         return !segmented_packet && !frame && serialized.empty();
     }
 
-    std::string flatten() const {
+    size_t serializedSize() const {
         if (segmented_packet) {
-            std::string bytes;
-            bytes.reserve(header_bytes.size() + payloadSize());
+            return header_bytes.size() + payloadSize();
+        }
+        if (!serialized.empty()) {
+            return serialized.size();
+        }
+        if (frame) {
+            return kHttp2FrameHeaderLength + frame->header().length;
+        }
+        return 0;
+    }
+
+    void appendTo(std::string& bytes) const {
+        if (segmented_packet) {
             bytes.append(header_bytes.data(), header_bytes.size());
             if (const char* payload = payloadData(); payload != nullptr) {
                 bytes.append(payload, payloadSize());
             }
-            return bytes;
+            return;
         }
         if (!serialized.empty()) {
-            return serialized;
+            bytes.append(serialized);
+            return;
         }
         if (frame) {
-            return frame->serialize();
+            bytes.append(frame->serialize());
         }
-        return {};
+    }
+
+    std::string flatten() const {
+        std::string bytes;
+        bytes.reserve(serializedSize());
+        appendTo(bytes);
+        return bytes;
     }
 
     size_t exportIovecs(std::array<struct iovec, 2>& iovecs) const {

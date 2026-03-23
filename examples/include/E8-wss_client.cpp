@@ -20,7 +20,7 @@ using namespace galay::kernel;
 /**
  * @brief WSS 客户端协程
  */
-Task<void> wssClientCoroutine(const std::string& url, int message_count) {
+Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
     try {
         constexpr auto kOpTimeout = std::chrono::milliseconds(3000);
 
@@ -33,7 +33,7 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
             HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
-            co_return;
+            co_return false;
         }
         HTTP_LOG_INFO("[connect] [ok]");
 
@@ -42,7 +42,7 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
         if (!handshake_result) {
             HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
             co_await client.close();
-            co_return;
+            co_return false;
         }
         HTTP_LOG_INFO("[ssl] [handshake-ok]");
 
@@ -53,12 +53,12 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
         if (!upgrade_result) {
             HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error().message());
             co_await client.close();
-            co_return;
+            co_return false;
         }
         if (!upgrade_result.value()) {
             HTTP_LOG_ERROR("[ws] [upgrade] [incomplete]");
             co_await client.close();
-            co_return;
+            co_return false;
         }
         HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
@@ -70,13 +70,14 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
             if (!recv_result) {
                 HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", recv_result.error().message());
                 co_await client.close();
-                co_return;
+                co_return false;
             }
             if (recv_result.value()) {
                 break;
             }
         }
         HTTP_LOG_INFO("[ws] [recv] [msg={}]", welcome_msg);
+        std::cout << "Received welcome message: " << welcome_msg << "\n";
 
         // 6. 发送和接收消息
         for (int i = 0; i < message_count; i++) {
@@ -88,7 +89,7 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
                 if (!send_result) {
                     HTTP_LOG_ERROR("[ws] [send-fail] [{}]", send_result.error().message());
                     co_await client.close();
-                    co_return;
+                    co_return false;
                 }
                 if (send_result.value()) {
                     break;
@@ -104,13 +105,14 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
                 if (!recv_result) {
                     HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", recv_result.error().message());
                     co_await client.close();
-                    co_return;
+                    co_return false;
                 }
                 if (recv_result.value()) {
                     break;
                 }
             }
             HTTP_LOG_INFO("[ws] [recv] [msg={}]", echo_msg);
+            std::cout << "Received echo: " << echo_msg << "\n";
         }
 
         // 7. 发送关闭帧
@@ -128,12 +130,13 @@ Task<void> wssClientCoroutine(const std::string& url, int message_count) {
 
         co_await client.close();
         HTTP_LOG_INFO("[ws] [conn] [closed]");
+        std::cout << "WSS client finished\n";
+        co_return true;
 
     } catch (const std::exception& e) {
         HTTP_LOG_ERROR("[exception] [{}]", e.what());
+        co_return false;
     }
-
-    co_return;
 }
 
 int main(int argc, char* argv[]) {
@@ -155,9 +158,13 @@ int main(int argc, char* argv[]) {
         runtime.start();
 
         auto join = runtime.spawn(wssClientCoroutine(url, message_count));
-        join.join();
+        bool ok = join.join();
         runtime.stop();
         std::cout << "Done.\n";
+
+        if (!ok) {
+            return 1;
+        }
 
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
