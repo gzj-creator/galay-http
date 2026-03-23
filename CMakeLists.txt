@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 1.0.0 LANGUAGES CXX)
+project(galay-http VERSION 2.0.0 LANGUAGES CXX)
 
 list(APPEND CMAKE_PREFIX_PATH "/usr/local")
 

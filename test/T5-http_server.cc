@@ -189,7 +189,7 @@ Task<void> handleRequest(HttpConn conn) {
             content_type = "application/json";
             body = R"({
     "server": "galay-http",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "status": "running",
     "timestamp": ")" + std::to_string(std::time(nullptr)) + R"("
 })";
