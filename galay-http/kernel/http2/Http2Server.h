@@ -365,7 +365,10 @@ private:
             }
 
             // Handle connection on the same scheduler
-            scheduleTask(scheduler, handleConnection(std::move(client_socket)));
+            if (!scheduleTask(scheduler, handleConnection(std::move(client_socket)))) {
+                HTTP_LOG_ERROR("[h2] [schedule-fail] [handle-connection]");
+                co_await client_socket.close();
+            }
         }
 
         co_return;
@@ -756,6 +759,18 @@ public:
     }
 
 private:
+    static constexpr uint64_t kLowLatencyIoTimerTickNs = 1000000ULL;
+
+    void configureLowLatencyIoTimers() {
+        for (size_t i = 0; i < m_runtime.getIOSchedulerCount(); ++i) {
+            auto* scheduler = m_runtime.getIOScheduler(i);
+            if (scheduler) {
+                scheduler->replaceTimerManager(
+                    galay::kernel::TimingWheelTimerManager(kLowLatencyIoTimerTickNs));
+            }
+        }
+    }
+
     static int selectH2AlpnCallback(SSL*,
                                     const unsigned char** out,
                                     unsigned char* outlen,
@@ -803,6 +818,7 @@ private:
         }
 
         m_runtime.start();
+        configureLowLatencyIoTimers();
         m_running.store(true);
         HTTP_LOG_INFO("[server] [listen] [h2] [{}:{}]", m_config.host, m_config.port);
 
@@ -918,8 +934,19 @@ private:
                 HTTP_LOG_ERROR("[socket] [nonblock-fail] [h2] [{}]", nonblock_result.error().message());
                 continue;
             }
+            auto nodelay_result = client_socket.option().handleTcpNoDelay();
+            if (!nodelay_result) {
+                HTTP_LOG_WARN("[socket] [nodelay-fail] [h2] [{}]", nodelay_result.error().message());
+            }
 
-            scheduleTask(scheduler, handleConnection(std::move(client_socket)));
+            auto* target_scheduler = m_runtime.getNextIOScheduler();
+            if (target_scheduler == nullptr) {
+                target_scheduler = scheduler;
+            }
+            if (!scheduleTask(target_scheduler, handleConnection(std::move(client_socket)))) {
+                HTTP_LOG_ERROR("[h2] [schedule-fail] [handle-connection]");
+                co_await client_socket.close();
+            }
         }
 
         co_return;

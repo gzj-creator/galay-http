@@ -524,8 +524,20 @@ protected:
                 continue;
             }
 
-            // 在当前调度器上执行 SSL 握手和处理
-            scheduleTask(scheduler, handleSslConnection(std::move(client_socket)));
+            auto nodelay_result = client_socket.option().handleTcpNoDelay();
+            if (!nodelay_result) {
+                HTTP_LOG_WARN("[socket] [nodelay-fail] [https] [{}]", nodelay_result.error().message());
+            }
+
+            auto* target_scheduler = m_runtime.getNextIOScheduler();
+            if (target_scheduler == nullptr) {
+                target_scheduler = scheduler;
+            }
+
+            if (!scheduleTask(target_scheduler, handleSslConnection(std::move(client_socket)))) {
+                HTTP_LOG_ERROR("[https] [schedule-fail] [handle-ssl-connection]");
+                co_await client_socket.close();
+            }
         }
 
         co_return;

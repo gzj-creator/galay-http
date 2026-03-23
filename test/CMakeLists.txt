@@ -1,10 +1,9 @@
 project(test)
 
 find_package(spdlog REQUIRED)
-find_package(galay-kernel REQUIRED)
+find_package(galay-kernel 3.4.1 REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/galay-http)
-include_directories(/usr/local/include)
 
 # Automatically collect all .cc files in the test directory
 file(GLOB TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
@@ -25,7 +24,6 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
     target_include_directories(${TEST_NAME} PRIVATE
         ${CMAKE_SOURCE_DIR}/galay-http
-        /usr/local/include
     )
     target_compile_definitions(${TEST_NAME} PRIVATE USE_LOG)
     set_target_properties(${TEST_NAME} PROPERTIES

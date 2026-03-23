@@ -19,7 +19,7 @@ file(GLOB_RECURSE HTTP2_SOURCES
 set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES} ${HTTP2_SOURCES})
 
 find_package(spdlog REQUIRED)
-find_package(galay-kernel REQUIRED)
+find_package(galay-kernel 3.4.1 REQUIRED)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")

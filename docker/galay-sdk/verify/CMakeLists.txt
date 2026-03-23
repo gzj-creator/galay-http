@@ -15,7 +15,7 @@ set(GalayMongo_DIR "/usr/local/lib/cmake/galay-mongo")
 set(GalayEtcd_DIR "/usr/local/lib/cmake/galay-etcd")
 
 find_package(galay-utils REQUIRED CONFIG)
-find_package(galay-kernel REQUIRED CONFIG)
+find_package(galay-kernel 3.4.1 REQUIRED CONFIG)
 find_package(galay-ssl REQUIRED CONFIG)
 find_package(GalayHttp REQUIRED CONFIG)
 find_package(galay-rpc REQUIRED CONFIG)

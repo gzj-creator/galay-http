@@ -1,10 +1,9 @@
 project(benchmark)
 
 find_package(spdlog REQUIRED)
-find_package(galay-kernel REQUIRED)
+find_package(galay-kernel 3.4.1 REQUIRED)
 
 include_directories(${CMAKE_SOURCE_DIR}/galay-http)
-include_directories(/usr/local/include)
 
 # Automatically collect all .cc files in the benchmark directory
 file(GLOB BENCHMARK_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
@@ -25,7 +24,6 @@ foreach(BENCHMARK_SOURCE ${BENCHMARK_SOURCES})
     endif()
     target_include_directories(${BENCHMARK_NAME} PRIVATE
         ${CMAKE_SOURCE_DIR}/galay-http
-        /usr/local/include
     )
     set_target_properties(${BENCHMARK_NAME} PROPERTIES
         CXX_STANDARD 23

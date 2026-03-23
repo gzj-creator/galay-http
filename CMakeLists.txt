@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 project(galay-http VERSION 1.0.0 LANGUAGES CXX)
 
-set(CMAKE_PREFIX_PATH "/usr/local")
+list(APPEND CMAKE_PREFIX_PATH "/usr/local")
 
 # 选项（与 galay-rpc 风格保持一致）
 option(BUILD_TESTS "Build test programs" ON)
@@ -41,6 +41,13 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+# 先锁定 galay-kernel，避免 galay-ssl 的 find_dependency() 抢先注入旧的导入目标。
+find_package(galay-kernel 3.4.1 REQUIRED)
+
+if(NOT TARGET galay-kernel::galay-kernel)
+    message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
+endif()
 
 # 包含编译选项（SSL 支持等）
 include(cmake/options.cmake)
