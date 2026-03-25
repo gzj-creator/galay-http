@@ -30,7 +30,6 @@
   - `galay-http/protoc/http/HttpChunk.h`
   - `galay-http/protoc/http/HttpError.h`
   - `galay-http/protoc/http/HttpHeader.h`
-  - `galay-http/protoc/http/HttpLookupTable.h`
   - `galay-http/protoc/http/HttpParseUtils.h`
   - `galay-http/protoc/http/HttpRequest.h`
   - `galay-http/protoc/http/HttpResponse.h`
@@ -41,11 +40,9 @@
   - `galay-http/kernel/http/HttpReaderSetting.h`
   - `galay-http/kernel/http/HttpWriterSetting.h`
   - `galay-http/kernel/http/HttpRouter.h`
-  - `galay-http/kernel/http/HttpRouterSIMD.h`
   - `galay-http/kernel/http/FileDescriptor.h`
   - `galay-http/kernel/http/HttpRange.h`
   - `galay-http/kernel/http/HttpETag.h`
-  - `galay-http/kernel/http/PathSecurity.h`
   - `galay-http/kernel/http/StaticFileConfig.h`
 - WebSocket：
   - `galay-http/protoc/websocket/WebSocketBase.h`
@@ -74,7 +71,6 @@
   - `galay-http/utils/HttpLogger.h`
   - `galay-http/utils/HttpUtils.h`
   - `galay-http/kernel/IoVecUtils.h`
-  - `galay-http/kernel/SslRecvCompatAwaitable.h`
   - `galay-http/module/ModulePrelude.hpp`
   - `galay-http/module/galay.http.cppm`
   - `galay-http/module/galay.http2.cppm`
@@ -823,7 +819,7 @@ std::string http2ErrorCodeToString(Http2ErrorCode code);
 - HTTP/1.x：`galay-http/protoc/http/HttpError.h`、`HttpParseUtils.h`、`HttpHeader.h`
 - HTTP/2：`galay-http/protoc/http2/Http2Error.h`、`Http2Frame.h`、`Http2Hpack.h`
 - WebSocket：`galay-http/protoc/websocket/WebSocketError.h`、`WebSocketFrame.h`
-- 静态文件与安全边界：`PathSecurity.h`、`HttpRange.h`、`HttpETag.h`、`StaticFileConfig.h`
+- 静态文件与安全边界：`HttpRange.h`、`HttpETag.h`、`StaticFileConfig.h`
 - 请求/响应快速构造：`galay-http/utils/Http1_1RequestBuilder.h`、`Http1_1ResponseBuilder.h`
 
 这些头文件属于公开面，但不在主工作流里逐一展开。它们是回答协议级细节问题时的 canonical source。
@@ -835,4 +831,4 @@ std::string http2ErrorCodeToString(Http2ErrorCode code);
 - h2c 客户端示例：`examples/include/E10-h2c_echo_client.cpp`
 - h2 客户端示例：`examples/include/E14-h2_echo_client.cpp`
 - HTTPS 测试：`test/T21-https_server.cc`、`test/T22-https_client.cc`
-- h2 测试：`test/T27-h2_server.cc`、`test/T28-h2_client.cc`
+- h2 测试：`test/T28-h2_server.cc`、`test/T29-h2_client.cc`
