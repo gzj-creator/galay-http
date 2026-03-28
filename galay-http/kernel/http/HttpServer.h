@@ -41,6 +41,10 @@ using HttpConnHandlerImpl = std::function<Task<void>(HttpConnImpl<SocketType>)>;
 
 /**
  * @brief HTTP服务器配置
+ * @details
+ * - `host` / `port` / `backlog` 控制监听 socket
+ * - `io_scheduler_count` 与 `compute_scheduler_count` 交由 `RuntimeBuilder` 创建调度器
+ * - `affinity` 只描述调度器绑核策略，不会改变业务 handler 的语义
  */
 struct HttpServerConfig
 {
@@ -52,6 +56,10 @@ struct HttpServerConfig
     RuntimeAffinityConfig affinity;
 };
 
+/**
+ * @brief HTTP 服务器 builder
+ * @details builder 不持有线程或监听 socket；真正的 runtime 和监听资源在 `build()` 后的服务器实例中创建。
+ */
 class HttpServerBuilder {
 public:
     HttpServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
@@ -83,6 +91,19 @@ private:
 
 /**
  * @brief HTTP服务器模板类
+ * @details
+ * 典型调用方式有两种：
+ * - `start(ConnHandler)`：调用方完全接管单连接处理逻辑
+ * - `start(HttpRouter&&)`：由框架驱动请求读取、Keep-Alive 循环与路由分发
+ *
+ * 生命周期与线程说明：
+ * - 服务器独占持有内部 `Runtime`
+ * - `start()` 成功后会启动 runtime，并在每个 IO 调度器上创建监听/accept 循环
+ * - `stop()` 可重复调用；第一次调用会关闭 listener 并停止 runtime
+ *
+ * 处理器约束：
+ * - 传入的 `ConnHandler` / 路由 handler 必须在协程结束前完成连接相关资源的合法使用
+ * - 对 `start(HttpRouter&&)` 路径，框架会在循环结束后统一关闭 `HttpConn`
  */
 template<typename SocketType>
 class HttpServerImpl
@@ -109,11 +130,27 @@ public:
     HttpServerImpl(const HttpServerImpl&) = delete;
     HttpServerImpl& operator=(const HttpServerImpl&) = delete;
 
+    /**
+     * @brief 以自定义连接处理器启动服务器
+     * @param handler 每个新连接都会被包装成 `Task<void>` 并交给该处理器
+     * @note handler 必须可安全复制或移动到服务器内部，且不应捕获悬空引用
+     */
     void start(ConnHandler handler) {
         m_handler = handler;
         startInternal();
     }
 
+    /**
+     * @brief 以路由模式启动服务器
+     * @param router 将被移动到服务器内部保存的路由表
+     * @details 框架会负责：
+     * - 持续读取 HTTP 请求
+     * - 处理 Keep-Alive / Connection: close
+     * - 进行路由匹配和缺省 404 响应
+     * - 在循环结束后关闭连接
+     *
+     * 该模式当前仅支持明文 `TcpSocket` 路由处理；HTTPS 仍应通过显式 handler 控制读写流程。
+     */
     void start(HttpRouter&& router) {
         m_router = std::move(router);
 
@@ -202,6 +239,10 @@ public:
         startInternal();
     }
 
+    /**
+     * @brief 停止服务器并关闭内部 runtime
+     * @details 该函数幂等；当服务器未运行时直接返回。
+     */
     void stop() {
         if (!m_running.load()) {
             return;
@@ -371,6 +412,10 @@ inline HttpServer HttpServerBuilder::build() const { return HttpServer(m_config)
 #ifdef GALAY_HTTP_SSL_ENABLED
 /**
  * @brief HTTPS 服务器配置
+ * @details
+ * - `cert_path` / `key_path` 是 TLS 服务端证书与私钥
+ * - `ca_path`、`verify_peer`、`verify_depth` 用于双向 TLS 或客户端证书校验
+ * - `reader_setting` / `writer_setting` 仅在 TLS 连接路径上生效
  */
 struct HttpsServerConfig
 {
@@ -391,6 +436,10 @@ struct HttpsServerConfig
 
 class HttpsServer;
 
+/**
+ * @brief HTTPS 服务器 builder
+ * @details 除监听配置外，还负责收集 TLS 上下文初始化所需的证书与验证策略。
+ */
 class HttpsServerBuilder {
 public:
     HttpsServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
@@ -429,6 +478,9 @@ using HttpsConnHandler = HttpConnHandlerImpl<galay::ssl::SslSocket>;
 
 /**
  * @brief HTTPS服务器类
+ * @details
+ * 该类在 `startInternal()` 中初始化 TLS 上下文，然后复用 `HttpServerImpl` 的 runtime、
+ * accept 循环与连接分发逻辑。证书加载失败或 TLS 上下文不可用时，启动会失败并返回 false。
  */
 class HttpsServer : public HttpServerImpl<galay::ssl::SslSocket>
 {

@@ -2,10 +2,11 @@
 
 include(CMakeFindDependencyMacro)
 
-find_dependency(galay-kernel REQUIRED)
+find_dependency(galay-utils REQUIRED CONFIG)
+find_dependency(galay-kernel 3.4.1 REQUIRED CONFIG)
 
 if(@GALAY_HTTP_ENABLE_SSL@)
-    find_dependency(galay-ssl REQUIRED)
+    find_dependency(galay-ssl REQUIRED CONFIG)
 endif()
 
 # 包含导出的目标文件

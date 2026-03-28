@@ -19,10 +19,20 @@ file(GLOB_RECURSE HTTP2_SOURCES
 set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES} ${HTTP2_SOURCES})
 
 find_package(spdlog REQUIRED)
+find_package(galay-utils REQUIRED CONFIG)
 find_package(galay-kernel 3.4.1 REQUIRED)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
+endif()
+
+set(GALAY_HTTP_UTILS_TARGET "")
+if(TARGET galay::galay-utils)
+    set(GALAY_HTTP_UTILS_TARGET galay::galay-utils)
+elseif(TARGET galay-utils::galay-utils)
+    set(GALAY_HTTP_UTILS_TARGET galay-utils::galay-utils)
+else()
+    message(FATAL_ERROR "galay-utils target not found. Expected galay::galay-utils or galay-utils::galay-utils.")
 endif()
 
 add_library(${PROJECT_NAME} SHARED ${SRC_LIST})
@@ -33,6 +43,7 @@ endif()
 
 # 链接 galay-kernel 库
 target_link_libraries(${PROJECT_NAME}
+    PUBLIC ${GALAY_HTTP_UTILS_TARGET}
     PUBLIC galay-kernel::galay-kernel
     PUBLIC pthread
 )
@@ -60,13 +71,12 @@ install(TARGETS ${PROJECT_NAME}
     INCLUDES DESTINATION include
 )
 
-# 安装 galay-http 目录下的头文件
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/
+# 安装源码树中的头文件；模块接口仅在模块 target 可用时由上层 FILE_SET CXX_MODULES 安装。
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/"
     DESTINATION include/galay-http
     FILES_MATCHING
     PATTERN "*.h"
     PATTERN "*.hpp"
-    PATTERN "*.cppm"
     PATTERN "*.inl"
     PATTERN "build" EXCLUDE
     PATTERN "CMakeFiles" EXCLUDE

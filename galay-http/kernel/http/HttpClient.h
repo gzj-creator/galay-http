@@ -71,12 +71,19 @@ class HttpClientImpl;
 
 /**
  * @brief HTTP客户端配置
+ * @details
+ * - `header_mode` 控制 HeaderPair 的大小写/归一化策略。
+ * - 配置会在 `build()` 时复制到客户端对象；后续修改 builder 不影响已构建实例。
  */
 struct HttpClientConfig
 {
     HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
 };
 
+/**
+ * @brief HTTP 客户端 builder
+ * @details builder 本身不持有 socket 或网络资源，只负责收集构造参数。
+ */
 class HttpClientBuilder {
 public:
     HttpClientBuilder& headerMode(HeaderPair::Mode v) { m_config.header_mode = v; return *this; }
@@ -88,6 +95,21 @@ private:
 
 /**
  * @brief HTTP客户端模板类
+ * @details
+ * 典型调用顺序：
+ * 1. `connect(url)`
+ * 2. `getSession()` 或直接访问 `socket()`
+ * 3. 通过 `HttpSessionImpl` 发起请求/读取响应
+ * 4. `close()`，或让底层 socket 在析构路径上释放
+ *
+ * 所有权说明：
+ * - 客户端独占持有一个 `SocketType`
+ * - `getSession()` 返回的 Session 只借用 socket，不转移所有权
+ * - `releaseSocket()` 会把 socket 所有权转移给调用方，适合协议升级场景
+ *
+ * 失败语义：
+ * - URL 非法、协议与客户端类型不匹配、或底层 socket 初始化失败时会抛出 `std::runtime_error`
+ * - 网络连接结果通过返回的 awaitable / IO 结果对象反映
  */
 template<typename SocketType>
 class HttpClientImpl
@@ -112,6 +134,13 @@ public:
     HttpClientImpl(HttpClientImpl&&) noexcept = default;
     HttpClientImpl& operator=(HttpClientImpl&&) noexcept = default;
 
+    /**
+     * @brief 解析 URL 并发起 TCP 连接
+     * @param url 形如 `http://host[:port][/path]` 的目标地址
+     * @return 底层 socket 的 connect awaitable；成功后可通过 `url()` 读取解析结果
+     * @throws std::runtime_error URL 非法、协议与客户端类型不匹配、或 socket 初始化失败
+     * @note 对明文 `HttpClient` 而言只接受 `http://`；若传入 `https://` 请改用 `HttpsClient`
+     */
     auto connect(const std::string& url) {
         auto parsed_url = HttpUrl::parse(url);
         if (!parsed_url) {
@@ -139,7 +168,15 @@ public:
         return m_socket->connect(server_host);
     }
 
-    // 获取Session用于读写操作
+    /**
+     * @brief 创建一个借用当前 socket 的 HTTP session
+     * @param ring_buffer_size Session 内部 RingBuffer 大小
+     * @param reader_setting Reader 行为配置
+     * @param writer_setting Writer 行为配置
+     * @return 以值返回的 Session，对底层 socket 只有借用关系
+     * @throws std::runtime_error 当前客户端尚未成功建立连接
+     * @note 只要 Session 仍在使用，就必须保证客户端对象和内部 socket 继续存活
+     */
     HttpSessionImpl<SocketType> getSession(size_t ring_buffer_size = 8192,
                                             const HttpReaderSetting& reader_setting = HttpReaderSetting(),
                                             const HttpWriterSetting& writer_setting = HttpWriterSetting()) {
@@ -149,6 +186,11 @@ public:
         return HttpSessionImpl<SocketType>(*m_socket, ring_buffer_size, reader_setting, writer_setting);
     }
 
+    /**
+     * @brief 主动关闭底层 socket
+     * @return 底层 socket 的 close awaitable
+     * @note 如果已经通过 `releaseSocket()` 转移所有权，则不应再调用该函数
+     */
     auto close() {
         return m_socket->close();
     }
@@ -156,7 +198,11 @@ public:
     SocketType& socket() { return *m_socket; }
     const HttpUrl& url() const { return m_url; }
 
-    // 释放 socket 的所有权（用于协议升级）
+    /**
+     * @brief 释放底层 socket 的所有权
+     * @return 一个 `unique_ptr<SocketType>`；调用后客户端不再拥有 socket
+     * @details 用于 HTTP -> WebSocket 等协议升级，调用方需负责后续关闭与生命周期管理
+     */
     std::unique_ptr<SocketType> releaseSocket() { return std::move(m_socket); }
 
 protected:
@@ -179,6 +225,10 @@ namespace galay::http {
 
 /**
  * @brief HTTPS 客户端配置
+ * @details
+ * - `ca_path` 为空时不额外加载 CA 文件
+ * - `verify_peer=false` 时不会校验证书链，适合本地自签名测试，不适合生产环境
+ * - `header_mode` 与明文 `HttpClientConfig` 的语义保持一致
  */
 struct HttpsClientConfig
 {
@@ -191,6 +241,10 @@ struct HttpsClientConfig
 
 class HttpsClient;
 
+/**
+ * @brief HTTPS 客户端 builder
+ * @details builder 只负责收集 TLS 与 HTTP 头部策略配置，不直接建立网络连接。
+ */
 class HttpsClientBuilder {
 public:
     HttpsClientBuilder& caPath(std::string v)              { m_config.ca_path = std::move(v); return *this; }
@@ -205,6 +259,15 @@ private:
 
 /**
  * @brief HTTPS 客户端类
+ * @details
+ * 典型调用顺序：
+ * 1. `connect(https_url)`
+ * 2. `handshake()`
+ * 3. `getSession()` 发起 HTTP 请求
+ * 4. `close()` 或由上层协议关闭
+ *
+ * `connect()` 只负责 TCP 连接和 TLS socket 初始化，不会隐式完成 SSL 握手。
+ * 若在握手前直接开始读写，会得到未定义的协议行为或底层错误。
  */
 class HttpsClient : public HttpClientImpl<galay::ssl::SslSocket>
 {
@@ -224,6 +287,13 @@ public:
     HttpsClient(HttpsClient&&) noexcept = default;
     HttpsClient& operator=(HttpsClient&&) noexcept = default;
 
+    /**
+     * @brief 解析 HTTPS URL、初始化 TLS socket 并发起 TCP 连接
+     * @param url 形如 `https://host[:port][/path]` 的目标地址
+     * @return 底层 TLS socket 的 connect awaitable
+     * @throws std::runtime_error URL 非法或 socket 初始化失败
+     * @note 该函数不会自动执行 TLS 握手；成功连接后仍需显式调用 `handshake()`
+     */
     auto connect(const std::string& url) {
         auto parsed_url = HttpUrl::parse(url);
         if (!parsed_url) {
@@ -258,6 +328,8 @@ public:
 
     /**
      * @brief 执行 SSL 握手（协议完成后再唤醒）
+     * @return 底层 TLS socket 的 handshake awaitable
+     * @throws std::runtime_error 当前客户端尚未成功建立 TCP 连接
      */
     auto handshake() {
         if (!m_socket) {
@@ -268,6 +340,7 @@ public:
 
     /**
      * @brief 检查握手是否完成
+     * @return 已完成握手则返回 true；未连接或握手未完成则返回 false
      */
     bool isHandshakeCompleted() const {
         return m_socket && m_socket->isHandshakeCompleted();

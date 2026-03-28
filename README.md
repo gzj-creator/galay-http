@@ -44,12 +44,21 @@
 
 默认选项由根 `CMakeLists.txt` 定义：
 
-- `BUILD_TESTS=ON`
+- `BUILD_TESTING=ON`
 - `BUILD_BENCHMARKS=ON`
 - `BUILD_EXAMPLES=ON`
 - `BUILD_MODULE_EXAMPLES=ON`
 - `GALAY_HTTP_ENABLE_SSL=OFF`
 - `GALAY_HTTP_DISABLE_FRAMEWORK_LOG=OFF`
+
+## 公开头边界
+
+当前安装边界由 `galay-http/CMakeLists.txt` 中的显式清单维护，而不是按目录整树复制：
+
+- 稳定 direct-include 入口：`HttpServer.h`、`HttpClient.h`、`WsClient.h`、`WsSession.h`、`H2cClient.h`、`H2Client.h`、`Http2Server.h` 以及它们对应的协议类型 / builder / stream 头
+- 安装支撑头：`IoVecUtils.h`、`HttpLog.h`、`HttpParseUtils.h`、`.inl` 等为了模板、内联实现或模块预导入仍随安装包分发，但不应默认视为主工作流入口
+
+完整清单见 [02-API参考](docs/02-API参考.md)。
 
 ## 构建命令
 
@@ -59,7 +68,7 @@
 cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_EXAMPLES=ON \
-  -DBUILD_TESTS=ON \
+  -DBUILD_TESTING=ON \
   -DBUILD_BENCHMARKS=ON \
   -DBUILD_MODULE_EXAMPLES=OFF
 cmake --build build --parallel
@@ -74,7 +83,7 @@ cmake -S . -B build-ssl \
   -DCMAKE_BUILD_TYPE=Release \
   -DGALAY_HTTP_ENABLE_SSL=ON \
   -DBUILD_EXAMPLES=ON \
-  -DBUILD_TESTS=ON \
+  -DBUILD_TESTING=ON \
   -DBUILD_BENCHMARKS=ON \
   -DBUILD_MODULE_EXAMPLES=OFF
 cmake --build build-ssl --parallel
@@ -92,14 +101,45 @@ cmake -S . -B build-mod -G Ninja \
 cmake --build build-mod --target galay-http-modules --parallel
 ```
 
+如果你要构建 TLS 相关 import 示例或更完整的模块 smoke consumer，把同样的模块门禁命令中的 `-DGALAY_HTTP_ENABLE_SSL=ON` 打开即可。
+
+当模块门禁全部满足时，仓库还会额外暴露：
+
+- `examples/import/` 下的 import 示例 target
+- `test/T59-module_smoke.cpp` 对应的 `T59-module_smoke`
+
+其中 `examples/import/` 现在和 `examples/include/` 保持 E1~E14 场景对齐；TLS 相关 import target 还要求 `-DGALAY_HTTP_ENABLE_SSL=ON`。
+
 ## 示例与验证入口
 
 ### 真实示例 target
 
-所有示例 target 由 `examples/CMakeLists.txt` 显式定义，源码全部位于 `examples/include/`：
+所有示例 target 由 `examples/CMakeLists.txt` 显式定义，当前分为两棵源码树：
+
+- `examples/include/`：默认 direct-include 示例
+- `examples/import/`：模块门禁满足时启用的 import 示例
+
+include 示例 target：
 
 - 明文：`E1-EchoServer`、`E2-EchoClient`、`E3-WebsocketServer`、`E4-WebsocketClient`、`E9-H2cEchoServer`、`E10-H2cEchoClient`、`E11-StaticServer`、`E12-HttpProxy`
 - TLS：`E5-HttpsServer`、`E6-HttpsClient`、`E7-WssServer`、`E8-WssClient`、`E13-H2EchoServer`、`E14-H2EchoClient`
+
+import 示例 target（仅在 `galay-http-modules` 真实可用时生成）：
+
+- `E1-EchoServerImport`
+- `E2-EchoClientImport`
+- `E3-WebsocketServerImport`
+- `E4-WebsocketClientImport`
+- `E5-HttpsServerImport`
+- `E6-HttpsClientImport`
+- `E7-WssServerImport`
+- `E8-WssClientImport`
+- `E9-H2cEchoServerImport`
+- `E10-H2cEchoClientImport`
+- `E11-StaticServerImport`
+- `E12-HttpProxyImport`
+- `E13-H2EchoServerImport`
+- `E14-H2EchoClientImport`
 
 完整映射、源码路径、运行命令与关联测试见 `docs/04-示例代码.md`。
 
@@ -130,6 +170,17 @@ cmake --build build --target T26-h2c_server T25-h2c_client --parallel 4
 cmake --build build-ssl --target T21-https_server T22-https_client T28-h2_server T29-h2_client --parallel 4
 ```
 
+### 原生验证入口
+
+仓库现在同时支持“单 target 构建”与 `CTest`：
+
+```bash
+ctest -N --test-dir build
+ctest --output-on-failure --test-dir build -R '^T1-http_parser$'
+```
+
+当模块门禁满足时，还会出现 `T59-module_smoke`，用于验证 `import galay.http;` / `import galay.websocket;` / `import galay.http2;` 的真实 consumer 路径；TLS 构建下它还会额外触达 `Https*` / `Wss*` / `H2*` builder。
+
 ### 正确的 benchmark target 名
 
 `benchmark/CMakeLists.txt` 同样直接使用 `benchmark/*.cc` 文件名作为 target：
@@ -144,7 +195,7 @@ cmake --build build-ssl --target B12-H2Server B13-H2Client B14-HttpsServer --par
 ```text
 galay-http/
 ├── galay-http/         # 公开头与库实现
-├── examples/           # 示例源码与示例 CMake target
+├── examples/           # include / import 示例源码与示例 CMake target
 ├── test/               # 测试源码与测试 CMake target
 ├── benchmark/          # benchmark 源码与 benchmark CMake target
 └── docs/               # 主文档

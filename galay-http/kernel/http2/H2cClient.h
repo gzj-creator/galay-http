@@ -75,353 +75,6 @@ private:
 class H2cUpgradeAwaitable;
 
 /**
- * @brief H2c 升级 CustomAwaitable
- * @details IO 任务链：SEND upgrade → RECV 101 → SEND preface+settings → RECV settings → SEND ACK
- */
-class H2cUpgradeAwaitable
-    : public CustomAwaitable
-    , public TimeoutSupport<H2cUpgradeAwaitable>
-{
-public:
-    class ProtocolSendAwaitable : public WritevIOContext
-    {
-    public:
-        ProtocolSendAwaitable(H2cUpgradeAwaitable* owner,
-                              const std::string* payload,
-                              bool finish_upgrade)
-            : WritevIOContext(m_iovec_storage, 0)
-            , m_owner(owner), m_payload(payload), m_finish_upgrade(finish_upgrade)
-            , m_completed(true)
-        {
-            m_write_state.clear();
-            m_write_state.reserve(1);
-            if (m_payload != nullptr && !m_payload->empty()) {
-                m_write_state.append({
-                    .iov_base = const_cast<char*>(m_payload->data()),
-                    .iov_len = m_payload->size()
-                });
-                m_completed = false;
-            }
-            syncSendWindow();
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->m_error.has_value()) return true;
-            if (m_completed) {
-                if (m_finish_upgrade) return m_owner->finishUpgrade();
-                return true;
-            }
-            if (cqe == nullptr) {
-                syncSendWindow();
-                return pendingIovCount() == 0;
-            }
-
-            auto result = galay::kernel::io::handleWritev(cqe);
-            if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
-            if (!result) { m_owner->setSendError(result.error()); return true; }
-
-            const size_t sent = result.value();
-            if (sent == 0) return false;
-            if (!advanceAfterWrite(sent)) {
-                m_owner->setSendError(IOError(kSendFailed, 0));
-                return true;
-            }
-            if (pendingIovCount() == 0) {
-                m_completed = true;
-                if (m_finish_upgrade) return m_owner->finishUpgrade();
-                return true;
-            }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            while (true) {
-                if (m_owner->m_error.has_value()) return true;
-                if (m_completed) {
-                    if (m_finish_upgrade) return m_owner->finishUpgrade();
-                    return true;
-                }
-                syncSendWindow();
-                const int iov_count = pendingIovCount();
-                if (iov_count == 0) {
-                    m_completed = true;
-                    if (m_finish_upgrade) return m_owner->finishUpgrade();
-                    return true;
-                }
-
-                auto result = galay::kernel::io::handleWritev(handle, m_write_state.data(), iov_count);
-                if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
-                if (!result) { m_owner->setSendError(result.error()); return true; }
-
-                const size_t sent = result.value();
-                if (sent == 0) return false;
-                if (!advanceAfterWrite(sent)) {
-                    m_owner->setSendError(IOError(kSendFailed, 0));
-                    return true;
-                }
-                if (pendingIovCount() == 0) {
-                    m_completed = true;
-                    if (m_finish_upgrade) return m_owner->finishUpgrade();
-                    return true;
-                }
-            }
-        }
-#endif
-
-    private:
-        void syncSendWindow() {
-            const size_t iov_count = copyBoundedIovecs(
-                m_write_state.data(),
-                m_write_state.count(),
-                m_iovec_storage);
-            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
-            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
-#ifdef USE_IOURING
-            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
-            m_msg.msg_iovlen = m_iovecs.size();
-#endif
-        }
-
-        int pendingIovCount() {
-            return static_cast<int>(m_write_state.count());
-        }
-
-        bool advanceAfterWrite(size_t sent_bytes) {
-            const size_t advanced = m_write_state.advance(sent_bytes);
-            syncSendWindow();
-            return advanced == sent_bytes;
-        }
-        H2cUpgradeAwaitable* m_owner;
-        const std::string* m_payload;
-        bool m_finish_upgrade;
-        bool m_completed;
-        IoVecWriteState m_write_state;
-        std::array<struct iovec, 2> m_iovec_storage{};
-    };
-
-    class UpgradeRecvAwaitable : public ReadvIOContext
-    {
-    public:
-        explicit UpgradeRecvAwaitable(H2cUpgradeAwaitable* owner)
-            : ReadvIOContext(m_iovec_storage, 0)
-            , m_owner(owner) {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->m_error.has_value()) return true;
-            if (m_owner->parseUpgradeResponse()) return true;
-            if (cqe == nullptr) {
-                if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting 101"); return true; }
-                return false;
-            }
-            auto result = galay::kernel::io::handleReadv(cqe);
-            if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
-            if (!result) { m_owner->setRecvError(result.error()); return true; }
-            const size_t n = result.value();
-            if (n == 0) { m_owner->setProtocolError("peer closed while waiting 101"); return true; }
-            m_owner->m_ring_buffer->produce(n);
-            if (m_owner->parseUpgradeResponse()) return true;
-            if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting 101"); return true; }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->m_error.has_value()) return true;
-            if (m_owner->parseUpgradeResponse()) return true;
-            while (true) {
-                if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting 101"); return true; }
-                auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovec_storage.data(),
-                                                             static_cast<int>(m_iovecs.size()));
-                if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
-                if (!result) { m_owner->setRecvError(result.error()); return true; }
-                const size_t n = result.value();
-                if (n == 0) { m_owner->setProtocolError("peer closed while waiting 101"); return true; }
-                m_owner->m_ring_buffer->produce(n);
-                if (m_owner->parseUpgradeResponse()) return true;
-            }
-        }
-#endif
-    private:
-        bool prepareRecvWindow() {
-            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(
-                m_iovec_storage.data(), m_iovec_storage.size());
-            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
-            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
-#ifdef USE_IOURING
-            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
-            m_msg.msg_iovlen = m_iovecs.size();
-#endif
-            return compact_count > 0;
-        }
-        H2cUpgradeAwaitable* m_owner;
-        std::array<struct iovec, 2> m_iovec_storage{};
-    };
-
-    class SettingsRecvAwaitable : public ReadvIOContext
-    {
-    public:
-        explicit SettingsRecvAwaitable(H2cUpgradeAwaitable* owner)
-            : ReadvIOContext(m_iovec_storage, 0)
-            , m_owner(owner) {
-        }
-
-#ifdef USE_IOURING
-        bool handleComplete(struct io_uring_cqe* cqe, GHandle) override {
-            if (m_owner->m_error.has_value()) return true;
-            if (m_owner->tryConsumeSettingsFrame()) return true;
-            if (cqe == nullptr) {
-                if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting SETTINGS"); return true; }
-                return false;
-            }
-            auto result = galay::kernel::io::handleReadv(cqe);
-            if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
-            if (!result) { m_owner->setRecvError(result.error()); return true; }
-            const size_t n = result.value();
-            if (n == 0) { m_owner->setProtocolError("peer closed while waiting SETTINGS"); return true; }
-            m_owner->m_ring_buffer->produce(n);
-            if (m_owner->tryConsumeSettingsFrame()) return true;
-            if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting SETTINGS"); return true; }
-            return false;
-        }
-#else
-        bool handleComplete(GHandle handle) override {
-            if (m_owner->m_error.has_value()) return true;
-            if (m_owner->tryConsumeSettingsFrame()) return true;
-            while (true) {
-                if (!prepareRecvWindow()) { m_owner->setProtocolError("RingBuffer full while waiting SETTINGS"); return true; }
-                auto result = galay::kernel::io::handleReadv(handle,
-                                                             m_iovec_storage.data(),
-                                                             static_cast<int>(m_iovecs.size()));
-                if (!result && IOError::contains(result.error().code(), kNotReady)) return false;
-                if (!result) { m_owner->setRecvError(result.error()); return true; }
-                const size_t n = result.value();
-                if (n == 0) { m_owner->setProtocolError("peer closed while waiting SETTINGS"); return true; }
-                m_owner->m_ring_buffer->produce(n);
-                if (m_owner->tryConsumeSettingsFrame()) return true;
-            }
-        }
-#endif
-    private:
-        bool prepareRecvWindow() {
-            const size_t iov_count = m_owner->m_ring_buffer->getWriteIovecs(
-                m_iovec_storage.data(), m_iovec_storage.size());
-            const size_t compact_count = compactIovecs(m_iovec_storage, iov_count);
-            m_iovecs = std::span<const struct iovec>(m_iovec_storage.data(), compact_count);
-#ifdef USE_IOURING
-            m_msg.msg_iov = const_cast<struct iovec*>(m_iovecs.data());
-            m_msg.msg_iovlen = m_iovecs.size();
-#endif
-            return compact_count > 0;
-        }
-        H2cUpgradeAwaitable* m_owner;
-        std::array<struct iovec, 2> m_iovec_storage{};
-    };
-
-    H2cUpgradeAwaitable(H2cClient& client, const std::string& path);
-
-    bool await_ready() const noexcept { return m_error.has_value(); }
-
-    template<typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> handle) {
-        m_scheduler = handle.promise().taskRefView().belongScheduler();
-        return CustomAwaitable::await_suspend(handle);
-    }
-
-    std::expected<bool, Http2Error> await_resume();
-
-private:
-    friend class ProtocolSendAwaitable;
-    friend class UpgradeRecvAwaitable;
-    friend class SettingsRecvAwaitable;
-
-    void setSendError(const IOError& e) {
-        m_error = Http2Error(Http2ErrorCode::InternalError, e.message());
-    }
-    void setRecvError(const IOError& e) {
-        if (IOError::contains(e.code(), kDisconnectError))
-            m_error = Http2Error(Http2ErrorCode::ConnectError, "connection closed");
-        else
-            m_error = Http2Error(Http2ErrorCode::InternalError, e.message());
-    }
-    void setProtocolError(std::string msg) {
-        m_error = Http2Error(Http2ErrorCode::ProtocolError, std::move(msg));
-    }
-
-    bool parseUpgradeResponse() {
-        auto rv = borrowReadIovecs(*m_ring_buffer);
-        if (rv.empty()) return false;
-        std::vector<iovec> parse_iovecs;
-        if (IoVecWindow::buildWindow(rv, parse_iovecs) == 0) {
-            return false;
-        }
-        auto [ec, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
-        if (consumed > 0) m_ring_buffer->consume(consumed);
-        if (ec == HttpErrorCode::kHeaderInComplete || ec == HttpErrorCode::kIncomplete) return false;
-        if (ec != HttpErrorCode::kNoError) { setProtocolError("HTTP parse error during upgrade"); return true; }
-        if (!m_upgrade_response.isComplete()) return false;
-        if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
-            setProtocolError("expected 101, got " + std::to_string(static_cast<int>(m_upgrade_response.header().code())));
-            return true;
-        }
-        if (!m_upgrade_response.header().headerPairs().hasKey("Upgrade")) {
-            setProtocolError("missing Upgrade header"); return true;
-        }
-        std::string uv = m_upgrade_response.header().headerPairs().getValue("Upgrade");
-        if (uv != "h2c") { setProtocolError("invalid Upgrade value: " + uv); return true; }
-        HTTP_LOG_INFO("[h2c] [upgrade] [101-ok]");
-        return true;
-    }
-
-    bool tryConsumeSettingsFrame() {
-        auto rv = borrowReadIovecs(*m_ring_buffer);
-        size_t available = 0;
-        for (const auto& iov : rv) available += iov.iov_len;
-        if (available < kHttp2FrameHeaderLength) return false;
-        uint8_t hdr[kHttp2FrameHeaderLength];
-        size_t copied = 0;
-        for (const auto& iov : rv) {
-            size_t tc = std::min(kHttp2FrameHeaderLength - copied, iov.iov_len);
-            std::memcpy(hdr + copied, iov.iov_base, tc);
-            copied += tc;
-            if (copied >= kHttp2FrameHeaderLength) break;
-        }
-        auto fh = Http2FrameHeader::deserialize(hdr);
-        size_t fs = kHttp2FrameHeaderLength + static_cast<size_t>(fh.length);
-        if (available < fs) return false;
-        if (fh.type != Http2FrameType::Settings) {
-            setProtocolError("expected SETTINGS, got " + http2FrameTypeToString(fh.type));
-            return true;
-        }
-        m_ring_buffer->consume(fs);
-        HTTP_LOG_INFO("[h2c] [upgrade] [settings-recv-ok]");
-        return true;
-    }
-
-    bool finishUpgrade();
-
-    H2cClient* m_client;
-    TcpSocket* m_socket;
-    RingBuffer* m_ring_buffer;
-    std::string m_upgrade_request_buf;
-    std::string m_preface_settings_buf;
-    std::string m_ack_buf;
-    HttpResponse m_upgrade_response;
-    ProtocolSendAwaitable m_upgrade_send;
-    UpgradeRecvAwaitable m_upgrade_recv;
-    ProtocolSendAwaitable m_preface_send;
-    SettingsRecvAwaitable m_settings_recv;
-    ProtocolSendAwaitable m_ack_send;
-    std::optional<Http2Error> m_error;
-    Scheduler* m_scheduler = nullptr;
-
-public:
-    std::expected<bool, IOError> m_result;
-};
-
-/**
  * @brief H2c 客户端 (HTTP/2 over cleartext)
  */
 class H2cClient
@@ -460,6 +113,7 @@ public:
     Http2ConnImpl<TcpSocket>* getConn() { return m_conn.get(); }
 
 private:
+    friend struct H2cUpgradeMachine;
     friend class H2cUpgradeAwaitable;
 
     H2cClientConfig m_config;
@@ -475,128 +129,553 @@ private:
     std::expected<bool, Http2Error> m_shutdown_result{true};
 };
 
-inline H2cClient H2cClientBuilder::build() const { return H2cClient(m_config); }
+/**
+ * @brief H2c 升级状态机
+ * @details IO 顺序：SEND upgrade → RECV 101 → SEND preface+settings → RECV settings → SEND ACK
+ */
+struct H2cUpgradeMachine {
+    using result_type = std::expected<bool, Http2Error>;
 
-inline std::expected<bool, Http2Error> H2cUpgradeAwaitable::await_resume() {
-    // Release the upgrade sequence's ReadWrite ownership before starting the
-    // HTTP/2 stream manager. Otherwise the freshly scheduled reader loop will
-    // race with this awaitable for the same socket controller and fail with
-    // kNotReady.
-    onCompleted();
-    if (m_error.has_value()) {
-        m_client->m_upgraded = false;
-        m_client->m_upgrade_result = std::unexpected(*m_error);
-        return std::unexpected(std::move(*m_error));
+    explicit H2cUpgradeMachine(H2cClient& client, const std::string& path)
+        : m_client(&client)
+        , m_ring_buffer(client.m_ring_buffer.get())
+    {
+        if (client.m_socket == nullptr || m_ring_buffer == nullptr) {
+            setConnectError("not connected");
+            return;
+        }
+
+        prepareUpgradeRequest(path);
+        preparePrefaceAndSettings();
+        prepareAck();
+        HTTP_LOG_INFO("[h2c] [upgrade] [begin] [path={}]", path);
     }
 
-    auto* manager = m_client->m_conn ? m_client->m_conn->streamManager() : nullptr;
+    MachineAction<result_type> advance() {
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        for (;;) {
+            switch (m_phase) {
+            case Phase::kSendUpgrade:
+                if (sendCompleted(m_upgrade_request_buf, Phase::kRecvUpgradeResponse)) {
+                    continue;
+                }
+                return waitSend(m_upgrade_request_buf);
+            case Phase::kRecvUpgradeResponse:
+                if (parseUpgradeResponse()) {
+                    if (m_result.has_value()) {
+                        return MachineAction<result_type>::complete(std::move(*m_result));
+                    }
+                    m_phase = Phase::kSendPrefaceSettings;
+                    continue;
+                }
+                if (!prepareRecvWindow("RingBuffer full while waiting 101")) {
+                    return MachineAction<result_type>::complete(std::move(*m_result));
+                }
+                return MachineAction<result_type>::waitReadv(m_read_iov_storage.data(), m_read_iov_count);
+            case Phase::kSendPrefaceSettings:
+                if (sendCompleted(m_preface_settings_buf, Phase::kRecvSettings)) {
+                    continue;
+                }
+                return waitSend(m_preface_settings_buf);
+            case Phase::kRecvSettings:
+                if (tryConsumeSettingsFrame()) {
+                    if (m_result.has_value()) {
+                        return MachineAction<result_type>::complete(std::move(*m_result));
+                    }
+                    m_phase = Phase::kSendAck;
+                    continue;
+                }
+                if (!prepareRecvWindow("RingBuffer full while waiting SETTINGS")) {
+                    return MachineAction<result_type>::complete(std::move(*m_result));
+                }
+                return MachineAction<result_type>::waitReadv(m_read_iov_storage.data(), m_read_iov_count);
+            case Phase::kSendAck:
+                if (sendCompleted(m_ack_buf, Phase::kDone)) {
+                    m_result = true;
+                    return MachineAction<result_type>::complete(std::move(*m_result));
+                }
+                return waitSend(m_ack_buf);
+            case Phase::kDone:
+                return MachineAction<result_type>::complete(
+                    m_result.value_or(std::unexpected(Http2Error(Http2ErrorCode::InternalError, "upgrade incomplete"))));
+            }
+        }
+    }
+
+    void onRead(std::expected<size_t, IOError> result) {
+        if (!result) {
+            setRecvError(result.error());
+            return;
+        }
+
+        if (result.value() == 0) {
+            if (m_phase == Phase::kRecvUpgradeResponse) {
+                setProtocolError("peer closed while waiting 101");
+            } else {
+                setProtocolError("peer closed while waiting SETTINGS");
+            }
+            return;
+        }
+
+        m_ring_buffer->produce(result.value());
+    }
+
+    void onWrite(std::expected<size_t, IOError> result) {
+        if (!result) {
+            setSendError(result.error());
+            return;
+        }
+
+        if (result.value() == 0) {
+            setSendError(IOError(kSendFailed, 0));
+            return;
+        }
+
+        const auto& payload = currentPayload();
+        m_send_offset += result.value();
+        if (m_send_offset > payload.size()) {
+            setSendError(IOError(kSendFailed, 0));
+            return;
+        }
+    }
+
+private:
+    enum class Phase : uint8_t {
+        kSendUpgrade,
+        kRecvUpgradeResponse,
+        kSendPrefaceSettings,
+        kRecvSettings,
+        kSendAck,
+        kDone,
+    };
+
+    MachineAction<result_type> waitSend(const std::string& payload) const {
+        return MachineAction<result_type>::waitWrite(payload.data() + m_send_offset,
+                                                     payload.size() - m_send_offset);
+    }
+
+    bool sendCompleted(const std::string& payload, Phase next_phase) {
+        if (m_send_offset < payload.size()) {
+            return false;
+        }
+        m_send_offset = 0;
+        m_phase = next_phase;
+        return true;
+    }
+
+    const std::string& currentPayload() const {
+        switch (m_phase) {
+        case Phase::kSendUpgrade:
+            return m_upgrade_request_buf;
+        case Phase::kSendPrefaceSettings:
+            return m_preface_settings_buf;
+        case Phase::kSendAck:
+            return m_ack_buf;
+        case Phase::kRecvUpgradeResponse:
+        case Phase::kRecvSettings:
+        case Phase::kDone:
+            break;
+        }
+        return m_ack_buf;
+    }
+
+    bool prepareRecvWindow(std::string_view error_message) {
+        const size_t iov_count = m_ring_buffer->getWriteIovecs(
+            m_read_iov_storage.data(), m_read_iov_storage.size());
+        m_read_iov_count = compactIovecs(m_read_iov_storage, iov_count);
+        if (m_read_iov_count == 0) {
+            setProtocolError(std::string(error_message));
+            return false;
+        }
+        return true;
+    }
+
+    void prepareUpgradeRequest(const std::string& path) {
+        Http2SettingsFrame settings_frame;
+        settings_frame.addSetting(Http2SettingsId::MaxConcurrentStreams, m_client->m_config.max_concurrent_streams);
+        settings_frame.addSetting(Http2SettingsId::InitialWindowSize, m_client->m_config.initial_window_size);
+        std::string serialized = settings_frame.serialize();
+        std::string base64_settings = galay::utils::Base64Util::Base64Encode(
+            reinterpret_cast<const unsigned char*>(serialized.data() + 9), serialized.size() - 9);
+        for (char& c : base64_settings) {
+            if (c == '+') {
+                c = '-';
+            } else if (c == '/') {
+                c = '_';
+            }
+        }
+        base64_settings.erase(std::remove(base64_settings.begin(), base64_settings.end(), '='), base64_settings.end());
+
+        auto request = Http1_1RequestBuilder::get(path)
+            .host(m_client->m_authority)
+            .header("Connection", "Upgrade, HTTP2-Settings")
+            .header("Upgrade", "h2c")
+            .header("HTTP2-Settings", base64_settings)
+            .build();
+        m_upgrade_request_buf = request.toString();
+    }
+
+    void preparePrefaceAndSettings() {
+        std::string preface(kHttp2ConnectionPreface.begin(), kHttp2ConnectionPreface.end());
+        Http2SettingsFrame settings;
+        settings.addSetting(Http2SettingsId::MaxConcurrentStreams, m_client->m_config.max_concurrent_streams);
+        settings.addSetting(Http2SettingsId::InitialWindowSize, m_client->m_config.initial_window_size);
+        settings.header().stream_id = 0;
+        m_preface_settings_buf = std::move(preface);
+        m_preface_settings_buf.append(settings.serialize());
+    }
+
+    void prepareAck() {
+        Http2SettingsFrame ack;
+        ack.setAck(true);
+        ack.header().stream_id = 0;
+        m_ack_buf = ack.serialize();
+    }
+
+    void setSendError(const IOError& error) {
+        setResult(Http2Error(Http2ErrorCode::InternalError, error.message()));
+    }
+
+    void setRecvError(const IOError& error) {
+        if (IOError::contains(error.code(), kDisconnectError)) {
+            setResult(Http2Error(Http2ErrorCode::ConnectError, "connection closed"));
+            return;
+        }
+        setResult(Http2Error(Http2ErrorCode::InternalError, error.message()));
+    }
+
+    void setProtocolError(std::string message) {
+        setResult(Http2Error(Http2ErrorCode::ProtocolError, std::move(message)));
+    }
+
+    void setConnectError(std::string message) {
+        setResult(Http2Error(Http2ErrorCode::ConnectError, std::move(message)));
+    }
+
+    void setResult(Http2Error error) {
+        if (!m_result.has_value()) {
+            m_result = std::unexpected(std::move(error));
+        }
+    }
+
+    bool parseUpgradeResponse() {
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
+        if (read_iovecs.empty()) {
+            return false;
+        }
+
+        std::vector<iovec> parse_iovecs;
+        if (IoVecWindow::buildWindow(read_iovecs, parse_iovecs) == 0) {
+            return false;
+        }
+
+        auto [error_code, consumed] = m_upgrade_response.fromIOVec(parse_iovecs);
+        if (consumed > 0) {
+            m_ring_buffer->consume(consumed);
+        }
+
+        if (error_code == HttpErrorCode::kHeaderInComplete || error_code == HttpErrorCode::kIncomplete) {
+            return false;
+        }
+        if (error_code != HttpErrorCode::kNoError) {
+            setProtocolError("HTTP parse error during upgrade");
+            return true;
+        }
+        if (!m_upgrade_response.isComplete()) {
+            return false;
+        }
+        if (m_upgrade_response.header().code() != HttpStatusCode::SwitchingProtocol_101) {
+            setProtocolError("expected 101, got " +
+                             std::to_string(static_cast<int>(m_upgrade_response.header().code())));
+            return true;
+        }
+        if (!m_upgrade_response.header().headerPairs().hasKey("Upgrade")) {
+            setProtocolError("missing Upgrade header");
+            return true;
+        }
+        const std::string upgrade_value = m_upgrade_response.header().headerPairs().getValue("Upgrade");
+        if (upgrade_value != "h2c") {
+            setProtocolError("invalid Upgrade value: " + upgrade_value);
+            return true;
+        }
+        HTTP_LOG_INFO("[h2c] [upgrade] [101-ok]");
+        return true;
+    }
+
+    bool tryConsumeSettingsFrame() {
+        auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
+        size_t available = 0;
+        for (const auto& iov : read_iovecs) {
+            available += iov.iov_len;
+        }
+        if (available < kHttp2FrameHeaderLength) {
+            return false;
+        }
+
+        uint8_t header[kHttp2FrameHeaderLength];
+        size_t copied = 0;
+        for (const auto& iov : read_iovecs) {
+            const size_t take_count = std::min(kHttp2FrameHeaderLength - copied, iov.iov_len);
+            std::memcpy(header + copied, iov.iov_base, take_count);
+            copied += take_count;
+            if (copied >= kHttp2FrameHeaderLength) {
+                break;
+            }
+        }
+
+        auto frame_header = Http2FrameHeader::deserialize(header);
+        const size_t frame_size = kHttp2FrameHeaderLength + static_cast<size_t>(frame_header.length);
+        if (available < frame_size) {
+            return false;
+        }
+        if (frame_header.type != Http2FrameType::Settings) {
+            setProtocolError("expected SETTINGS, got " + http2FrameTypeToString(frame_header.type));
+            return true;
+        }
+        m_ring_buffer->consume(frame_size);
+        HTTP_LOG_INFO("[h2c] [upgrade] [settings-recv-ok]");
+        return true;
+    }
+
+    H2cClient* m_client = nullptr;
+    RingBuffer* m_ring_buffer = nullptr;
+    Phase m_phase = Phase::kSendUpgrade;
+    size_t m_send_offset = 0;
+    std::string m_upgrade_request_buf;
+    std::string m_preface_settings_buf;
+    std::string m_ack_buf;
+    std::array<struct iovec, 2> m_read_iov_storage{};
+    size_t m_read_iov_count = 0;
+    HttpResponse m_upgrade_response;
+    std::optional<result_type> m_result;
+};
+
+/**
+ * @brief H2c 升级 awaitable 包装器
+ * @details 适配新 `StateMachineAwaitable`，并在 `await_resume()` 时完成 transport 最终接管。
+ */
+class H2cUpgradeAwaitable
+    : public SequenceAwaitableBase
+    , public TimeoutSupport<H2cUpgradeAwaitable>
+{
+public:
+    using ResultType = std::expected<bool, Http2Error>;
+    using result_type = ResultType;
+
+    H2cUpgradeAwaitable(const H2cUpgradeAwaitable&) = delete;
+    H2cUpgradeAwaitable& operator=(const H2cUpgradeAwaitable&) = delete;
+    H2cUpgradeAwaitable(H2cUpgradeAwaitable&&) noexcept = default;
+    H2cUpgradeAwaitable& operator=(H2cUpgradeAwaitable&&) noexcept = default;
+
+    H2cUpgradeAwaitable(H2cClient& client, const std::string& path)
+        : SequenceAwaitableBase(client.m_socket ? client.m_socket->controller() : nullptr)
+        , m_client(&client)
+    {
+        if (client.m_socket == nullptr || client.m_ring_buffer == nullptr) {
+            m_ready = true;
+            m_error = Http2Error(Http2ErrorCode::ConnectError, "not connected");
+            return;
+        }
+
+        m_inner_operation = std::make_unique<InnerOperation>(
+            AwaitableBuilder<ResultType>::fromStateMachine(
+                client.m_socket->controller(),
+                H2cUpgradeMachine(client, path))
+                .build()
+        );
+    }
+
+    ~H2cUpgradeAwaitable() {
+        cleanupInnerIfArmed();
+    }
+
+    bool await_ready() const noexcept {
+        return m_ready || (m_inner_operation != nullptr && m_inner_operation->await_ready());
+    }
+
+    template <typename Promise>
+    decltype(auto) await_suspend(std::coroutine_handle<Promise> handle) {
+        if (m_inner_operation == nullptr) {
+            return false;
+        }
+        m_scheduler = handle.promise().taskRefView().belongScheduler();
+        m_inner_armed = true;
+        return m_inner_operation->await_suspend(handle);
+    }
+
+    ResultType await_resume();
+
+    void markTimeout() {
+        m_result = std::unexpected(IOError(kTimeout, 0));
+        if (m_inner_operation != nullptr) {
+            m_inner_operation->markTimeout();
+        }
+    }
+
+    IOTask* front() override {
+        return m_inner_operation ? m_inner_operation->front() : nullptr;
+    }
+
+    const IOTask* front() const override {
+        return m_inner_operation ? m_inner_operation->front() : nullptr;
+    }
+
+    void popFront() override {
+        if (m_inner_operation) {
+            m_inner_operation->popFront();
+        }
+    }
+
+    bool empty() const override {
+        return m_inner_operation == nullptr || m_inner_operation->empty();
+    }
+
+#ifdef USE_IOURING
+    SequenceProgress prepareForSubmit() override {
+        return m_inner_operation ? m_inner_operation->prepareForSubmit() : SequenceProgress::kCompleted;
+    }
+
+    SequenceProgress onActiveEvent(struct io_uring_cqe* cqe, GHandle handle) override {
+        return m_inner_operation ? m_inner_operation->onActiveEvent(cqe, handle) : SequenceProgress::kCompleted;
+    }
+#else
+    SequenceProgress prepareForSubmit(GHandle handle) override {
+        return m_inner_operation ? m_inner_operation->prepareForSubmit(handle) : SequenceProgress::kCompleted;
+    }
+
+    SequenceProgress onActiveEvent(GHandle handle) override {
+        return m_inner_operation ? m_inner_operation->onActiveEvent(handle) : SequenceProgress::kCompleted;
+    }
+#endif
+
+public:
+    std::expected<bool, IOError> m_result{true};
+
+private:
+    using InnerOperation = galay::kernel::StateMachineAwaitable<H2cUpgradeMachine>;
+
+    static void discardTransport(H2cClient& client);
+    static bool finalizeTransport(H2cClient& client, Scheduler* scheduler);
+    static Http2Error translateIoError(const IOError& error);
+
+    ResultType resumeInner() {
+        m_inner_completed = true;
+        return m_inner_operation->await_resume();
+    }
+
+    void cleanupInnerIfArmed() {
+        if (m_inner_operation != nullptr && m_inner_armed && !m_inner_completed) {
+            m_inner_operation->onCompleted();
+            m_inner_completed = true;
+        }
+    }
+
+    H2cClient* m_client = nullptr;
+    std::unique_ptr<InnerOperation> m_inner_operation;
+    std::optional<Http2Error> m_error;
+    Scheduler* m_scheduler = nullptr;
+    bool m_ready = false;
+    bool m_inner_armed = false;
+    bool m_inner_completed = false;
+};
+
+inline H2cClient H2cClientBuilder::build() const { return H2cClient(m_config); }
+
+inline void H2cUpgradeAwaitable::discardTransport(H2cClient& client) {
+    if (client.m_conn != nullptr) {
+        if (client.m_conn->socket().handle().fd >= 0) {
+            ::close(client.m_conn->socket().handle().fd);
+        }
+        client.m_conn.reset();
+    }
+    if (client.m_socket != nullptr && client.m_socket->handle().fd >= 0) {
+        ::close(client.m_socket->handle().fd);
+    }
+    client.m_socket.reset();
+    client.m_ring_buffer.reset();
+    client.m_upgraded = false;
+}
+
+inline bool H2cUpgradeAwaitable::finalizeTransport(H2cClient& client, Scheduler* scheduler) {
+    if (scheduler == nullptr || client.m_socket == nullptr || client.m_ring_buffer == nullptr) {
+        return false;
+    }
+
+    client.m_conn = std::make_unique<Http2ConnImpl<TcpSocket>>(
+        std::move(*client.m_socket), std::move(*client.m_ring_buffer));
+    client.m_conn->localSettings().from(client.m_config);
+    client.m_conn->runtimeConfig().from(client.m_config);
+    client.m_conn->markSettingsSent();
+    client.m_conn->setIsClient(true);
+    client.m_conn->initStreamManager();
+
+    auto* manager = client.m_conn->streamManager();
     if (manager == nullptr) {
-        auto error = Http2Error(Http2ErrorCode::InternalError, "missing stream manager");
-        m_client->m_upgraded = false;
-        m_client->m_upgrade_result = std::unexpected(error);
-        return std::unexpected(std::move(error));
+        return false;
     }
 
     manager->startWithScheduler(
-        m_scheduler,
+        scheduler,
         [](Http2Stream::ptr) -> Task<void> { co_return; });
 
-    m_client->m_socket.reset();
-    m_client->m_ring_buffer.reset();
-    m_client->m_upgraded = true;
-    m_client->m_upgrade_result = true;
+    client.m_socket.reset();
+    client.m_ring_buffer.reset();
+    client.m_upgraded = true;
+    client.m_upgrade_result = true;
     HTTP_LOG_INFO("[h2c] [upgrade] [conn-ready]");
     HTTP_LOG_INFO("[h2c] [upgrade] [done]");
     return true;
 }
 
-// ============== H2cUpgradeAwaitable 构造 ==============
-
-inline H2cUpgradeAwaitable::H2cUpgradeAwaitable(H2cClient& client, const std::string& path)
-    : CustomAwaitable(client.m_socket->controller())
-    , m_client(&client)
-    , m_socket(client.m_socket.get())
-    , m_ring_buffer(client.m_ring_buffer.get())
-    , m_upgrade_send(this, &m_upgrade_request_buf, false)
-    , m_upgrade_recv(this)
-    , m_preface_send(this, &m_preface_settings_buf, false)
-    , m_settings_recv(this)
-    , m_ack_send(this, &m_ack_buf, true)
-    , m_result(true)
-{
-    if (!m_socket || !m_ring_buffer) {
-        m_error = Http2Error(Http2ErrorCode::ConnectError, "not connected");
-        return;
+inline Http2Error H2cUpgradeAwaitable::translateIoError(const IOError& error) {
+    if (IOError::contains(error.code(), kTimeout)) {
+        return Http2Error(Http2ErrorCode::ConnectError, "upgrade timeout");
     }
-
-    // HTTP/1.1 Upgrade 请求
-    Http2SettingsFrame sf;
-    sf.addSetting(Http2SettingsId::MaxConcurrentStreams, client.m_config.max_concurrent_streams);
-    sf.addSetting(Http2SettingsId::InitialWindowSize, client.m_config.initial_window_size);
-    std::string sp = sf.serialize();
-    std::string sb = galay::utils::Base64Util::Base64Encode(
-        reinterpret_cast<const unsigned char*>(sp.data() + 9), sp.size() - 9);
-    for (char& c : sb) { if (c == '+') c = '-'; else if (c == '/') c = '_'; }
-    sb.erase(std::remove(sb.begin(), sb.end(), '='), sb.end());
-
-    auto req = Http1_1RequestBuilder::get(path)
-        .host(client.m_authority)
-        .header("Connection", "Upgrade, HTTP2-Settings")
-        .header("Upgrade", "h2c")
-        .header("HTTP2-Settings", sb)
-        .build();
-    m_upgrade_request_buf = req.toString();
-
-    // Connection Preface + SETTINGS
-    std::string preface(kHttp2ConnectionPreface.begin(), kHttp2ConnectionPreface.end());
-    Http2SettingsFrame settings;
-    settings.addSetting(Http2SettingsId::MaxConcurrentStreams, client.m_config.max_concurrent_streams);
-    settings.addSetting(Http2SettingsId::InitialWindowSize, client.m_config.initial_window_size);
-    settings.header().stream_id = 0;
-    m_preface_settings_buf = std::move(preface);
-    m_preface_settings_buf.append(settings.serialize());
-
-    // SETTINGS ACK
-    Http2SettingsFrame ack;
-    ack.setAck(true);
-    ack.header().stream_id = 0;
-    m_ack_buf = ack.serialize();
-
-    // 重建 send awaitables（buffer 地址已确定）
-    m_upgrade_send = ProtocolSendAwaitable(this, &m_upgrade_request_buf, false);
-    m_preface_send = ProtocolSendAwaitable(this, &m_preface_settings_buf, false);
-    m_ack_send = ProtocolSendAwaitable(this, &m_ack_buf, true);
-
-    addTask(IOEventType::WRITEV, &m_upgrade_send);
-    addTask(IOEventType::READV, &m_upgrade_recv);
-    addTask(IOEventType::WRITEV, &m_preface_send);
-    addTask(IOEventType::READV, &m_settings_recv);
-    addTask(IOEventType::WRITEV, &m_ack_send);
-
-    HTTP_LOG_INFO("[h2c] [upgrade] [begin] [path={}]", path);
+    if (IOError::contains(error.code(), kDisconnectError)) {
+        return Http2Error(Http2ErrorCode::ConnectError, error.message());
+    }
+    return Http2Error(Http2ErrorCode::InternalError, error.message());
 }
 
-inline bool H2cUpgradeAwaitable::finishUpgrade() {
-    if (m_error.has_value()) return true;
-    if (!m_scheduler) {
-        m_error = Http2Error(Http2ErrorCode::InternalError, "missing scheduler");
-        return true;
+inline std::expected<bool, Http2Error> H2cUpgradeAwaitable::await_resume() {
+    const auto fail = [this](Http2Error error) -> ResultType {
+        discardTransport(*m_client);
+        m_client->m_upgrade_result = std::unexpected(error);
+        return std::unexpected(std::move(error));
+    };
+
+    if (!m_result.has_value()) {
+        cleanupInnerIfArmed();
+        return fail(translateIoError(m_result.error()));
     }
 
-    // TcpSocket move also moves IOController state, including sequence owners.
-    // Release the upgrade awaitable's ReadWrite ownership before moving the
-    // socket into Http2Conn, otherwise the new controller inherits a stale
-    // owner pointer and every later readFramesBatch() aborts with kNotReady.
-    onCompleted();
+    if (m_error.has_value()) {
+        cleanupInnerIfArmed();
+        return fail(*m_error);
+    }
 
-    m_client->m_conn = std::make_unique<Http2ConnImpl<TcpSocket>>(
-        std::move(*m_client->m_socket), std::move(*m_client->m_ring_buffer));
-    m_client->m_conn->localSettings().from(m_client->m_config);
-    m_client->m_conn->runtimeConfig().from(m_client->m_config);
-    m_client->m_conn->markSettingsSent();
-    m_client->m_conn->setIsClient(true);
-    m_client->m_conn->initStreamManager();
-    return true;
+    if (m_ready) {
+        return fail(Http2Error(Http2ErrorCode::ConnectError, "not connected"));
+    }
+
+    if (m_inner_operation != nullptr && m_inner_operation->m_error.has_value()) {
+        cleanupInnerIfArmed();
+        return fail(translateIoError(*m_inner_operation->m_error));
+    }
+
+    auto result = resumeInner();
+    if (!result) {
+        return fail(result.error());
+    }
+
+    if (!finalizeTransport(*m_client, m_scheduler)) {
+        return fail(Http2Error(Http2ErrorCode::InternalError, "failed to finalize h2c transport"));
+    }
+
+    return result;
 }
 
 inline H2cUpgradeAwaitable H2cClient::upgrade(const std::string& path) {

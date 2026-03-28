@@ -47,6 +47,10 @@ struct WsClientConfig
     HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
 };
 
+/**
+ * @brief WebSocket 客户端 builder
+ * @details builder 只收集升级请求所需的头部策略，不直接持有网络资源。
+ */
 class WsClientBuilder {
 public:
     WsClientBuilder& headerMode(HeaderPair::Mode v) { m_config.header_mode = v; return *this; }
@@ -555,6 +559,13 @@ public:
     WsClientImpl(WsClientImpl&&) noexcept = default;
     WsClientImpl& operator=(WsClientImpl&&) noexcept = default;
 
+    /**
+     * @brief 发起到底层 WebSocket 目标的 TCP 连接
+     * @param url 形如 `ws://host[:port][/path]` 的目标地址
+     * @return 底层 socket 的 connect awaitable
+     * @throws std::runtime_error URL 非法、协议与客户端类型不匹配、或 socket 初始化失败
+     * @note 对明文 `WsClient` 而言，若 URL 为 `wss://`，必须改用 `WssClient`
+     */
     auto connect(const std::string& url) {
         auto parsed_url = WsUrl::parse(url);
         if (!parsed_url) {
@@ -583,6 +594,15 @@ public:
         return m_socket->connect(server_host);
     }
 
+    /**
+     * @brief 创建一个绑定当前 socket 与 URL 的 WebSocket session
+     * @param writer_setting Writer 行为配置
+     * @param ring_buffer_size Session RingBuffer 大小
+     * @param reader_setting Reader 行为配置
+     * @return 以值返回的 Session，内部借用当前客户端持有的 socket
+     * @throws std::runtime_error 当前客户端尚未连接
+     * @details 客户端典型顺序是：`connect()` -> `getSession()` -> `session.upgrade()`
+     */
     WsSessionImpl<SocketType> getSession(const WsWriterSetting& writer_setting,
                                          size_t ring_buffer_size = 8192,
                                          const WsReaderSetting& reader_setting = WsReaderSetting()) {
@@ -592,6 +612,11 @@ public:
         return WsSessionImpl<SocketType>(*m_socket, m_url, writer_setting, ring_buffer_size, reader_setting);
     }
 
+    /**
+     * @brief 关闭底层 socket
+     * @return 底层 socket 的 close awaitable
+     * @throws std::runtime_error 当前客户端尚未连接
+     */
     auto close() {
         if (!m_socket) {
             throw std::runtime_error("WsClient not connected");
@@ -603,6 +628,12 @@ public:
         return m_socket.get();
     }
 
+    /**
+     * @brief 对支持 TLS 的 socket 执行握手
+     * @return TLS socket 的 handshake awaitable；对明文 socket 返回其握手入口
+     * @throws std::runtime_error 当前客户端尚未连接
+     * @note 明文 `WsClient` 一般不需要显式调用；`WssClient` 则应在升级前先完成 TLS 握手
+     */
     auto handshake() {
         if (!m_socket) {
             throw std::runtime_error("WsClient not connected. Call connect() first.");
@@ -615,6 +646,10 @@ public:
         return m_socket->handshake();
     }
 
+    /**
+     * @brief 检查底层握手是否已经完成
+     * @return 未连接返回 false；明文 socket 视为已完成；TLS socket 返回真实握手状态
+     */
     bool isHandshakeCompleted() const {
         if (!m_socket) {
             return false;
@@ -648,6 +683,10 @@ struct WssClientConfig
 
 class WssClient;
 
+/**
+ * @brief WSS 客户端 builder
+ * @details 用于配置 TLS 验证策略和升级请求头部策略。
+ */
 class WssClientBuilder {
 public:
     WssClientBuilder& caPath(std::string v) { m_config.ca_path = std::move(v); return *this; }
@@ -679,6 +718,13 @@ public:
     WssClient(WssClient&&) noexcept = default;
     WssClient& operator=(WssClient&&) noexcept = default;
 
+    /**
+     * @brief 解析 WSS URL、初始化 TLS socket 并发起 TCP 连接
+     * @param url 形如 `wss://host[:port][/path]` 的目标地址
+     * @return TLS socket 的 connect awaitable
+     * @throws std::runtime_error URL 非法或 socket 初始化失败
+     * @note 该函数不会自动完成 TLS 握手；成功连接后仍应先 `handshake()` 再执行 `session.upgrade()`
+     */
     auto connect(const std::string& url) {
         auto parsed_url = WsUrl::parse(url);
         if (!parsed_url) {

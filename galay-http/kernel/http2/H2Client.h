@@ -53,6 +53,10 @@ struct H2RequestMachine;
 auto buildRequestOperation(H2Client& client, Http2Request&& request);
 } // namespace detail
 
+/**
+ * @brief HTTP/2 over TLS 客户端 builder
+ * @details 负责收集连接前的协议参数与 TLS 验证策略，不直接建立网络连接。
+ */
 class H2ClientBuilder {
 public:
     H2ClientBuilder& maxConcurrentStreams(uint32_t v)  { m_config.max_concurrent_streams = v; return *this; }
@@ -68,6 +72,23 @@ private:
     H2ClientConfig m_config;
 };
 
+/**
+ * @brief HTTP/2 over TLS 客户端
+ * @details
+ * 典型调用顺序：
+ * 1. `connect(host, port)` 建立 TCP 连接、执行 TLS 握手并完成 HTTP/2 preface
+ * 2. `request(...)` 或 `get()/post()` 创建流并发送请求
+ * 3. 读取 `Http2Stream` 上的响应帧/聚合响应
+ * 4. `close()`
+ *
+ * 连接完成语义：
+ * - `connect()` 成功返回后，ALPN 已被校验为 `h2`
+ * - 内部连接对象和 stream manager 已进入可用状态
+ *
+ * 所有权说明：
+ * - 客户端独占持有 TLS socket 与 `Http2ConnImpl`
+ * - 返回给调用方的 `Http2Stream::ptr` 共享持有具体流对象，但连接生命周期仍由客户端控制
+ */
 class H2Client
 {
 public:
@@ -81,13 +102,45 @@ public:
     H2Client(H2Client&&) noexcept = default;
     H2Client& operator=(H2Client&&) noexcept = default;
 
+    /**
+     * @brief 建立到目标主机的 h2 连接
+     * @param host 目标主机名，会同时用于 TCP 连接与 TLS SNI / authority 语义
+     * @param port 目标端口，默认 443
+     * @return 自定义 connect awaitable；成功后连接进入可发起 stream 的状态
+     */
     auto connect(const std::string& host, uint16_t port = 443);
+
+    /**
+     * @brief 发送一个完整的 HTTP/2 请求
+     * @param request 待发送的请求对象，按值传入并在内部移动消费
+     * @return 请求 awaitable；成功后可获得与该请求绑定的 `Http2Stream`
+     * @note 调用前必须已经成功完成 `connect()`
+     */
     auto request(Http2Request request);
 
+    /**
+     * @brief 创建 GET 请求流
+     * @param path 请求路径
+     * @return 共享流对象，后续可从中读取响应帧与聚合响应
+     */
     Http2Stream::ptr get(const std::string& path);
+
+    /**
+     * @brief 创建 POST 请求流
+     * @param path 请求路径
+     * @param body 请求体
+     * @param content_type `content-type` 首部值
+     * @return 共享流对象，后续可从中读取响应帧与聚合响应
+     */
     Http2Stream::ptr post(const std::string& path,
                           const std::string& body,
                           const std::string& content_type = "application/x-www-form-urlencoded");
+
+    /**
+     * @brief 优雅关闭连接
+     * @return `Task<std::expected<bool, Http2ErrorCode>>`
+     * @details 结果反映 GOAWAY / 关闭流程是否成功完成；若连接已损坏，错误会通过 `Http2ErrorCode` 返回
+     */
     Task<std::expected<bool, Http2ErrorCode>> close();
 
     bool isConnected() const { return m_connected; }

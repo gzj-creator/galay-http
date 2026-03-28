@@ -1,6 +1,6 @@
 # 02-API参考
 
-本页只记录当前公开头中存在且仍可从示例/测试验证的公共 API。若与旧文档冲突，以以下头文件为准：
+本页只记录当前公开头中存在且仍可从示例/测试验证的公共 API。若与旧文档冲突，以以下头文件与 `galay-http/CMakeLists.txt` 中的显式安装清单为准。
 
 - `galay-http/kernel/http/HttpServer.h`
 - `galay-http/kernel/http/HttpClient.h`
@@ -11,6 +11,11 @@
 - `galay-http/kernel/http2/Http2Server.h`
 
 ## 头文件索引
+
+公开头当前分成两层：
+
+- 稳定 direct-include 入口：主工作流建议直接包含的公共头
+- 安装支撑头：仍随安装包分发，用于模板、内联实现、模块预导入或高级扩展，但不默认作为主入口
 
 | 头文件 | 主要类型 | 说明 |
 | --- | --- | --- |
@@ -24,7 +29,15 @@
 
 补充公开头分组：
 
-- HTTP/1.x 协议与路由：
+- 稳定 direct-include 入口：
+  - `galay-http/kernel/http/HttpServer.h`
+  - `galay-http/kernel/http/HttpClient.h`
+  - `galay-http/kernel/websocket/WsClient.h`
+  - `galay-http/kernel/websocket/WsSession.h`
+  - `galay-http/kernel/http2/H2cClient.h`
+  - `galay-http/kernel/http2/H2Client.h`
+  - `galay-http/kernel/http2/Http2Server.h`
+- 其他稳定 direct-include 公共头：
   - `galay-http/protoc/http/HttpBase.h`
   - `galay-http/protoc/http/HttpBody.h`
   - `galay-http/protoc/http/HttpChunk.h`
@@ -70,7 +83,12 @@
   - `galay-http/utils/Http1_1ResponseBuilder.h`
   - `galay-http/utils/HttpLogger.h`
   - `galay-http/utils/HttpUtils.h`
+- 安装支撑头：
   - `galay-http/kernel/IoVecUtils.h`
+  - `galay-http/kernel/http/HttpLog.h`
+  - `galay-http/protoc/http/HttpParseUtils.h`
+  - `galay-http/protoc/http/HttpRequest.inl`
+  - `galay-http/protoc/http/HttpResponse.inl`
   - `galay-http/module/ModulePrelude.hpp`
   - `galay-http/module/galay.http.cppm`
   - `galay-http/module/galay.http2.cppm`
@@ -101,6 +119,7 @@
 - 这是 WebSocket 的 canonical import，直接导出 `WebSocketFrame`
 - 同时导出 `WsClient`、`WsConn`、`WsReader`、`WsReaderSetting`、`WsSession`、`WsUpgrade`、`WsWriter`、`WsWriterSetting`
 - `WssClient` / `WssSession` 也经由对应头文件进入该模块，但它们仍受 `GALAY_HTTP_SSL_ENABLED` 约束
+- 模块 consumer 的真实验证入口是 `examples/import/*.cpp` 与 `test/T59-module_smoke.cpp`
 
 ## HTTP / HTTPS 服务端
 

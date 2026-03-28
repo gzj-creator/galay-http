@@ -1,10 +1,16 @@
 cmake_minimum_required(VERSION 3.22)
 project(galay-http VERSION 2.0.0 LANGUAGES CXX)
 
+include(CTest)
+
 list(APPEND CMAKE_PREFIX_PATH "/usr/local")
 
 # 选项（与 galay-rpc 风格保持一致）
-option(BUILD_TESTS "Build test programs" ON)
+option(BUILD_TESTS "Deprecated alias of BUILD_TESTING" "${BUILD_TESTING}")
+if(DEFINED CACHE{BUILD_TESTS})
+    set(BUILD_TESTING "${BUILD_TESTS}" CACHE BOOL "Enable testing" FORCE)
+endif()
+set(BUILD_TESTS "${BUILD_TESTING}" CACHE BOOL "Deprecated alias of BUILD_TESTING" FORCE)
 option(BUILD_BENCHMARKS "Build benchmark programs" ON)
 option(BUILD_EXAMPLES "Build example programs" ON)
 option(GALAY_HTTP_GCC13_COROUTINE_COMPAT
@@ -91,6 +97,11 @@ if(BUILD_MODULE_EXAMPLES AND NOT GALAY_HTTP_MODULES_COMPILER_SUPPORTED)
     set(BUILD_MODULE_EXAMPLES OFF)
 endif()
 
+set(GALAY_HTTP_MODULE_TARGET_ENABLED FALSE)
+if(BUILD_MODULE_EXAMPLES AND GALAY_HTTP_MODULES_SUPPORTED AND GALAY_HTTP_MODULES_GENERATOR_SUPPORTED)
+    set(GALAY_HTTP_MODULE_TARGET_ENABLED TRUE)
+endif()
+
 include_directories(${PROJECT_SOURCE_DIR})
 
 # 日志编译期开关
@@ -139,7 +150,7 @@ if(BUILD_MODULE_EXAMPLES AND GALAY_HTTP_MODULES_SUPPORTED AND GALAY_HTTP_MODULES
     )
 endif()
 
-if(BUILD_TESTS)
+if(BUILD_TESTING)
     add_subdirectory(test)
 endif()
 
