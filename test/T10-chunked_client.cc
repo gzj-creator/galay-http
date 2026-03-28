@@ -4,6 +4,9 @@
  */
 
 #include <iostream>
+#include <atomic>
+#include <thread>
+#include <chrono>
 #include "galay-http/kernel/http/HttpReader.h"
 #include "galay-http/kernel/http/HttpWriter.h"
 #include "galay-http/protoc/http/HttpRequest.h"
@@ -32,8 +35,16 @@ using namespace galay::http;
 using namespace galay::kernel;
 using namespace galay::async;
 
+std::atomic<bool> g_test_done{false};
+std::atomic<bool> g_test_passed{false};
+
 // 发送chunked请求并接收响应
 Task<void> sendChunkedRequest() {
+    auto fail = [] {
+        g_test_passed = false;
+        g_test_done = true;
+    };
+
     HTTP_LOG_INFO("=== HTTP Chunked Client Test ===");
     HTTP_LOG_INFO("Connecting to server...");
 
@@ -43,6 +54,7 @@ Task<void> sendChunkedRequest() {
     auto optResult = client.option().handleNonBlock();
     if (!optResult) {
         HTTP_LOG_ERROR("Failed to set non-block: {}", optResult.error().message());
+        fail();
         co_return;
     }
 
@@ -51,6 +63,7 @@ Task<void> sendChunkedRequest() {
     auto connectResult = co_await client.connect(serverHost);
     if (!connectResult) {
         HTTP_LOG_ERROR("Failed to connect: {}", connectResult.error().message());
+        fail();
         co_return;
     }
 
@@ -78,6 +91,7 @@ Task<void> sendChunkedRequest() {
     if (!headerResult) {
         HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
         co_await client.close();
+        fail();
         co_return;
     }
     HTTP_LOG_INFO("Request header sent: {} bytes", headerResult.value());
@@ -89,6 +103,7 @@ Task<void> sendChunkedRequest() {
     if (!chunk1Result) {
         HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
         co_await client.close();
+        fail();
         co_return;
     }
     HTTP_LOG_INFO("Chunk 1 sent: {} bytes", chunk1Result.value());
@@ -99,6 +114,7 @@ Task<void> sendChunkedRequest() {
     if (!chunk2Result) {
         HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
         co_await client.close();
+        fail();
         co_return;
     }
     HTTP_LOG_INFO("Chunk 2 sent: {} bytes", chunk2Result.value());
@@ -109,6 +125,7 @@ Task<void> sendChunkedRequest() {
     if (!chunk3Result) {
         HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
         co_await client.close();
+        fail();
         co_return;
     }
     HTTP_LOG_INFO("Chunk 3 sent: {} bytes", chunk3Result.value());
@@ -119,6 +136,7 @@ Task<void> sendChunkedRequest() {
     if (!chunk4Result) {
         HTTP_LOG_ERROR("Failed to send chunk4: {}", chunk4Result.error().message());
         co_await client.close();
+        fail();
         co_return;
     }
     HTTP_LOG_INFO("Chunk 4 sent: {} bytes", chunk4Result.value());
@@ -130,6 +148,7 @@ Task<void> sendChunkedRequest() {
     if (!lastChunkResult) {
         HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
         co_await client.close();
+        fail();
         co_return;
     }
     HTTP_LOG_INFO("Last chunk sent: {} bytes", lastChunkResult.value());
@@ -152,6 +171,7 @@ Task<void> sendChunkedRequest() {
                 HTTP_LOG_ERROR("Response parse error: {}", error.message());
             }
             co_await client.close();
+            fail();
             co_return;
         }
 
@@ -162,46 +182,22 @@ Task<void> sendChunkedRequest() {
             static_cast<int>(response.header().code()),
             httpStatusCodeToString(response.header().code()));
 
-    // 检查响应是否是chunked编码
-    if (response.header().isChunked()) {
-        HTTP_LOG_INFO("Response is chunked encoded");
+    // `getResponse()` 会把 chunked 响应聚合成完整 body 再返回。
+    const std::string responseBody = response.getBodyStr();
+    HTTP_LOG_INFO("Response body: {}", responseBody);
 
-        // 读取所有chunk数据
-        std::string allChunkData;
-        bool isLast = false;
-        int chunkCount = 0;
-
-        while (!isLast) {
-            std::string chunkData;
-            auto chunkResult = co_await reader.getChunk(chunkData);
-
-            if (!chunkResult) {
-                auto& error = chunkResult.error();
-                HTTP_LOG_ERROR("Chunk parse error: {}", error.message());
-                break;
-            }
-
-            isLast = chunkResult.value();
-
-            if (!chunkData.empty()) {
-                chunkCount++;
-                HTTP_LOG_INFO("Received response chunk #{}: {} bytes", chunkCount, chunkData.size());
-                allChunkData += chunkData;
-            }
-        }
-
-        if (isLast) {
-            HTTP_LOG_INFO("\nAll response chunks received. Total: {} chunks, {} bytes",
-                   chunkCount, allChunkData.size());
-            HTTP_LOG_INFO("Response data:\n{}", allChunkData);
-        }
-    } else {
-        // 非chunked响应
-        HTTP_LOG_INFO("Response body: {}", response.getBodyStr());
+    const std::string expected = "Decoded body bytes: 26\nEcho: Hello from chunked client!";
+    if (responseBody != expected) {
+        HTTP_LOG_ERROR("Unexpected response body: {}", responseBody);
+        co_await client.close();
+        fail();
+        co_return;
     }
 
     co_await client.close();
     HTTP_LOG_INFO("\nConnection closed");
+    g_test_passed = true;
+    g_test_done = true;
 }
 
 int main() {
@@ -224,8 +220,17 @@ int main() {
     // 启动客户端
     scheduleTask(scheduler, sendChunkedRequest());
 
-    // 等待一段时间让测试完成
-    std::this_thread::sleep_for(std::chrono::seconds(3));
+    constexpr auto kTimeout = std::chrono::seconds(5);
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
+    while (!g_test_done.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    if (!g_test_done.load()) {
+        HTTP_LOG_ERROR("Timed out waiting for chunked response");
+        g_test_passed = false;
+        g_test_done = true;
+    }
 
     rt.stop();
     HTTP_LOG_INFO("\nTest completed");
@@ -234,5 +239,5 @@ int main() {
     return 1;
 #endif
 
-    return 0;
+    return g_test_passed.load() ? 0 : 1;
 }

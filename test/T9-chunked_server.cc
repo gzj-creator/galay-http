@@ -76,91 +76,60 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
             static_cast<int>(request.header().method()),
             request.header().uri());
 
-    // 检查是否是chunked编码
-    if (request.header().isChunked()) {
-        HTTP_LOG_INFO("Detected chunked transfer encoding");
+    const std::string& requestBody = request.bodyStr();
 
-        // 读取所有chunk数据
-        std::string allChunkData;
-        bool isLast = false;
-        int chunkCount = 0;
+    if (!requestBody.empty()) {
+        HTTP_LOG_INFO("Decoded request body: {} bytes", requestBody.size());
+        HTTP_LOG_INFO("Request body: {}", requestBody);
 
-        while (!isLast) {
-            std::string chunkData;
-            auto chunkResult = co_await reader.getChunk(chunkData);
+        // `getRequest()` 当前会在 chunked 请求完成时把 body 聚合完毕，
+        // 因此这里直接基于聚合后的正文回发 chunked 响应。
+        HttpResponseHeader respHeader;
+        respHeader.version() = HttpVersion::HttpVersion_1_1;
+        respHeader.code() = HttpStatusCode::OK_200;
+        respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
+        respHeader.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+        respHeader.headerPairs().addHeaderPair("Server", "galay-http-chunked-test/1.0");
 
-            if (!chunkResult) {
-                auto& error = chunkResult.error();
-                HTTP_LOG_ERROR("Chunk parse error: {}", error.message());
-                break;
-            }
-
-            isLast = chunkResult.value();
-
-            if (!chunkData.empty()) {
-                chunkCount++;
-                HTTP_LOG_INFO("Received chunk #{}: {} bytes", chunkCount, chunkData.size());
-                allChunkData += chunkData;
-            }
+        auto headerResult = co_await writer.sendHeader(std::move(respHeader));
+        if (!headerResult) {
+            HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
+            co_await client.close();
+            co_return;
         }
 
-        if (isLast) {
-            HTTP_LOG_INFO("All chunks received. Total: {} chunks, {} bytes",
-                   chunkCount, allChunkData.size());
-            HTTP_LOG_INFO("Chunk data: {}", allChunkData);
-
-            // 发送chunked响应
-            HttpResponseHeader respHeader;
-            respHeader.version() = HttpVersion::HttpVersion_1_1;
-            respHeader.code() = HttpStatusCode::OK_200;
-            respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
-            respHeader.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-            respHeader.headerPairs().addHeaderPair("Server", "galay-http-chunked-test/1.0");
-
-            // 发送响应头
-            auto headerResult = co_await writer.sendHeader(std::move(respHeader));
-            if (!headerResult) {
-                HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
-                co_await client.close();
-                co_return;
-            }
-
-            // 发送多个chunk
-            std::string chunk1 = "Received " + std::to_string(chunkCount) + " chunks\n";
-            auto chunk1Result = co_await writer.sendChunk(chunk1, false);
-            if (!chunk1Result) {
-                HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
-                co_await client.close();
-                co_return;
-            }
-
-            std::string chunk2 = "Total bytes: " + std::to_string(allChunkData.size()) + "\n";
-            auto chunk2Result = co_await writer.sendChunk(chunk2, false);
-            if (!chunk2Result) {
-                HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
-                co_await client.close();
-                co_return;
-            }
-
-            std::string chunk3 = "Echo: " + allChunkData;
-            auto chunk3Result = co_await writer.sendChunk(chunk3, false);
-            if (!chunk3Result) {
-                HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
-                co_await client.close();
-                co_return;
-            }
-
-            // 发送最后一个chunk
-            std::string emptyChunk;
-            auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
-            if (!lastChunkResult) {
-                HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
-                co_await client.close();
-                co_return;
-            }
-
-            HTTP_LOG_INFO("Chunked response sent successfully");
+        std::string chunk1 = "Decoded body bytes: " + std::to_string(requestBody.size()) + "\n";
+        auto chunk1Result = co_await writer.sendChunk(chunk1, false);
+        if (!chunk1Result) {
+            HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
+            co_await client.close();
+            co_return;
         }
+
+        std::string chunk2 = "Echo: ";
+        auto chunk2Result = co_await writer.sendChunk(chunk2, false);
+        if (!chunk2Result) {
+            HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
+            co_await client.close();
+            co_return;
+        }
+
+        auto chunk3Result = co_await writer.sendChunk(requestBody, false);
+        if (!chunk3Result) {
+            HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
+            co_await client.close();
+            co_return;
+        }
+
+        std::string emptyChunk;
+        auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
+        if (!lastChunkResult) {
+            HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
+            co_await client.close();
+            co_return;
+        }
+
+        HTTP_LOG_INFO("Chunked response sent successfully");
     } else {
         // 非chunked请求
         HTTP_LOG_INFO("Non-chunked request");
@@ -260,7 +229,7 @@ Task<void> chunkedTestServer() {
                     HTTP_LOG_ERROR("Request parse error: {}", error.message());
                 }
                 co_await client.close();
-                continue;
+                break;
             }
 
             requestHeaderComplete = result.value();
@@ -277,91 +246,58 @@ Task<void> chunkedTestServer() {
                 static_cast<int>(request.header().method()),
                 request.header().uri());
 
-        // 检查是否是chunked编码
-        if (request.header().isChunked()) {
-            HTTP_LOG_INFO("Detected chunked transfer encoding");
+        const std::string& requestBody = request.bodyStr();
 
-            // 读取所有chunk数据
-            std::string allChunkData;
-            bool isLast = false;
-            int chunkCount = 0;
+        if (!requestBody.empty()) {
+            HTTP_LOG_INFO("Decoded request body: {} bytes", requestBody.size());
+            HTTP_LOG_INFO("Request body: {}", requestBody);
 
-            while (!isLast) {
-                std::string chunkData;
-                auto chunkResult = co_await reader.getChunk(chunkData);
+            HttpResponseHeader respHeader;
+            respHeader.version() = HttpVersion::HttpVersion_1_1;
+            respHeader.code() = HttpStatusCode::OK_200;
+            respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
+            respHeader.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
+            respHeader.headerPairs().addHeaderPair("Server", "galay-http-chunked-test/1.0");
 
-                if (!chunkResult) {
-                    auto& error = chunkResult.error();
-                    HTTP_LOG_ERROR("Chunk parse error: {}", error.message());
-                    break;
-                }
-
-                isLast = chunkResult.value();
-
-                if (!chunkData.empty()) {
-                    chunkCount++;
-                    HTTP_LOG_INFO("Received chunk #{}: {} bytes", chunkCount, chunkData.size());
-                    allChunkData += chunkData;
-                }
+            auto headerResult = co_await writer.sendHeader(std::move(respHeader));
+            if (!headerResult) {
+                HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
+                co_await client.close();
+                continue;
             }
 
-            if (isLast) {
-                HTTP_LOG_INFO("All chunks received. Total: {} chunks, {} bytes",
-                       chunkCount, allChunkData.size());
-                HTTP_LOG_INFO("Chunk data: {}", allChunkData);
-
-                // 发送chunked响应
-                HttpResponseHeader respHeader;
-                respHeader.version() = HttpVersion::HttpVersion_1_1;
-                respHeader.code() = HttpStatusCode::OK_200;
-                respHeader.headerPairs().addHeaderPair("Content-Type", "text/plain");
-                respHeader.headerPairs().addHeaderPair("Transfer-Encoding", "chunked");
-                respHeader.headerPairs().addHeaderPair("Server", "galay-http-chunked-test/1.0");
-
-                // 发送响应头
-                auto headerResult = co_await writer.sendHeader(std::move(respHeader));
-                if (!headerResult) {
-                    HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
-                    co_await client.close();
-                    continue;
-                }
-
-                // 发送多个chunk
-                std::string chunk1 = "Received " + std::to_string(chunkCount) + " chunks\n";
-                auto chunk1Result = co_await writer.sendChunk(chunk1, false);
-                if (!chunk1Result) {
-                    HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
-                    co_await client.close();
-                    continue;
-                }
-
-                std::string chunk2 = "Total bytes: " + std::to_string(allChunkData.size()) + "\n";
-                auto chunk2Result = co_await writer.sendChunk(chunk2, false);
-                if (!chunk2Result) {
-                    HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
-                    co_await client.close();
-                    continue;
-                }
-
-                std::string chunk3 = "Echo: " + allChunkData;
-                auto chunk3Result = co_await writer.sendChunk(chunk3, false);
-                if (!chunk3Result) {
-                    HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
-                    co_await client.close();
-                    continue;
-                }
-
-                // 发送最后一个chunk
-                std::string emptyChunk;
-                auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
-                if (!lastChunkResult) {
-                    HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
-                    co_await client.close();
-                    continue;
-                }
-
-                HTTP_LOG_INFO("Chunked response sent successfully");
+            std::string chunk1 = "Decoded body bytes: " + std::to_string(requestBody.size()) + "\n";
+            auto chunk1Result = co_await writer.sendChunk(chunk1, false);
+            if (!chunk1Result) {
+                HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
+                co_await client.close();
+                continue;
             }
+
+            std::string chunk2 = "Echo: ";
+            auto chunk2Result = co_await writer.sendChunk(chunk2, false);
+            if (!chunk2Result) {
+                HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
+                co_await client.close();
+                continue;
+            }
+
+            auto chunk3Result = co_await writer.sendChunk(requestBody, false);
+            if (!chunk3Result) {
+                HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
+                co_await client.close();
+                continue;
+            }
+
+            std::string emptyChunk;
+            auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
+            if (!lastChunkResult) {
+                HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
+                co_await client.close();
+                continue;
+            }
+
+            HTTP_LOG_INFO("Chunked response sent successfully");
         } else {
             // 非chunked请求
             HTTP_LOG_INFO("Non-chunked request");

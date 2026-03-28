@@ -13,6 +13,7 @@ set(GALAY_HTTP_MANUAL_TEST_TARGETS
     T4-reader_writer_client
     T5-http_server
     T9-chunked_server
+    T10-chunked_client
     T15-range_etag_server
     T18-ws_server
     T19-ws_client
