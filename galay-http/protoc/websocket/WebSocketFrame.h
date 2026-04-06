@@ -4,9 +4,10 @@
 #include "WebSocketBase.h"
 #include "WebSocketError.h"
 #include <expected>
-#include <vector>
-#include <utility>
+#include <string_view>
 #include <sys/uio.h>
+#include <utility>
+#include <vector>
 
 namespace galay::websocket
 {
@@ -135,6 +136,20 @@ public:
      * @param use_mask 是否使用掩码（客户端必须使用）
      */
     static void encodeInto(std::string& out, const WsFrame& frame, bool use_mask = false);
+
+    /**
+     * @brief 直接按消息语义编码到复用缓冲区中
+     * @param out 输出缓冲区，函数会覆盖其现有内容
+     * @param opcode 帧类型
+     * @param payload 负载内容
+     * @param fin 是否是最后一个分片
+     * @param use_mask 是否使用掩码（客户端必须使用）
+     */
+    static void encodeMessageInto(std::string& out,
+                                  WsOpcode opcode,
+                                  std::string_view payload,
+                                  bool fin = true,
+                                  bool use_mask = false);
 
     /**
      * @brief 生成WebSocket帧的header部分（用于writev优化）

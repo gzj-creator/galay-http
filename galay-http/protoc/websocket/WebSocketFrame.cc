@@ -41,16 +41,20 @@ void fillMaskingKey(uint8_t masking_key[4]) {
 }
 
 void appendFrameHeader(std::string& out,
-                       const WsFrame& frame,
+                       WsOpcode opcode,
+                       bool fin,
+                       bool rsv1,
+                       bool rsv2,
+                       bool rsv3,
                        uint64_t payload_len,
                        bool use_mask,
                        uint8_t masking_key[4]) {
     uint8_t byte1 = 0;
-    if (frame.header.fin) byte1 |= 0x80;
-    if (frame.header.rsv1) byte1 |= 0x40;
-    if (frame.header.rsv2) byte1 |= 0x20;
-    if (frame.header.rsv3) byte1 |= 0x10;
-    byte1 |= static_cast<uint8_t>(frame.header.opcode) & 0x0F;
+    if (fin) byte1 |= 0x80;
+    if (rsv1) byte1 |= 0x40;
+    if (rsv2) byte1 |= 0x20;
+    if (rsv3) byte1 |= 0x10;
+    byte1 |= static_cast<uint8_t>(opcode) & 0x0F;
     out.push_back(static_cast<char>(byte1));
 
     uint8_t byte2 = 0;
@@ -78,6 +82,22 @@ void appendFrameHeader(std::string& out,
             out.push_back(static_cast<char>(masking_key[i]));
         }
     }
+}
+
+void appendFrameHeader(std::string& out,
+                       const WsFrame& frame,
+                       uint64_t payload_len,
+                       bool use_mask,
+                       uint8_t masking_key[4]) {
+    appendFrameHeader(out,
+                      frame.header.opcode,
+                      frame.header.fin,
+                      frame.header.rsv1,
+                      frame.header.rsv2,
+                      frame.header.rsv3,
+                      payload_len,
+                      use_mask,
+                      masking_key);
 }
 
 void applyMaskBytes(char* data, size_t len, const uint8_t masking_key[4]) {
@@ -364,6 +384,30 @@ void WsFrameParser::encodeInto(std::string& out, const WsFrame& frame, bool use_
 
     const size_t payload_offset = out.size();
     out.append(frame.payload.data(), frame.payload.size());
+    if (use_mask) {
+        applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
+    }
+}
+
+void WsFrameParser::encodeMessageInto(std::string& out,
+                                      WsOpcode opcode,
+                                      std::string_view payload,
+                                      bool fin,
+                                      bool use_mask)
+{
+    const uint64_t payload_len = payload.size();
+    const size_t header_len = computeHeaderLength(payload_len, use_mask);
+    uint8_t masking_key[4] = {0, 0, 0, 0};
+
+    out.clear();
+    out.reserve(header_len + static_cast<size_t>(payload_len));
+    appendFrameHeader(out, opcode, fin, false, false, false, payload_len, use_mask, masking_key);
+    if (payload_len == 0) {
+        return;
+    }
+
+    const size_t payload_offset = out.size();
+    out.append(payload.data(), payload.size());
     if (use_mask) {
         applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
     }

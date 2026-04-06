@@ -34,6 +34,15 @@
 
 文档总入口见 `docs/README.md`。
 
+## 最新 WSS 验收
+
+`2026-04-06` 按计划文档完成了一轮 WSS server/client 双路径优化与 fresh 验收，详细结果见 [05-性能测试](docs/05-性能测试.md)。
+
+- 验证环境：系统安装版 `galay-kernel=3.4.4`、`galay-ssl=1.2.1`
+- fresh 回归：`ctest --test-dir /tmp/galay-http-wss-opt-current --output-on-failure`，`46/46` 通过
+- 同日 clean `HEAD` 对照下，`B8 -> Rust` 的 `8/4/256` 与 `60/8/1024` 分别提升 `+1.72%`、`+1.21%`
+- `B7-WssServer` 在 `20/4/256` 提升 `+1.11%`，但 `60/8/1024` 基本与 clean `HEAD` 持平，当前仍不能声称已经追平 Rust WSS server
+
 ## 构建要求
 
 - CMake `>= 3.22`

@@ -54,13 +54,13 @@ Task<void> handleWssConnection(WssConn& ws_conn) {
         }
 
         if (opcode == WsOpcode::Text) {
-            auto send_result = co_await writer.sendText(std::move(message));
+            auto send_result = co_await writer.sendText(message);
             if (!send_result) {
                 HTTP_LOG_ERROR("[wss] [echo-text] [send-fail] [{}]", send_result.error().message());
                 break;
             }
         } else if (opcode == WsOpcode::Binary) {
-            auto send_result = co_await writer.sendBinary(std::move(message));
+            auto send_result = co_await writer.sendBinary(message);
             if (!send_result) {
                 HTTP_LOG_ERROR("[wss] [echo-binary] [send-fail] [{}]", send_result.error().message());
                 break;

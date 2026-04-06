@@ -10,6 +10,7 @@
 #include <chrono>
 #include <thread>
 #include <csignal>
+#include "benchmark/WssBenchStats.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-http/kernel/websocket/WsClient.h"
 #include "galay-kernel/kernel/Runtime.h"
@@ -20,30 +21,17 @@ using namespace galay::http;
 using namespace galay::websocket;
 using namespace galay::kernel;
 
-// 统计数据
-std::atomic<uint64_t> g_total_connections{0};
-std::atomic<uint64_t> g_successful_connections{0};
-std::atomic<uint64_t> g_failed_connections{0};
-std::atomic<uint64_t> g_total_messages_sent{0};
-std::atomic<uint64_t> g_total_messages_received{0};
-std::atomic<uint64_t> g_total_bytes_sent{0};
-std::atomic<uint64_t> g_total_bytes_received{0};
+galay::benchmark::WssBenchGlobalStats g_stats;
 std::atomic<bool> g_stop{false};
 std::atomic<int> g_active_clients{0};
-
-// 延迟统计
-std::atomic<uint64_t> g_latency_sum_us{0};
-std::atomic<uint64_t> g_latency_count{0};
-std::atomic<uint32_t> g_latency_min_us{UINT32_MAX};
-std::atomic<uint32_t> g_latency_max_us{0};
 
 struct ClientGuard {
     explicit ClientGuard(std::atomic<int>& counter)
         : m_counter(&counter) {
-        m_counter->fetch_add(1);
+        m_counter->fetch_add(1, std::memory_order_relaxed);
     }
     ~ClientGuard() {
-        m_counter->fetch_sub(1);
+        m_counter->fetch_sub(1, std::memory_order_relaxed);
     }
 private:
     std::atomic<int>* m_counter;
@@ -65,7 +53,16 @@ Task<void> benchmarkWssClient(
     std::chrono::steady_clock::time_point end_time)
 {
     ClientGuard guard(g_active_clients);
-    g_total_connections.fetch_add(1);
+    galay::benchmark::WssClientStatsBatch local_stats;
+    local_stats.total_connections = 1;
+    struct StatsGuard {
+        galay::benchmark::WssClientStatsBatch& batch;
+        galay::benchmark::WssBenchGlobalStats& global;
+
+        ~StatsGuard() {
+            batch.mergeInto(global);
+        }
+    } stats_guard{local_stats, g_stats};
     constexpr auto kOpTimeout = std::chrono::milliseconds(3000);
 
     try {
@@ -78,7 +75,7 @@ Task<void> benchmarkWssClient(
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
             HTTP_LOG_ERROR("[client-{}] [connect-fail] [{}]", client_id, connect_result.error().message());
-            g_failed_connections.fetch_add(1);
+            local_stats.failed_connections = 1;
             co_return;
         }
 
@@ -86,7 +83,7 @@ Task<void> benchmarkWssClient(
         auto handshake_result = co_await client.handshake();
         if (!handshake_result) {
             HTTP_LOG_ERROR("[client-{}] [ssl-handshake-fail] [{}]", client_id, handshake_result.error().message());
-            g_failed_connections.fetch_add(1);
+            local_stats.failed_connections = 1;
             co_await client.close();
             co_return;
         }
@@ -97,18 +94,18 @@ Task<void> benchmarkWssClient(
         auto upgrade_result = co_await upgrader().timeout(kOpTimeout);
         if (!upgrade_result) {
             HTTP_LOG_ERROR("[client-{}] [ws-upgrade-fail] [{}]", client_id, upgrade_result.error().message());
-            g_failed_connections.fetch_add(1);
+            local_stats.failed_connections = 1;
             co_await client.close();
             co_return;
         }
         if (!upgrade_result.value()) {
             HTTP_LOG_ERROR("[client-{}] [ws-upgrade-incomplete]", client_id);
-            g_failed_connections.fetch_add(1);
+            local_stats.failed_connections = 1;
             co_await client.close();
             co_return;
         }
 
-        g_successful_connections.fetch_add(1);
+        local_stats.successful_connections = 1;
 
         // 5. 接收欢迎消息
         std::string welcome_msg;
@@ -121,13 +118,14 @@ Task<void> benchmarkWssClient(
                 co_return;
             }
             if (recv_result.value()) {
-                g_total_messages_received.fetch_add(1);
-                g_total_bytes_received.fetch_add(welcome_msg.size());
+                local_stats.noteMessageReceived(welcome_msg.size());
                 break;
             }
         }
 
         // 6. 发送和接收消息（固定时间压测）
+        std::string echo_msg;
+        WsOpcode echo_opcode = WsOpcode::Text;
         while (!g_stop.load(std::memory_order_relaxed) &&
                std::chrono::steady_clock::now() < end_time) {
             auto round_start = std::chrono::steady_clock::now();
@@ -138,34 +136,22 @@ Task<void> benchmarkWssClient(
                 HTTP_LOG_ERROR("[client-{}] [send-fail] [{}]", client_id, send_result.error().message());
                 goto cleanup;
             }
-            g_total_messages_sent.fetch_add(1);
-            g_total_bytes_sent.fetch_add(message_payload.size());
+            local_stats.noteMessageSent(message_payload.size());
 
             // 接收回显消息
-            std::string echo_msg;
-            WsOpcode echo_opcode;
+            echo_msg.clear();
             while (true) {
-                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode).timeout(kOpTimeout);
+                auto recv_result = co_await session.getMessage(echo_msg, echo_opcode);
                 if (!recv_result) {
                     HTTP_LOG_ERROR("[client-{}] [recv-fail] [{}]", client_id, recv_result.error().message());
                     goto cleanup;
                 }
                 if (recv_result.value()) {
-                    g_total_messages_received.fetch_add(1);
-                    g_total_bytes_received.fetch_add(echo_msg.size());
+                    local_stats.noteMessageReceived(echo_msg.size());
 
                     // 记录延迟统计
                     uint32_t latency_us = toLatencyUs(std::chrono::steady_clock::now() - round_start);
-                    g_latency_sum_us.fetch_add(latency_us);
-                    g_latency_count.fetch_add(1);
-
-                    // 更新最小值
-                    uint32_t old_min = g_latency_min_us.load();
-                    while (latency_us < old_min && !g_latency_min_us.compare_exchange_weak(old_min, latency_us));
-
-                    // 更新最大值
-                    uint32_t old_max = g_latency_max_us.load();
-                    while (latency_us > old_max && !g_latency_max_us.compare_exchange_weak(old_max, latency_us));
+                    local_stats.noteLatency(latency_us);
 
                     break;
                 }
@@ -201,27 +187,31 @@ void printStats(const std::chrono::steady_clock::time_point& start_time,
     std::cout << "========================================\n";
     std::cout << "Duration: " << duration_sec << " seconds\n";
     std::cout << "\nConnections:\n";
-    std::cout << "  Total:      " << g_total_connections.load() << "\n";
-    std::cout << "  Successful: " << g_successful_connections.load() << "\n";
-    std::cout << "  Failed:     " << g_failed_connections.load() << "\n";
+    std::cout << "  Total:      " << g_stats.total_connections.load(std::memory_order_relaxed) << "\n";
+    std::cout << "  Successful: " << g_stats.successful_connections.load(std::memory_order_relaxed) << "\n";
+    std::cout << "  Failed:     " << g_stats.failed_connections.load(std::memory_order_relaxed) << "\n";
     std::cout << "\nMessages:\n";
-    std::cout << "  Sent:       " << g_total_messages_sent.load() << "\n";
-    std::cout << "  Received:   " << g_total_messages_received.load() << "\n";
+    const auto total_messages_sent = g_stats.total_messages_sent.load(std::memory_order_relaxed);
+    const auto total_messages_received = g_stats.total_messages_received.load(std::memory_order_relaxed);
+    const auto total_bytes_sent = g_stats.total_bytes_sent.load(std::memory_order_relaxed);
+    const auto total_bytes_received = g_stats.total_bytes_received.load(std::memory_order_relaxed);
+    std::cout << "  Sent:       " << total_messages_sent << "\n";
+    std::cout << "  Received:   " << total_messages_received << "\n";
     std::cout << "\nData Transfer:\n";
-    std::cout << "  Sent:       " << g_total_bytes_sent.load() << " bytes ("
-              << (g_total_bytes_sent.load() / 1024.0 / 1024.0) << " MB)\n";
-    std::cout << "  Received:   " << g_total_bytes_received.load() << " bytes ("
-              << (g_total_bytes_received.load() / 1024.0 / 1024.0) << " MB)\n";
+    std::cout << "  Sent:       " << total_bytes_sent << " bytes ("
+              << (total_bytes_sent / 1024.0 / 1024.0) << " MB)\n";
+    std::cout << "  Received:   " << total_bytes_received << " bytes ("
+              << (total_bytes_received / 1024.0 / 1024.0) << " MB)\n";
     std::cout << "\nThroughput:\n";
-    std::cout << "  Messages/sec:  " << (g_total_messages_sent.load() / duration_sec) << "\n";
-    std::cout << "  MB/sec (sent): " << (g_total_bytes_sent.load() / 1024.0 / 1024.0 / duration_sec) << "\n";
-    std::cout << "  MB/sec (recv): " << (g_total_bytes_received.load() / 1024.0 / 1024.0 / duration_sec) << "\n";
+    std::cout << "  Messages/sec:  " << (total_messages_sent / duration_sec) << "\n";
+    std::cout << "  MB/sec (sent): " << (total_bytes_sent / 1024.0 / 1024.0 / duration_sec) << "\n";
+    std::cout << "  MB/sec (recv): " << (total_bytes_received / 1024.0 / 1024.0 / duration_sec) << "\n";
 
-    uint64_t latency_count = g_latency_count.load();
+    uint64_t latency_count = g_stats.latency_count.load(std::memory_order_relaxed);
     if (latency_count > 0) {
-        uint64_t latency_sum = g_latency_sum_us.load();
-        uint32_t latency_min = g_latency_min_us.load();
-        uint32_t latency_max = g_latency_max_us.load();
+        uint64_t latency_sum = g_stats.latency_sum_us.load(std::memory_order_relaxed);
+        uint32_t latency_min = g_stats.latency_min_us.load(std::memory_order_relaxed);
+        uint32_t latency_max = g_stats.latency_max_us.load(std::memory_order_relaxed);
         double avg_ms = static_cast<double>(latency_sum) / latency_count / 1000.0;
 
         std::cout << "\nLatency (RTT):\n";
@@ -299,8 +289,9 @@ int main(int argc, char* argv[]) {
                std::chrono::steady_clock::now() < wait_deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        if (g_active_clients.load() > 0) {
-            std::cerr << "Warning: wait timeout, active_clients=" << g_active_clients.load() << "\n";
+        const int active_clients = g_active_clients.load(std::memory_order_relaxed);
+        if (active_clients > 0) {
+            std::cerr << "Warning: wait timeout, active_clients=" << active_clients << "\n";
         }
 
         auto stop_time = std::chrono::steady_clock::now();
