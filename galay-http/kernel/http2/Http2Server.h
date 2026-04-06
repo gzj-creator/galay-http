@@ -30,6 +30,10 @@
 #include <array>
 #include <optional>
 #include <chrono>
+#include <thread>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
 #if defined(__linux__)
 #include <pthread.h>
@@ -210,6 +214,38 @@ inline std::string drainRingBuffer(RingBuffer& rb) {
     return data;
 }
 
+inline void wakeTcpAcceptLoops(const std::string& host, uint16_t port, size_t attempts) {
+    if (attempts == 0 || port == 0) {
+        return;
+    }
+
+    const std::string wake_host =
+        (host.empty() || host == "0.0.0.0" || host == "::") ? "127.0.0.1" : host;
+    for (size_t i = 0; i < attempts; ++i) {
+        const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) {
+            return;
+        }
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(port);
+        if (::inet_pton(AF_INET, wake_host.c_str(), &addr.sin_addr) == 1) {
+            (void)::connect(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr));
+        }
+        ::close(fd);
+    }
+}
+
+inline void waitForLoopDrain(const std::atomic<size_t>& loop_count,
+                             std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (loop_count.load(std::memory_order_acquire) > 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
 /**
  * @brief HTTP/1.1 降级处理器类型
  */
@@ -268,6 +304,10 @@ public:
         m_running.store(false);
         HTTP_LOG_INFO("[h2c] [server] [stopping]");
 
+        wakeTcpAcceptLoops(m_config.host,
+                           m_config.port,
+                           m_server_loop_count.load(std::memory_order_acquire));
+        waitForLoopDrain(m_server_loop_count, std::chrono::milliseconds(100));
         m_runtime.stop();
         HTTP_LOG_INFO("[h2c] [server] [stopped]");
     }
@@ -302,7 +342,13 @@ private:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduleTask(scheduler, serverLoop(scheduler));
+                auto loop = serverLoop(scheduler);
+                m_server_loop_count.fetch_add(1, std::memory_order_acq_rel);
+                if (!scheduleTask(scheduler, std::move(loop))) {
+                    m_server_loop_count.fetch_sub(1, std::memory_order_acq_rel);
+                    HTTP_LOG_ERROR("[h2c] [schedule-fail] [server-loop]");
+                    return false;
+                }
             }
         }
 
@@ -310,6 +356,13 @@ private:
     }
 
     Task<void> serverLoop(IOScheduler* scheduler) {
+        struct LoopExitGuard {
+            H2cServer* server;
+            ~LoopExitGuard() {
+                server->m_server_loop_count.fetch_sub(1, std::memory_order_acq_rel);
+            }
+        } guard{this};
+
         // Each serverLoop creates its own listener socket
         TcpSocket listener(IPType::IPV4);
 
@@ -371,6 +424,10 @@ private:
             }
         }
 
+        auto close_result = co_await listener.close();
+        if (!close_result) {
+            HTTP_LOG_WARN("[socket] [close-fail] [listener] [{}]", close_result.error().message());
+        }
         co_return;
     }
     
@@ -589,6 +646,7 @@ private:
     Http2ActiveConnHandler m_active_conn_handler;
     Http1FallbackHandler m_http1_fallback;
     std::atomic<bool> m_running;
+    std::atomic<size_t> m_server_loop_count{0};
 };
 
 inline H2cServer H2cServerBuilder::build() const { return H2cServer(m_config); }
@@ -746,6 +804,10 @@ public:
 
         m_running.store(false);
         HTTP_LOG_INFO("[h2] [server] [stopping]");
+        wakeTcpAcceptLoops(m_config.host,
+                           m_config.port,
+                           m_server_loop_count.load(std::memory_order_acquire));
+        waitForLoopDrain(m_server_loop_count, std::chrono::milliseconds(100));
         m_runtime.stop();
         HTTP_LOG_INFO("[h2] [server] [stopped]");
     }
@@ -826,7 +888,13 @@ private:
         for (size_t i = 0; i < io_scheduler_count; i++) {
             auto* scheduler = m_runtime.getIOScheduler(i);
             if (scheduler) {
-                scheduleTask(scheduler, serverLoop(scheduler));
+                auto loop = serverLoop(scheduler);
+                m_server_loop_count.fetch_add(1, std::memory_order_acq_rel);
+                if (!scheduleTask(scheduler, std::move(loop))) {
+                    m_server_loop_count.fetch_sub(1, std::memory_order_acq_rel);
+                    HTTP_LOG_ERROR("[h2] [schedule-fail] [server-loop]");
+                    return false;
+                }
             }
         }
         return true;
@@ -885,6 +953,13 @@ private:
     }
 
     Task<void> serverLoop(IOScheduler* scheduler) {
+        struct LoopExitGuard {
+            H2Server* server;
+            ~LoopExitGuard() {
+                server->m_server_loop_count.fetch_sub(1, std::memory_order_acq_rel);
+            }
+        } guard{this};
+
         TcpSocket listener(IPType::IPV4);
 
         auto reuse_result = listener.option().handleReuseAddr();
@@ -949,6 +1024,10 @@ private:
             }
         }
 
+        auto close_result = co_await listener.close();
+        if (!close_result) {
+            HTTP_LOG_WARN("[socket] [close-fail] [h2-listener] [{}]", close_result.error().message());
+        }
         co_return;
     }
 
@@ -1036,6 +1115,7 @@ private:
     Http2ActiveConnHandler m_active_conn_handler;
     std::function<Task<void>(galay::http::HttpConnImpl<galay::ssl::SslSocket>)> m_http1_fallback;
     std::atomic<bool> m_running;
+    std::atomic<size_t> m_server_loop_count{0};
     galay::ssl::SslContext m_ssl_ctx;
 };
 

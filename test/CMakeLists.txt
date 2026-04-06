@@ -1,7 +1,7 @@
 project(test)
 
 find_package(spdlog REQUIRED)
-find_package(galay-kernel 3.4.1 REQUIRED)
+find_package(galay-kernel 3.4.4 REQUIRED CONFIG)
 
 include_directories(${CMAKE_SOURCE_DIR}/galay-http)
 
@@ -18,6 +18,9 @@ set(GALAY_HTTP_MANUAL_TEST_TARGETS
     T18-ws_server
     T19-ws_client
     T21-https_server
+    T22-https_client
+    T23-https_stress_test
+    T24-simple_https_test
     T25-h2c_client
     T26-h2c_server
     T28-h2_server

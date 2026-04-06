@@ -13,6 +13,162 @@ namespace galay::websocket
 using namespace galay::async;
 using namespace galay::kernel;
 
+template<typename SocketType>
+class WsConnImpl;
+
+namespace detail {
+
+template<typename SocketType>
+struct WsEchoMachine {
+    using result_type = std::expected<bool, WsError>;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::ReadWrite;
+
+    static WsWriterSetting resolveWriterSetting(WsConnImpl<SocketType>* conn, WsWriterSetting setting) {
+        setting.use_mask = !conn->m_is_server;
+        return setting;
+    }
+
+    WsEchoMachine(WsConnImpl<SocketType>* conn,
+                  const WsReaderSetting& reader_setting,
+                  WsWriterSetting writer_setting,
+                  std::string& message,
+                  WsOpcode& opcode)
+        : m_conn(conn)
+        , m_reader_setting(reader_setting)
+        , m_read_state(conn->m_ring_buffer,
+                       m_reader_setting,
+                       message,
+                       opcode,
+                       conn->m_is_server,
+                       !conn->m_is_server,
+                       nullptr)
+        , m_writer(resolveWriterSetting(conn, writer_setting), conn->m_socket)
+        , m_message(&message)
+        , m_opcode(&opcode) {}
+
+    MachineAction<result_type> advance() {
+        ++m_conn->m_echo_counters.composite_advance_calls;
+        if (m_result.has_value()) {
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (m_stage == Stage::kRead) {
+            return advanceRead();
+        }
+        return advanceWrite();
+    }
+
+    void onRead(std::expected<size_t, IOError> result) {
+        if (!result) {
+            m_read_state.setRecvError(result.error());
+            m_result = m_read_state.takeResult();
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_read_state.onPeerClosed();
+            m_result = m_read_state.takeResult();
+            return;
+        }
+
+        m_read_state.onBytesReceived(result.value());
+    }
+
+    void onWrite(std::expected<size_t, IOError> result) {
+        if (!result) {
+            m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
+            return;
+        }
+
+        const size_t written = result.value();
+        if (written > 0) {
+            m_writer.updateRemainingWritev(written);
+        }
+
+        if (m_writer.getRemainingBytes() == 0) {
+            m_result = true;
+            return;
+        }
+
+        if (m_writer.getIovecsData() == nullptr || m_writer.getIovecsCount() == 0) {
+            m_result = std::unexpected(WsError(kWsSendError, "No remaining iovec to write"));
+        }
+    }
+
+private:
+    enum class Stage : uint8_t {
+        kRead,
+        kWrite,
+    };
+
+    MachineAction<result_type> advanceRead() {
+        if (m_read_state.parseFromBuffer()) {
+            return onParsedMessage();
+        }
+
+        if (!m_read_state.prepareRecvWindow()) {
+            m_result = m_read_state.takeResult();
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        return MachineAction<result_type>::waitReadv(
+            m_read_state.recvIovecsData(),
+            m_read_state.recvIovecsCount());
+    }
+
+    MachineAction<result_type> onParsedMessage() {
+        auto parsed = m_read_state.takeResult();
+        if (!parsed.has_value()) {
+            m_result = std::unexpected(parsed.error());
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (*m_opcode == WsOpcode::Text) {
+            ++m_conn->m_echo_counters.composite_hits;
+            m_writer.prepareSendFrame(WsFrameParser::createTextFrame(*m_message));
+            m_stage = Stage::kWrite;
+            return advanceWrite();
+        }
+
+        if (*m_opcode == WsOpcode::Binary) {
+            ++m_conn->m_echo_counters.composite_hits;
+            m_writer.prepareSendFrame(WsFrameParser::createBinaryFrame(*m_message));
+            m_stage = Stage::kWrite;
+            return advanceWrite();
+        }
+
+        ++m_conn->m_echo_counters.composite_fallbacks;
+        m_result = true;
+        return MachineAction<result_type>::complete(true);
+    }
+
+    MachineAction<result_type> advanceWrite() {
+        if (m_writer.getRemainingBytes() == 0) {
+            m_result = true;
+            return MachineAction<result_type>::complete(true);
+        }
+
+        const auto* iov_data = m_writer.getIovecsData();
+        const auto iov_count = m_writer.getIovecsCount();
+        if (iov_data == nullptr || iov_count == 0) {
+            m_result = std::unexpected(WsError(kWsSendError, "No remaining iovec to write"));
+            return MachineAction<result_type>::complete(std::move(*m_result));
+        }
+        return MachineAction<result_type>::waitWritev(iov_data, iov_count);
+    }
+
+    WsConnImpl<SocketType>* m_conn;
+    WsReaderSetting m_reader_setting;
+    WsMessageReadState m_read_state;
+    WsWriterImpl<SocketType> m_writer;
+    std::string* m_message;
+    WsOpcode* m_opcode;
+    Stage m_stage = Stage::kRead;
+    std::optional<result_type> m_result;
+};
+
+} // namespace detail
+
 /**
  * @brief WebSocket连接模板类
  * @tparam SocketType Socket类型（TcpSocket 或 SslSocket）
@@ -22,6 +178,13 @@ template<typename SocketType>
 class WsConnImpl
 {
 public:
+    struct EchoCounters {
+        size_t composite_awaitables_started = 0;
+        size_t composite_hits = 0;
+        size_t composite_fallbacks = 0;
+        size_t composite_advance_calls = 0;
+    };
+
     /**
      * @brief 从HttpConn构造（用于升级场景）
      * @note 升级之后HttpConn不再可用
@@ -100,6 +263,20 @@ public:
         return WsWriterImpl<SocketType>(setting, m_socket);
     }
 
+    auto echoOnce(std::string& message,
+                  WsOpcode& opcode,
+                  const WsReaderSetting& reader_setting = WsReaderSetting(),
+                  WsWriterSetting writer_setting = WsWriterSetting::byServer()) {
+        static_assert(is_tcp_socket_v<SocketType>,
+                      "WsConnImpl::echoOnce is currently only supported for TcpSocket");
+        ++m_echo_counters.composite_awaitables_started;
+        using ResultType = std::expected<bool, WsError>;
+        return AwaitableBuilder<ResultType>::fromStateMachine(
+                   m_socket.controller(),
+                   detail::WsEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode))
+            .build();
+    }
+
     /**
      * @brief 是否为服务器端连接
      */
@@ -108,11 +285,13 @@ public:
     // 允许WsServerImpl访问私有成员
     template<typename S>
     friend class WsServerImpl;
+    friend struct detail::WsEchoMachine<SocketType>;
 
 private:
     SocketType m_socket;
     RingBuffer m_ring_buffer;
     bool m_is_server;
+    EchoCounters m_echo_counters;
 };
 
 // 类型别名 - WebSocket over TCP

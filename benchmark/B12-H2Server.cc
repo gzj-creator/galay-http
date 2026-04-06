@@ -175,6 +175,46 @@ Task<void> handleActiveConn(Http2ConnContext& ctx) {
     co_return;
 }
 
+Task<void> handleStream(Http2Stream::ptr stream) {
+    while (true) {
+        auto frame_result = co_await stream->getFrame();
+        if (!frame_result || !frame_result.value()) {
+            co_return;
+        }
+        auto frame = std::move(frame_result.value());
+        if ((frame->isHeaders() || frame->isData()) && frame->isEndStream()) {
+            break;
+        }
+    }
+
+    auto& request = stream->request();
+    if (request.method.empty()) {
+        co_return;
+    }
+
+    const size_t body_size = request.bodySize();
+    const size_t body_chunk_count = request.bodyChunkCount();
+    auto response_headers = sharedEncodedEchoHeaders(body_size);
+
+    if (body_chunk_count == 1) {
+        stream->sendEncodedHeadersAndData(
+            std::move(response_headers),
+            request.takeSingleBodyChunk(),
+            true);
+    } else if (body_chunk_count > 1) {
+        stream->sendEncodedHeadersAndDataChunks(
+            std::string(*response_headers),
+            request.takeBodyChunks(),
+            true);
+    } else {
+        stream->sendEncodedHeadersAndData(
+            std::move(response_headers),
+            std::string(),
+            true);
+    }
+    co_return;
+}
+
 int main(int argc, char* argv[]) {
     uint16_t port = 9443;
     int io_threads = 4;
@@ -222,7 +262,7 @@ int main(int argc, char* argv[]) {
             .maxConcurrentStreams(1000)
             .initialWindowSize(65535)
             .flowControlTargetWindow(1u << 20)
-            .activeConnHandler(handleActiveConn)
+            .streamHandler(handleStream)
             .build());
 
         server.start();

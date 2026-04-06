@@ -39,8 +39,13 @@
 - CMake `>= 3.22`
 - `C++23` 编译器
 - `spdlog`
-- `galay-kernel`
+- `galay-kernel >= 3.4.4`（`CONFIG` package）
 - 启用 TLS 时额外需要 `galay-ssl` 与 OpenSSL
+
+依赖解析优先级：
+
+- 根 `CMakeLists.txt` 会优先尝试 sibling/shared 前缀：`../.galay-prefix/latest`、`../galay-kernel/install-local`、`../galay-kernel/_install-smoke-344`、`../galay-kernel/_install-smoke`
+- 如果你的依赖不在这些前缀，请显式传 `-DCMAKE_PREFIX_PATH=...`
 
 默认选项由根 `CMakeLists.txt` 定义：
 
@@ -67,6 +72,7 @@
 ```bash
 cmake -S . -B build \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/Users/gongzhijie/Desktop/projects/git/.galay-prefix/latest \
   -DBUILD_EXAMPLES=ON \
   -DBUILD_TESTING=ON \
   -DBUILD_BENCHMARKS=ON \
@@ -81,6 +87,7 @@ cmake --build build --parallel
 ```bash
 cmake -S . -B build-ssl \
   -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH=/Users/gongzhijie/Desktop/projects/git/.galay-prefix/latest \
   -DGALAY_HTTP_ENABLE_SSL=ON \
   -DBUILD_EXAMPLES=ON \
   -DBUILD_TESTING=ON \

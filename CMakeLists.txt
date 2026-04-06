@@ -1,9 +1,26 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 2.0.0 LANGUAGES CXX)
+project(galay-http VERSION 2.0.1 LANGUAGES CXX)
 
 include(CTest)
 
-list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
+set(CMAKE_NO_SYSTEM_FROM_IMPORTED ON)
+
+# Prefer the shared local prefix and sibling local installs over stale global paths.
+get_filename_component(GALAY_HTTP_REPO_ROOT "${CMAKE_CURRENT_LIST_DIR}" ABSOLUTE)
+set(GALAY_HTTP_PREFIX_CANDIDATES
+    "${GALAY_HTTP_REPO_ROOT}/../.galay-prefix/latest"
+    "${GALAY_HTTP_REPO_ROOT}/../galay-kernel/install-local"
+    "${GALAY_HTTP_REPO_ROOT}/../galay-kernel/_install-smoke-344"
+    "${GALAY_HTTP_REPO_ROOT}/../galay-kernel/_install-smoke"
+)
+
+foreach(_galay_http_prefix IN LISTS GALAY_HTTP_PREFIX_CANDIDATES)
+    if(EXISTS "${_galay_http_prefix}")
+        list(PREPEND CMAKE_PREFIX_PATH "${_galay_http_prefix}")
+    endif()
+endforeach()
+list(REMOVE_DUPLICATES CMAKE_PREFIX_PATH)
 
 # 选项（与 galay-rpc 风格保持一致）
 option(BUILD_TESTS "Deprecated alias of BUILD_TESTING" "${BUILD_TESTING}")
@@ -49,7 +66,7 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # 先锁定 galay-kernel，避免 galay-ssl 的 find_dependency() 抢先注入旧的导入目标。
-find_package(galay-kernel 3.4.1 REQUIRED)
+find_package(galay-kernel 3.4.4 REQUIRED CONFIG)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")

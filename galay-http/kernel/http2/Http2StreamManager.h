@@ -625,7 +625,7 @@ public:
 private:
     static constexpr size_t kSslIoOwnerBatchSize = 64;
     static constexpr auto kSslIoOwnerHotWaitInterval = std::chrono::milliseconds(1);
-    static constexpr auto kSslIoOwnerActivePollInterval = std::chrono::milliseconds(1);
+    static constexpr auto kSslIoOwnerActivePollInterval = std::chrono::milliseconds(50);
     static constexpr auto kSslIoOwnerIdlePollInterval = std::chrono::milliseconds(5);
 
     void collectOutgoingFrame(Http2OutgoingFrame&& item,
@@ -971,10 +971,12 @@ private:
         std::vector<Http2OutgoingFrame::WaiterPtr> waiters;
         std::vector<uint8_t> frame_scratch;
         std::string coalesced_buffer;
+        std::vector<char> recv_scratch;
         outgoing_batch.reserve(64);
         waiters.reserve(64);
         frame_scratch.reserve(65536);
         coalesced_buffer.reserve(65536);
+        recv_scratch.reserve(65536);
 
         while (true) {
             outgoing_batch.clear();
@@ -1201,7 +1203,27 @@ private:
             char* recv_buffer = nullptr;
             size_t recv_length = 0;
             auto write_iovecs = borrowWriteIovecs(m_conn.ringBuffer());
-            if (!IoVecWindow::bindFirstNonEmpty(write_iovecs, recv_buffer, recv_length) || recv_length == 0) {
+            const struct iovec* first_write_iov = IoVecWindow::firstNonEmpty(write_iovecs);
+            if (first_write_iov == nullptr) {
+                m_conn.setLastReadError("RingBuffer is full");
+                HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-window-full]");
+                enqueueGoaway(Http2ErrorCode::ProtocolError);
+                break;
+            }
+            size_t total_writable = 0;
+            for (const auto& iov : write_iovecs) {
+                total_writable += iov.iov_len;
+            }
+            const bool staged_recv = first_write_iov->iov_len != total_writable;
+            if (staged_recv) {
+                recv_scratch.resize(total_writable);
+                recv_buffer = recv_scratch.data();
+                recv_length = recv_scratch.size();
+            } else {
+                recv_buffer = static_cast<char*>(first_write_iov->iov_base);
+                recv_length = first_write_iov->iov_len;
+            }
+            if (recv_length == 0) {
                 m_conn.setLastReadError("RingBuffer is full");
                 HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-window-full]");
                 enqueueGoaway(Http2ErrorCode::ProtocolError);
@@ -1253,7 +1275,11 @@ private:
             }
 
             m_conn.clearLastReadError();
-            m_conn.ringBuffer().produce(bytes_read);
+            if (staged_recv) {
+                m_conn.feedData(recv_scratch.data(), bytes_read);
+            } else {
+                m_conn.ringBuffer().produce(bytes_read);
+            }
         }
 
         m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {

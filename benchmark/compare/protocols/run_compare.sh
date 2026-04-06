@@ -7,6 +7,7 @@ GO_SERVER_DIR="$COMPARE_ROOT/go-server"
 RUST_SERVER_DIR="$COMPARE_ROOT/rust-server"
 GO_CLIENT_DIR="$COMPARE_ROOT/go-client"
 GALAY_BUILD_DIR="${GALAY_BUILD_DIR:-$ROOT/build-ssl-nolog}"
+GALAY_CMAKE_PREFIX_PATH="${GALAY_CMAKE_PREFIX_PATH:-$ROOT/../.galay-prefix/latest}"
 BENCH_THREADS="${BENCH_THREADS:-4}"
 
 OUT_DIR="$ROOT/benchmark/results/$(date +%Y%m%d-%H%M%S)-galay-go-rust-http-proto-compare"
@@ -49,7 +50,8 @@ if [[ ! -f "$GALAY_BUILD_DIR/CMakeCache.txt" ]]; then
   cmake -S "$ROOT" -B "$GALAY_BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DGALAY_HTTP_ENABLE_SSL=ON \
-    -DGALAY_HTTP_DISABLE_FRAMEWORK_LOG=ON >/dev/null
+    -DGALAY_HTTP_DISABLE_FRAMEWORK_LOG=ON \
+    -DCMAKE_PREFIX_PATH="$GALAY_CMAKE_PREFIX_PATH" >/dev/null
 fi
 
 echo "[build] galay servers"

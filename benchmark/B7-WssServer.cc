@@ -154,8 +154,15 @@ Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
 }
 
 int main(int argc, char* argv[]) {
-    // 禁用日志以获得最佳性能
-    galay::http::HttpLogger::disable();
+    bool debug_log = false;
+    if (const char* env = std::getenv("GALAY_WSS_DEBUG_LOG")) {
+        debug_log = std::atoi(env) != 0;
+    }
+    if (debug_log) {
+        galay::http::HttpLogger::console();
+    } else {
+        galay::http::HttpLogger::disable();
+    }
 
     int port = 8443;
     int io_threads = 4;

@@ -13,7 +13,6 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
-#include <vector>
 #include <sys/uio.h>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
@@ -51,6 +50,9 @@ template<typename T>
 inline constexpr bool is_ws_writer_ssl_socket_v = is_ws_writer_ssl_socket<T>::value;
 
 namespace detail {
+
+template<typename SocketType>
+struct WsEchoMachine;
 
 template<typename SocketType>
 struct WsTcpWritevMachine {
@@ -192,47 +194,70 @@ template<typename SocketType>
 class WsWriterImpl
 {
 public:
+    struct OperationCounters {
+        size_t send_awaitables_started = 0;
+    };
+
+    struct FastPathCounters {
+        size_t hits = 0;
+        size_t fallbacks = 0;
+    };
+
     WsWriterImpl(const WsWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(&socket)
         , m_remaining_bytes(0)
     {
+        m_writev_cursor.reserve(2);
     }
 
     auto sendText(const std::string& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
-            WsFrame frame = WsFrameParser::createTextFrame(text, fin);
-            prepareSendFrame(std::move(frame));
+            ++m_operation_counters.send_awaitables_started;
+            if (!tryPrepareCommonTcpFrame(WsOpcode::Text, text, fin)) {
+                WsFrame frame = WsFrameParser::createTextFrame(text, fin);
+                prepareSendFrame(std::move(frame));
+            }
         }
         return makeSendAwaitable();
     }
 
     auto sendText(std::string&& text, bool fin = true) {
         if (m_remaining_bytes == 0) {
-            WsFrame frame = WsFrameBuilder().text(std::move(text), fin).buildMove();
-            prepareSendFrame(std::move(frame));
+            ++m_operation_counters.send_awaitables_started;
+            if (!tryPrepareCommonTcpFrame(WsOpcode::Text, std::move(text), fin)) {
+                WsFrame frame = WsFrameBuilder().text(std::move(text), fin).buildMove();
+                prepareSendFrame(std::move(frame));
+            }
         }
         return makeSendAwaitable();
     }
 
     auto sendBinary(const std::string& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
-            WsFrame frame = WsFrameParser::createBinaryFrame(data, fin);
-            prepareSendFrame(std::move(frame));
+            ++m_operation_counters.send_awaitables_started;
+            if (!tryPrepareCommonTcpFrame(WsOpcode::Binary, data, fin)) {
+                WsFrame frame = WsFrameParser::createBinaryFrame(data, fin);
+                prepareSendFrame(std::move(frame));
+            }
         }
         return makeSendAwaitable();
     }
 
     auto sendBinary(std::string&& data, bool fin = true) {
         if (m_remaining_bytes == 0) {
-            WsFrame frame = WsFrameBuilder().binary(std::move(data), fin).buildMove();
-            prepareSendFrame(std::move(frame));
+            ++m_operation_counters.send_awaitables_started;
+            if (!tryPrepareCommonTcpFrame(WsOpcode::Binary, std::move(data), fin)) {
+                WsFrame frame = WsFrameBuilder().binary(std::move(data), fin).buildMove();
+                prepareSendFrame(std::move(frame));
+            }
         }
         return makeSendAwaitable();
     }
 
     auto sendPing(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
+            ++m_operation_counters.send_awaitables_started;
             WsFrame frame = WsFrameParser::createPingFrame(data);
             prepareSendFrame(std::move(frame));
         }
@@ -241,6 +266,7 @@ public:
 
     auto sendPong(const std::string& data = "") {
         if (m_remaining_bytes == 0) {
+            ++m_operation_counters.send_awaitables_started;
             WsFrame frame = WsFrameParser::createPongFrame(data);
             prepareSendFrame(std::move(frame));
         }
@@ -249,6 +275,7 @@ public:
 
     auto sendClose(WsCloseCode code = WsCloseCode::Normal, const std::string& reason = "") {
         if (m_remaining_bytes == 0) {
+            ++m_operation_counters.send_awaitables_started;
             WsFrame frame = WsFrameParser::createCloseFrame(code, reason);
             prepareSendFrame(std::move(frame));
         }
@@ -257,6 +284,7 @@ public:
 
     auto sendFrame(const WsFrame& frame) {
         if (m_remaining_bytes == 0) {
+            ++m_operation_counters.send_awaitables_started;
             prepareSendFrame(frame);
         }
         return makeSendAwaitable();
@@ -264,6 +292,7 @@ public:
 
     auto sendFrame(WsFrame&& frame) {
         if (m_remaining_bytes == 0) {
+            ++m_operation_counters.send_awaitables_started;
             prepareSendFrame(std::move(frame));
         }
         return makeSendAwaitable();
@@ -271,6 +300,7 @@ public:
 
     void prepareSslMessage(WsOpcode opcode, std::string_view payload, bool fin = true) {
         resetPendingState();
+        ++m_operation_counters.send_awaitables_started;
         WsFrame frame = WsFrameBuilder()
             .opcode(opcode)
             .fin(fin)
@@ -284,9 +314,107 @@ private:
         return detail::buildSendAwaitable(*m_socket, *this);
     }
 
+    static constexpr bool canUseCommonTcpFastPath(WsOpcode opcode, bool fin, bool use_mask) {
+        return !use_mask &&
+               fin &&
+               (opcode == WsOpcode::Text || opcode == WsOpcode::Binary);
+    }
+
+    bool tryPrepareCommonTcpFrame(WsOpcode opcode, const std::string& payload, bool fin) {
+        if constexpr (!is_tcp_socket_v<SocketType>) {
+            return false;
+        } else {
+            if (!canUseCommonTcpFastPath(opcode, fin, m_setting.use_mask)) {
+                return false;
+            }
+
+            prepareCommonTcpFrameHeader(opcode, payload.size());
+            m_payload_buffer = payload;
+            finalizeWritevBuffers(true);
+            return true;
+        }
+    }
+
+    bool tryPrepareCommonTcpFrame(WsOpcode opcode, std::string&& payload, bool fin) {
+        if constexpr (!is_tcp_socket_v<SocketType>) {
+            return false;
+        } else {
+            if (!canUseCommonTcpFastPath(opcode, fin, m_setting.use_mask)) {
+                return false;
+            }
+
+            prepareCommonTcpFrameHeader(opcode, payload.size());
+            m_payload_buffer = std::move(payload);
+            finalizeWritevBuffers(true);
+            return true;
+        }
+    }
+
+    bool tryPrepareCommonTcpFrame(const WsFrame& frame) {
+        if constexpr (!is_tcp_socket_v<SocketType>) {
+            return false;
+        } else {
+            if (!canUseCommonTcpFastPath(frame.header.opcode, frame.header.fin, m_setting.use_mask)) {
+                return false;
+            }
+
+            prepareCommonTcpFrameHeader(frame.header.opcode, frame.payload.size());
+            m_payload_buffer = frame.payload;
+            finalizeWritevBuffers(true);
+            return true;
+        }
+    }
+
+    bool tryPrepareCommonTcpFrame(WsFrame&& frame) {
+        if constexpr (!is_tcp_socket_v<SocketType>) {
+            return false;
+        } else {
+            if (!canUseCommonTcpFastPath(frame.header.opcode, frame.header.fin, m_setting.use_mask)) {
+                return false;
+            }
+
+            prepareCommonTcpFrameHeader(frame.header.opcode, frame.payload.size());
+            m_payload_buffer = std::move(frame.payload);
+            finalizeWritevBuffers(true);
+            return true;
+        }
+    }
+
+    void prepareCommonTcpFrameHeader(WsOpcode opcode, size_t payload_size) {
+        m_buffer.clear();
+        const uint64_t payload_len = static_cast<uint64_t>(payload_size);
+        if (payload_len < 126) {
+            m_buffer.reserve(2);
+        } else if (payload_len <= 0xFFFF) {
+            m_buffer.reserve(4);
+        } else {
+            m_buffer.reserve(10);
+        }
+
+        m_buffer.push_back(static_cast<char>(0x80 | (static_cast<uint8_t>(opcode) & 0x0F)));
+        if (payload_len < 126) {
+            m_buffer.push_back(static_cast<char>(payload_len));
+            return;
+        }
+
+        if (payload_len <= 0xFFFF) {
+            m_buffer.push_back(static_cast<char>(126));
+            m_buffer.push_back(static_cast<char>((payload_len >> 8) & 0xFF));
+            m_buffer.push_back(static_cast<char>(payload_len & 0xFF));
+            return;
+        }
+
+        m_buffer.push_back(static_cast<char>(127));
+        for (int i = 7; i >= 0; --i) {
+            m_buffer.push_back(static_cast<char>((payload_len >> (i * 8)) & 0xFF));
+        }
+    }
+
     void prepareSendFrame(const WsFrame& frame) {
         if constexpr (is_tcp_socket_v<SocketType>) {
-            prepareWritevBuffers(frame);
+            if (!tryPrepareCommonTcpFrame(frame)) {
+                prepareWritevBuffers(frame);
+            }
         } else {
             WsFrameParser::encodeInto(m_buffer, frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
@@ -295,7 +423,9 @@ private:
 
     void prepareSendFrame(WsFrame&& frame) {
         if constexpr (is_tcp_socket_v<SocketType>) {
-            prepareWritevBuffers(std::move(frame));
+            if (!tryPrepareCommonTcpFrame(frame)) {
+                prepareWritevBuffers(std::move(frame));
+            }
         } else {
             WsFrameParser::encodeInto(m_buffer, frame, m_setting.use_mask);
             m_remaining_bytes = m_buffer.size();
@@ -305,36 +435,39 @@ private:
     void prepareWritevBuffers(const WsFrame& frame) {
         m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
         m_payload_buffer = frame.payload;
-        finalizeWritevBuffers();
+        finalizeWritevBuffers(false);
     }
 
     void prepareWritevBuffers(WsFrame&& frame) {
         m_buffer = WsFrameParser::toBytesHeader(frame, m_setting.use_mask, m_masking_key);
         m_payload_buffer = std::move(frame.payload);
-        finalizeWritevBuffers();
+        finalizeWritevBuffers(false);
     }
 
-    void finalizeWritevBuffers() {
+    void finalizeWritevBuffers(bool used_fast_path) {
         if (m_setting.use_mask && !m_payload_buffer.empty()) {
             WsFrameParser::applyMask(m_payload_buffer, m_masking_key);
         }
 
-        std::vector<iovec> iovecs;
-        iovecs.reserve(2);
-        iovecs.push_back({const_cast<char*>(m_buffer.data()), m_buffer.size()});
+        m_writev_cursor.clear();
+        m_writev_cursor.append({const_cast<char*>(m_buffer.data()), m_buffer.size()});
         if (!m_payload_buffer.empty()) {
-            iovecs.push_back({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
+            m_writev_cursor.append({const_cast<char*>(m_payload_buffer.data()), m_payload_buffer.size()});
         }
 
-        m_writev_cursor.reset(std::move(iovecs));
         m_remaining_bytes = m_writev_cursor.remainingBytes();
+        if (used_fast_path) {
+            ++m_fast_path_counters.hits;
+        } else {
+            ++m_fast_path_counters.fallbacks;
+        }
     }
 
 public:
     void resetPendingState() {
         m_buffer.clear();
         m_payload_buffer.clear();
-        m_writev_cursor.reset(std::vector<iovec>{});
+        m_writev_cursor.clear();
         m_remaining_bytes = 0;
     }
 
@@ -353,7 +486,7 @@ public:
             m_remaining_bytes = 0;
             m_buffer.clear();
             m_payload_buffer.clear();
-            m_writev_cursor.reset(std::vector<iovec>{});
+            m_writev_cursor.clear();
             return;
         }
 
@@ -387,7 +520,11 @@ private:
     std::string m_payload_buffer;
     IoVecCursor m_writev_cursor;
     size_t m_remaining_bytes;
+    OperationCounters m_operation_counters;
+    FastPathCounters m_fast_path_counters;
     uint8_t m_masking_key[4];
+
+    friend struct detail::WsEchoMachine<SocketType>;
 };
 
 using WsWriter = WsWriterImpl<TcpSocket>;
