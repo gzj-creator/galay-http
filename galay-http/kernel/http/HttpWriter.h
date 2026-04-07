@@ -13,6 +13,7 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <vector>
 #include <sys/uio.h>
@@ -210,6 +211,10 @@ template<typename SocketType>
 class HttpWriterImpl
 {
 public:
+    struct FastPathCounters {
+        size_t ssl_coalesced_layout_hits = 0;
+    };
+
     HttpWriterImpl(const HttpWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(&socket)
@@ -233,8 +238,12 @@ public:
                 m_buffer = response.header().toString();
                 prepareTcpSendLayout();
             } else {
-                m_buffer = response.toString();
-                m_remaining_bytes = m_buffer.size();
+                if (!response.header().isChunked()) {
+                    response.header().headerPairs().addHeaderPairIfNotExist(
+                        "Content-Length",
+                        std::to_string(response.bodyStr().size()));
+                }
+                prepareSslSendLayout(response.header().toString(), response.bodyStr());
             }
         }
 
@@ -259,8 +268,12 @@ public:
                 m_buffer = request.header().toString();
                 prepareTcpSendLayout();
             } else {
-                m_buffer = request.toString();
-                m_remaining_bytes = m_buffer.size();
+                if (!request.header().isChunked()) {
+                    request.header().headerPairs().addHeaderPairIfNotExist(
+                        "Content-Length",
+                        std::to_string(request.bodyStr().size()));
+                }
+                prepareSslSendLayout(request.header().toString(), request.bodyStr());
             }
         }
 
@@ -406,6 +419,17 @@ private:
         m_remaining_bytes = m_writev_cursor.remainingBytes();
     }
 
+    void prepareSslSendLayout(std::string header, std::string_view body) {
+        m_buffer.clear();
+        m_buffer.reserve(header.size() + body.size());
+        m_buffer.append(std::move(header));
+        if (!body.empty()) {
+            m_buffer.append(body.data(), body.size());
+        }
+        m_remaining_bytes = m_buffer.size();
+        ++m_fast_path_counters.ssl_coalesced_layout_hits;
+    }
+
     static void logResponseStatus(HttpStatusCode code) {
         const int status = static_cast<int>(code);
         if (status >= 500) {
@@ -423,6 +447,7 @@ private:
     size_t m_remaining_bytes;
     std::string m_body_buffer;
     IoVecCursor m_writev_cursor;
+    FastPathCounters m_fast_path_counters;
 };
 
 using HttpWriter = HttpWriterImpl<TcpSocket>;

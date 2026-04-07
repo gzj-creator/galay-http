@@ -23,6 +23,9 @@ namespace galay::http
         //移交所有权
         std::string getBodyStr();
 
+        // 获取 body 的常量引用（非破坏性，推荐用于读取）
+        const std::string& bodyStr() const;
+
         void setHeader(HttpResponseHeader&& header);
         void setHeader(HttpResponseHeader& header);
         

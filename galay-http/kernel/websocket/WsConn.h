@@ -167,6 +167,158 @@ private:
     std::optional<result_type> m_result;
 };
 
+#ifdef GALAY_HTTP_SSL_ENABLED
+template<typename SocketType>
+struct WsSslEchoMachine {
+    using result_type = std::expected<bool, WsError>;
+    static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::ReadWrite;
+
+    static WsWriterSetting resolveWriterSetting(WsConnImpl<SocketType>* conn, WsWriterSetting setting) {
+        setting.use_mask = !conn->m_is_server;
+        return setting;
+    }
+
+    WsSslEchoMachine(WsConnImpl<SocketType>* conn,
+                     const WsReaderSetting& reader_setting,
+                     WsWriterSetting writer_setting,
+                     std::string& message,
+                     WsOpcode& opcode)
+        : m_conn(conn)
+        , m_reader_setting(reader_setting)
+        , m_read_state(conn->m_ring_buffer,
+                       m_reader_setting,
+                       message,
+                       opcode,
+                       conn->m_is_server,
+                       !conn->m_is_server,
+                       nullptr)
+        , m_writer(resolveWriterSetting(conn, writer_setting), conn->m_socket)
+        , m_message(&message)
+        , m_opcode(&opcode) {}
+
+    galay::ssl::SslMachineAction<result_type> advance() {
+        ++m_conn->m_echo_counters.composite_advance_calls;
+        if (m_result.has_value()) {
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (m_stage == Stage::kRead) {
+            return advanceRead();
+        }
+        return advanceWrite();
+    }
+
+    void onHandshake(std::expected<void, galay::ssl::SslError>) {}
+
+    void onRecv(std::expected<Bytes, galay::ssl::SslError> result) {
+        if (!result) {
+            m_read_state.setSslRecvError(result.error());
+            m_result = m_read_state.takeResult();
+            return;
+        }
+
+        const size_t recv_bytes = result.value().size();
+        if (recv_bytes == 0) {
+            m_read_state.onPeerClosed();
+            m_result = m_read_state.takeResult();
+            return;
+        }
+
+        m_read_state.onBytesReceived(recv_bytes);
+    }
+
+    void onSend(std::expected<size_t, galay::ssl::SslError> result) {
+        if (!result) {
+            m_writer.resetPendingState();
+            m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
+            return;
+        }
+
+        if (result.value() == 0) {
+            m_writer.resetPendingState();
+            m_result = std::unexpected(WsError(kWsSendError, "SSL send returned zero bytes"));
+            return;
+        }
+
+        m_writer.updateRemaining(result.value());
+        if (m_writer.getRemainingBytes() == 0) {
+            m_result = true;
+        }
+    }
+
+    void onShutdown(std::expected<void, galay::ssl::SslError>) {}
+
+private:
+    enum class Stage : uint8_t {
+        kRead,
+        kWrite,
+    };
+
+    galay::ssl::SslMachineAction<result_type> advanceRead() {
+        if (m_read_state.parseFromBuffer()) {
+            return onParsedMessage();
+        }
+
+        char* recv_buffer = nullptr;
+        size_t recv_length = 0;
+        if (!m_read_state.prepareRecvWindow(recv_buffer, recv_length)) {
+            m_result = m_read_state.takeResult();
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        return galay::ssl::SslMachineAction<result_type>::recv(recv_buffer, recv_length);
+    }
+
+    galay::ssl::SslMachineAction<result_type> onParsedMessage() {
+        auto parsed = m_read_state.takeResult();
+        if (!parsed.has_value()) {
+            m_result = std::unexpected(parsed.error());
+            return galay::ssl::SslMachineAction<result_type>::complete(std::move(*m_result));
+        }
+
+        if (*m_opcode == WsOpcode::Text) {
+            ++m_conn->m_echo_counters.composite_hits;
+            ++m_conn->m_echo_counters.ssl_direct_message_hits;
+            m_writer.prepareSslMessage(WsOpcode::Text, *m_message);
+            m_stage = Stage::kWrite;
+            return advanceWrite();
+        }
+
+        if (*m_opcode == WsOpcode::Binary) {
+            ++m_conn->m_echo_counters.composite_hits;
+            ++m_conn->m_echo_counters.ssl_direct_message_hits;
+            m_writer.prepareSslMessage(WsOpcode::Binary, *m_message);
+            m_stage = Stage::kWrite;
+            return advanceWrite();
+        }
+
+        ++m_conn->m_echo_counters.composite_fallbacks;
+        m_result = true;
+        return galay::ssl::SslMachineAction<result_type>::complete(true);
+    }
+
+    galay::ssl::SslMachineAction<result_type> advanceWrite() {
+        if (m_writer.getRemainingBytes() == 0) {
+            m_result = true;
+            return galay::ssl::SslMachineAction<result_type>::complete(true);
+        }
+
+        return galay::ssl::SslMachineAction<result_type>::send(
+            m_writer.bufferData() + m_writer.sentBytes(),
+            m_writer.getRemainingBytes());
+    }
+
+    WsConnImpl<SocketType>* m_conn;
+    WsReaderSetting m_reader_setting;
+    WsMessageReadState m_read_state;
+    WsWriterImpl<SocketType> m_writer;
+    std::string* m_message;
+    WsOpcode* m_opcode;
+    Stage m_stage = Stage::kRead;
+    std::optional<result_type> m_result;
+};
+#endif
+
 } // namespace detail
 
 /**
@@ -183,6 +335,7 @@ public:
         size_t composite_hits = 0;
         size_t composite_fallbacks = 0;
         size_t composite_advance_calls = 0;
+        size_t ssl_direct_message_hits = 0;
     };
 
     /**
@@ -267,14 +420,24 @@ public:
                   WsOpcode& opcode,
                   const WsReaderSetting& reader_setting = WsReaderSetting(),
                   WsWriterSetting writer_setting = WsWriterSetting::byServer()) {
-        static_assert(is_tcp_socket_v<SocketType>,
-                      "WsConnImpl::echoOnce is currently only supported for TcpSocket");
         ++m_echo_counters.composite_awaitables_started;
         using ResultType = std::expected<bool, WsError>;
-        return AwaitableBuilder<ResultType>::fromStateMachine(
-                   m_socket.controller(),
-                   detail::WsEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode))
-            .build();
+        if constexpr (is_ssl_socket_v<SocketType>) {
+#ifdef GALAY_HTTP_SSL_ENABLED
+            return galay::ssl::SslAwaitableBuilder<ResultType>::fromStateMachine(
+                       m_socket.controller(),
+                       &m_socket,
+                       detail::WsSslEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode))
+                .build();
+#else
+            static_assert(!sizeof(SocketType), "SSL support is disabled");
+#endif
+        } else {
+            return AwaitableBuilder<ResultType>::fromStateMachine(
+                       m_socket.controller(),
+                       detail::WsEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode))
+                .build();
+        }
     }
 
     /**
@@ -286,6 +449,7 @@ public:
     template<typename S>
     friend class WsServerImpl;
     friend struct detail::WsEchoMachine<SocketType>;
+    friend struct detail::WsSslEchoMachine<SocketType>;
 
 private:
     SocketType m_socket;

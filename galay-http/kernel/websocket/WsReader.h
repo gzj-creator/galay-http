@@ -442,26 +442,14 @@ struct WsFrameReadState {
             length = 0;
             return false;
         }
-        const struct iovec* first = IoVecWindow::firstNonEmpty(m_write_iovecs);
-        if (first == nullptr) {
+        if (!IoVecWindow::bindFirstNonEmpty(m_write_iovecs, buffer, length)) {
             setParseError(WsError(kWsConnectionError, "Ring buffer has no space for writing"));
+            buffer = nullptr;
+            length = 0;
             return false;
         }
-        size_t total_writable = 0;
-        for (const auto& iov : m_write_iovecs) {
-            total_writable += iov.iov_len;
-        }
-        if (first->iov_len == total_writable) {
-            m_recv_staged = false;
-            buffer = static_cast<char*>(first->iov_base);
-            length = first->iov_len;
-            return true;
-        }
-        m_ssl_recv_scratch.resize(total_writable);
-        m_recv_staged = true;
-        buffer = m_ssl_recv_scratch.data();
-        length = m_ssl_recv_scratch.size();
-        return true;
+        m_recv_staged = false;
+        return length > 0;
     }
 
     const struct iovec* recvIovecsData() const { return m_write_iovecs.data(); }
@@ -727,26 +715,14 @@ struct WsMessageReadState {
             length = 0;
             return false;
         }
-        const struct iovec* first = IoVecWindow::firstNonEmpty(m_write_iovecs);
-        if (first == nullptr) {
+        if (!IoVecWindow::bindFirstNonEmpty(m_write_iovecs, buffer, length)) {
             setParseError(WsError(kWsConnectionError, "Ring buffer has no space for writing"));
+            buffer = nullptr;
+            length = 0;
             return false;
         }
-        size_t total_writable = 0;
-        for (const auto& iov : m_write_iovecs) {
-            total_writable += iov.iov_len;
-        }
-        if (first->iov_len == total_writable) {
-            m_recv_staged = false;
-            buffer = static_cast<char*>(first->iov_base);
-            length = first->iov_len;
-            return true;
-        }
-        m_ssl_recv_scratch.resize(total_writable);
-        m_recv_staged = true;
-        buffer = m_ssl_recv_scratch.data();
-        length = m_ssl_recv_scratch.size();
-        return true;
+        m_recv_staged = false;
+        return length > 0;
     }
 
     const struct iovec* recvIovecsData() const { return m_write_iovecs.data(); }
@@ -878,10 +854,14 @@ public:
                 m_is_server,
                 m_use_mask,
                 nullptr,
-                !is_ssl_socket_v<SocketType>));
+                messageFastPathEnabled()));
     }
 
 private:
+    static constexpr bool messageFastPathEnabled() noexcept {
+        return true;
+    }
+
     RingBuffer* m_ring_buffer;
     WsReaderSetting m_setting;
     SocketType* m_socket;

@@ -14,6 +14,11 @@ namespace galay::http
         return std::move(m_body);
     }
 
+    const std::string& HttpResponse::bodyStr() const
+    {
+        return m_body;
+    }
+
     void HttpResponse::setHeader(HttpResponseHeader &&header)
     {
         m_header = std::move(header);

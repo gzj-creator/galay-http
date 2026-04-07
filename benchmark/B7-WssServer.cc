@@ -31,7 +31,6 @@ void signalHandler(int) {
 Task<void> handleWssConnection(WssConn& ws_conn) {
     HTTP_LOG_DEBUG("[wss] [conn] [open]");
 
-    auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
     auto welcome_result = co_await writer.sendText("Welcome to WSS Benchmark Server!");
@@ -44,27 +43,19 @@ Task<void> handleWssConnection(WssConn& ws_conn) {
     WsOpcode opcode = WsOpcode::Text;
     while (true) {
         message.clear();
-        auto read_result = co_await reader.getMessage(message, opcode);
-        if (!read_result) {
-            HTTP_LOG_DEBUG("[wss] [recv-fail] [{}]", read_result.error().message());
+        auto echo_result = co_await ws_conn.echoOnce(message, opcode);
+        if (!echo_result) {
+            HTTP_LOG_DEBUG("[wss] [echo-fail] [{}]", echo_result.error().message());
             break;
         }
-        if (!read_result.value()) {
+        if (!echo_result.value()) {
             continue;
         }
 
         if (opcode == WsOpcode::Text) {
-            auto send_result = co_await writer.sendText(message);
-            if (!send_result) {
-                HTTP_LOG_ERROR("[wss] [echo-text] [send-fail] [{}]", send_result.error().message());
-                break;
-            }
+            continue;
         } else if (opcode == WsOpcode::Binary) {
-            auto send_result = co_await writer.sendBinary(message);
-            if (!send_result) {
-                HTTP_LOG_ERROR("[wss] [echo-binary] [send-fail] [{}]", send_result.error().message());
-                break;
-            }
+            continue;
         } else if (opcode == WsOpcode::Ping) {
             auto pong_result = co_await writer.sendPong(message);
             if (!pong_result) {

@@ -55,6 +55,9 @@ template<typename SocketType>
 struct WsEchoMachine;
 
 template<typename SocketType>
+struct WsSslEchoMachine;
+
+template<typename SocketType>
 struct WsTcpWritevMachine {
     using result_type = std::expected<bool, WsError>;
     static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::Write;
@@ -528,6 +531,7 @@ private:
     uint8_t m_masking_key[4];
 
     friend struct detail::WsEchoMachine<SocketType>;
+    friend struct detail::WsSslEchoMachine<SocketType>;
 };
 
 using WsWriter = WsWriterImpl<TcpSocket>;
