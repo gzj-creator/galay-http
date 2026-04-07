@@ -64,6 +64,16 @@ struct WsFastPathPrefixResult {
     WsFastPathFramePrefix prefix;
 };
 
+struct WsConsumeFastPathView {
+    WsOpcode opcode = WsOpcode::Text;
+    size_t payload_length = 0;
+    size_t payload_offset = 0;
+    size_t frame_length = 0;
+    char* frame_data = nullptr;
+    char* payload_data = nullptr;
+    uint8_t masking_key[4] = {0, 0, 0, 0};
+};
+
 inline size_t wsIovecTotalLength(const struct iovec* iovecs, size_t iovec_count) noexcept {
     size_t total = 0;
     for (size_t i = 0; i < iovec_count; ++i) {
@@ -155,6 +165,70 @@ inline bool wsIsValidUtf8Span(const char* data, size_t len) noexcept {
             const uint8_t byte2 = ptr[i + 1];
             const uint8_t byte3 = ptr[i + 2];
             const uint8_t byte4 = ptr[i + 3];
+            if ((byte2 & 0xC0) != 0x80) return false;
+            if ((byte3 & 0xC0) != 0x80) return false;
+            if ((byte4 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x07) << 18) |
+                                       ((byte2 & 0x3F) << 12) |
+                                       ((byte3 & 0x3F) << 6) |
+                                       (byte4 & 0x3F);
+            if (codepoint < 0x10000 || codepoint > 0x10FFFF) return false;
+            i += 4;
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+inline bool wsIsValidUtf8MaskedSpan(const char* data,
+                                    size_t len,
+                                    const uint8_t masking_key[4]) noexcept {
+    size_t i = 0;
+
+    const auto masked = [&](size_t index) noexcept -> uint8_t {
+        return static_cast<uint8_t>(data[index]) ^ masking_key[index % 4];
+    };
+
+    while (i < len) {
+        const uint8_t byte = masked(i);
+        if (byte <= 0x7F) {
+            ++i;
+            continue;
+        }
+
+        if ((byte & 0xE0) == 0xC0) {
+            if (i + 1 >= len) return false;
+            const uint8_t byte2 = masked(i + 1);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x1F) << 6) | (byte2 & 0x3F);
+            if (codepoint < 0x80) return false;
+            i += 2;
+            continue;
+        }
+
+        if ((byte & 0xF0) == 0xE0) {
+            if (i + 2 >= len) return false;
+            const uint8_t byte2 = masked(i + 1);
+            const uint8_t byte3 = masked(i + 2);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            if ((byte3 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x0F) << 12) |
+                                       ((byte2 & 0x3F) << 6) |
+                                       (byte3 & 0x3F);
+            if (codepoint < 0x800) return false;
+            if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
+            i += 3;
+            continue;
+        }
+
+        if ((byte & 0xF8) == 0xF0) {
+            if (i + 3 >= len) return false;
+            const uint8_t byte2 = masked(i + 1);
+            const uint8_t byte3 = masked(i + 2);
+            const uint8_t byte4 = masked(i + 3);
             if ((byte2 & 0xC0) != 0x80) return false;
             if ((byte3 & 0xC0) != 0x80) return false;
             if ((byte4 & 0xC0) != 0x80) return false;
@@ -273,6 +347,36 @@ inline WsFastPathPrefixResult scanWsMessageFastPathPrefix(const struct iovec* io
     result.prefix.frame_length = static_cast<size_t>(frame_length);
     result.status = WsMessageFastPathStatus::kContinue;
     return result;
+}
+
+inline bool bindWsConsumeFastPathView(const struct iovec* iovecs,
+                                      size_t iovec_count,
+                                      bool is_server,
+                                      WsConsumeFastPathView& view) noexcept {
+    const auto prefix_result = scanWsMessageFastPathPrefix(iovecs, iovec_count, is_server);
+    if (prefix_result.status != WsMessageFastPathStatus::kContinue) {
+        return false;
+    }
+
+    const auto& prefix = prefix_result.prefix;
+    if (!prefix.fin || (prefix.opcode != WsOpcode::Text && prefix.opcode != WsOpcode::Binary)) {
+        return false;
+    }
+
+    const auto* first = IoVecWindow::firstNonEmpty(iovecs, iovec_count);
+    if (first == nullptr || first->iov_len < prefix.frame_length) {
+        return false;
+    }
+
+    auto* frame_data = static_cast<char*>(first->iov_base);
+    view.opcode = prefix.opcode;
+    view.payload_length = static_cast<size_t>(prefix.payload_length);
+    view.payload_offset = prefix.payload_offset;
+    view.frame_length = prefix.frame_length;
+    view.frame_data = frame_data;
+    view.payload_data = frame_data + prefix.payload_offset;
+    std::memcpy(view.masking_key, prefix.masking_key, sizeof(view.masking_key));
+    return true;
 }
 
 template<typename StateT>

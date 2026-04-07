@@ -89,6 +89,10 @@ int main() {
                    "ssl composite echo should use direct message encoding")) {
             return 1;
         }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 0,
+                   "ssl preserve composite echo should not count zero-copy hit")) {
+            return 1;
+        }
 
         machine.onSend(std::expected<size_t, galay::ssl::SslError>(second.write_length));
         const auto third = machine.advance();
@@ -101,6 +105,65 @@ int main() {
             return 1;
         }
         if (!check(message == payload, "ssl composite echo should preserve message")) {
+            return 1;
+        }
+    }
+
+    {
+        galay::ssl::SslSocket socket(nullptr);
+        WssConn conn(std::move(socket), true);
+        std::string message;
+        WsOpcode opcode = WsOpcode::Close;
+        auto echo_op = conn.echoOnceConsume(message, opcode);
+        (void) echo_op;
+        if (!check(conn.m_echo_counters.composite_awaitables_started == 1,
+                   "ssl consume composite path should start one awaitable")) {
+            return 1;
+        }
+    }
+
+    {
+        galay::ssl::SslSocket socket(nullptr);
+        WssConn conn(std::move(socket), true);
+        std::string message;
+        WsOpcode opcode = WsOpcode::Close;
+        galay::websocket::detail::WsSslEchoMachine<galay::ssl::SslSocket> machine(
+            &conn,
+            WsReaderSetting(),
+            WsWriterSetting::byServer(),
+            message,
+            opcode,
+            false);
+
+        const auto first = machine.advance();
+        if (!check(first.signal == galay::ssl::SslMachineSignal::kRecv,
+                   "ssl consume composite echo should recv first")) {
+            return 1;
+        }
+
+        const std::string payload = "consume ssl composite";
+        const auto encoded = encodeMaskedFrame(WsOpcode::Text, payload);
+        if (!check(first.read_length >= encoded.size(),
+                   "ssl consume composite recv window should fit encoded frame")) {
+            return 1;
+        }
+        std::memcpy(first.read_buffer, encoded.data(), encoded.size());
+        machine.onRecv(std::expected<galay::kernel::Bytes, galay::ssl::SslError>(
+            galay::kernel::Bytes(first.read_buffer, encoded.size())));
+
+        const auto second = machine.advance();
+        if (!check(second.signal == galay::ssl::SslMachineSignal::kSend,
+                   "ssl consume composite echo should send after parse")) {
+            return 1;
+        }
+
+        const auto expected = WsFrameParser::toBytes(WsFrameParser::createTextFrame(payload), false);
+        if (!check(std::string(second.write_buffer, second.write_length) == expected,
+                   "ssl consume composite send payload mismatch")) {
+            return 1;
+        }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 1,
+                   "ssl consume composite echo should count one zero-copy hit")) {
             return 1;
         }
     }

@@ -231,7 +231,7 @@ public:
         if (m_remaining_bytes == 0) {
             ++m_operation_counters.send_awaitables_started;
             if constexpr (!is_tcp_socket_v<SocketType>) {
-                prepareSslMessage(WsOpcode::Text, text, fin);
+                prepareSslMessage(WsOpcode::Text, std::move(text), fin);
             } else if (!tryPrepareCommonTcpFrame(WsOpcode::Text, std::move(text), fin)) {
                 WsFrame frame = WsFrameBuilder().text(std::move(text), fin).buildMove();
                 prepareSendFrame(std::move(frame));
@@ -257,7 +257,7 @@ public:
         if (m_remaining_bytes == 0) {
             ++m_operation_counters.send_awaitables_started;
             if constexpr (!is_tcp_socket_v<SocketType>) {
-                prepareSslMessage(WsOpcode::Binary, data, fin);
+                prepareSslMessage(WsOpcode::Binary, std::move(data), fin);
             } else if (!tryPrepareCommonTcpFrame(WsOpcode::Binary, std::move(data), fin)) {
                 WsFrame frame = WsFrameBuilder().binary(std::move(data), fin).buildMove();
                 prepareSendFrame(std::move(frame));
@@ -312,6 +312,12 @@ public:
     void prepareSslMessage(WsOpcode opcode, std::string_view payload, bool fin = true) {
         resetPendingState();
         WsFrameParser::encodeMessageInto(m_buffer, opcode, payload, fin, m_setting.use_mask);
+        m_remaining_bytes = m_buffer.size();
+    }
+
+    void prepareSslMessage(WsOpcode opcode, std::string&& payload, bool fin = true) {
+        resetPendingState();
+        WsFrameParser::encodeMessageInto(m_buffer, opcode, std::move(payload), fin, m_setting.use_mask);
         m_remaining_bytes = m_buffer.size();
     }
 

@@ -413,6 +413,38 @@ void WsFrameParser::encodeMessageInto(std::string& out,
     }
 }
 
+void WsFrameParser::encodeMessageInto(std::string& out,
+                                      WsOpcode opcode,
+                                      std::string&& payload,
+                                      bool fin,
+                                      bool use_mask)
+{
+    const uint64_t payload_len = payload.size();
+    const size_t header_len = computeHeaderLength(payload_len, use_mask);
+    uint8_t masking_key[4] = {0, 0, 0, 0};
+
+    out.clear();
+    out.swap(payload);
+
+    std::string header;
+    header.reserve(header_len);
+    appendFrameHeader(header, opcode, fin, false, false, false, payload_len, use_mask, masking_key);
+
+    if (out.empty()) {
+        out = std::move(header);
+        return;
+    }
+
+    const size_t payload_size = out.size();
+    out.reserve(header.size() + payload_size);
+    out.resize(header.size() + payload_size);
+    std::memmove(out.data() + header.size(), out.data(), payload_size);
+    std::memcpy(out.data(), header.data(), header.size());
+    if (use_mask) {
+        applyMaskBytes(out.data() + header.size(), static_cast<size_t>(payload_len), masking_key);
+    }
+}
+
 std::string WsFrameParser::toBytesHeader(const WsFrame& frame, bool use_mask, uint8_t masking_key[4])
 {
     std::string result;

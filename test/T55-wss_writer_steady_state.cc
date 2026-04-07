@@ -81,6 +81,16 @@ int main() {
         std::cerr << "[T55] masked ssl text send payload/opcode mismatch\n";
         return 1;
     }
+
+    WsWriterImpl<galay::ssl::SslSocket> moved_writer(WsWriterSetting::byServer(), socket);
+    std::string moved_payload(512, 'x');
+    moved_payload.reserve(moved_payload.size() + 32);
+    const char* moved_data = moved_payload.data();
+    (void) moved_writer.sendText(std::move(moved_payload));
+    if (moved_writer.bufferData() != moved_data) {
+        std::cerr << "[T55] ssl rvalue text send should reuse caller payload storage when capacity allows\n";
+        return 1;
+    }
 #endif
 
     std::cout << "T55-WssWriterSteadyState PASS\n";

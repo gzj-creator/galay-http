@@ -18,10 +18,48 @@ class WsConnImpl;
 
 namespace detail {
 
+inline size_t encodeServerEchoHeader(char out[10], WsOpcode opcode, size_t payload_size) noexcept {
+    size_t header_size = 0;
+    out[header_size++] = static_cast<char>(0x80 | (static_cast<uint8_t>(opcode) & 0x0F));
+    if (payload_size < 126) {
+        out[header_size++] = static_cast<char>(payload_size);
+        return header_size;
+    }
+
+    if (payload_size <= 0xFFFF) {
+        out[header_size++] = 126;
+        out[header_size++] = static_cast<char>((payload_size >> 8) & 0xFF);
+        out[header_size++] = static_cast<char>(payload_size & 0xFF);
+        return header_size;
+    }
+
+    out[header_size++] = 127;
+    for (int i = 7; i >= 0; --i) {
+        out[header_size++] = static_cast<char>((static_cast<uint64_t>(payload_size) >> (i * 8)) & 0xFF);
+    }
+    return header_size;
+}
+
 template<typename SocketType>
 struct WsEchoMachine {
     using result_type = std::expected<bool, WsError>;
     static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::ReadWrite;
+
+    struct DirectSendState {
+        char* data = nullptr;
+        size_t total_bytes = 0;
+        size_t sent_bytes = 0;
+        size_t consume_bytes = 0;
+
+        bool active() const noexcept { return data != nullptr && total_bytes > 0; }
+
+        void reset() noexcept {
+            data = nullptr;
+            total_bytes = 0;
+            sent_bytes = 0;
+            consume_bytes = 0;
+        }
+    };
 
     static WsWriterSetting resolveWriterSetting(WsConnImpl<SocketType>* conn, WsWriterSetting setting) {
         setting.use_mask = !conn->m_is_server;
@@ -32,7 +70,8 @@ struct WsEchoMachine {
                   const WsReaderSetting& reader_setting,
                   WsWriterSetting writer_setting,
                   std::string& message,
-                  WsOpcode& opcode)
+                  WsOpcode& opcode,
+                  bool preserve_message = true)
         : m_conn(conn)
         , m_reader_setting(reader_setting)
         , m_read_state(conn->m_ring_buffer,
@@ -44,7 +83,8 @@ struct WsEchoMachine {
                        nullptr)
         , m_writer(resolveWriterSetting(conn, writer_setting), conn->m_socket)
         , m_message(&message)
-        , m_opcode(&opcode) {}
+        , m_opcode(&opcode)
+        , m_preserve_message(preserve_message) {}
 
     MachineAction<result_type> advance() {
         ++m_conn->m_echo_counters.composite_advance_calls;
@@ -75,6 +115,21 @@ struct WsEchoMachine {
     }
 
     void onWrite(std::expected<size_t, IOError> result) {
+        if (m_direct_send.active()) {
+            if (!result) {
+                m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
+                return;
+            }
+
+            m_direct_send.sent_bytes += result.value();
+            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+                m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
+                m_direct_send.reset();
+                m_result = true;
+            }
+            return;
+        }
+
         if (!result) {
             m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
             return;
@@ -102,6 +157,11 @@ private:
     };
 
     MachineAction<result_type> advanceRead() {
+        if (!m_preserve_message && tryPrepareZeroCopy()) {
+            m_stage = Stage::kWrite;
+            return advanceWrite();
+        }
+
         if (m_read_state.parseFromBuffer()) {
             return onParsedMessage();
         }
@@ -125,14 +185,22 @@ private:
 
         if (*m_opcode == WsOpcode::Text) {
             ++m_conn->m_echo_counters.composite_hits;
-            m_writer.prepareSendFrame(WsFrameParser::createTextFrame(*m_message));
+            if (m_preserve_message) {
+                m_writer.prepareSendFrame(WsFrameParser::createTextFrame(*m_message));
+            } else {
+                m_writer.prepareSendFrame(WsFrameParser::createTextFrame(std::move(*m_message)));
+            }
             m_stage = Stage::kWrite;
             return advanceWrite();
         }
 
         if (*m_opcode == WsOpcode::Binary) {
             ++m_conn->m_echo_counters.composite_hits;
-            m_writer.prepareSendFrame(WsFrameParser::createBinaryFrame(*m_message));
+            if (m_preserve_message) {
+                m_writer.prepareSendFrame(WsFrameParser::createBinaryFrame(*m_message));
+            } else {
+                m_writer.prepareSendFrame(WsFrameParser::createBinaryFrame(std::move(*m_message)));
+            }
             m_stage = Stage::kWrite;
             return advanceWrite();
         }
@@ -143,6 +211,21 @@ private:
     }
 
     MachineAction<result_type> advanceWrite() {
+        if (m_direct_send.active()) {
+            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+                m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
+                m_direct_send.reset();
+                m_result = true;
+                return MachineAction<result_type>::complete(true);
+            }
+
+            m_direct_iovec = {
+                m_direct_send.data + m_direct_send.sent_bytes,
+                m_direct_send.total_bytes - m_direct_send.sent_bytes,
+            };
+            return MachineAction<result_type>::waitWritev(&m_direct_iovec, 1);
+        }
+
         if (m_writer.getRemainingBytes() == 0) {
             m_result = true;
             return MachineAction<result_type>::complete(true);
@@ -157,12 +240,47 @@ private:
         return MachineAction<result_type>::waitWritev(iov_data, iov_count);
     }
 
+    bool tryPrepareZeroCopy() {
+        auto read_iovecs = borrowReadIovecs(m_conn->m_ring_buffer);
+        WsConsumeFastPathView view;
+        if (!bindWsConsumeFastPathView(read_iovecs.data(), read_iovecs.size(), m_conn->m_is_server, view)) {
+            return false;
+        }
+
+        if (view.opcode == WsOpcode::Text &&
+            !wsIsValidUtf8MaskedSpan(view.payload_data, view.payload_length, view.masking_key)) {
+            return false;
+        }
+
+        char header[10];
+        const size_t header_size = encodeServerEchoHeader(header, view.opcode, view.payload_length);
+        if (view.payload_offset < header_size) {
+            return false;
+        }
+
+        wsApplyMaskInPlace(view.payload_data, view.payload_length, view.masking_key);
+        std::memcpy(view.payload_data - header_size, header, header_size);
+
+        *m_opcode = view.opcode;
+        m_message->clear();
+        ++m_conn->m_echo_counters.composite_hits;
+        ++m_conn->m_echo_counters.zero_copy_hits;
+        m_direct_send.data = view.payload_data - header_size;
+        m_direct_send.total_bytes = header_size + view.payload_length;
+        m_direct_send.consume_bytes = view.frame_length;
+        m_direct_send.sent_bytes = 0;
+        return true;
+    }
+
     WsConnImpl<SocketType>* m_conn;
     WsReaderSetting m_reader_setting;
     WsMessageReadState m_read_state;
     WsWriterImpl<SocketType> m_writer;
     std::string* m_message;
     WsOpcode* m_opcode;
+    bool m_preserve_message = true;
+    DirectSendState m_direct_send;
+    struct iovec m_direct_iovec{};
     Stage m_stage = Stage::kRead;
     std::optional<result_type> m_result;
 };
@@ -173,6 +291,8 @@ struct WsSslEchoMachine {
     using result_type = std::expected<bool, WsError>;
     static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::ReadWrite;
 
+    using DirectSendState = typename WsEchoMachine<SocketType>::DirectSendState;
+
     static WsWriterSetting resolveWriterSetting(WsConnImpl<SocketType>* conn, WsWriterSetting setting) {
         setting.use_mask = !conn->m_is_server;
         return setting;
@@ -182,7 +302,8 @@ struct WsSslEchoMachine {
                      const WsReaderSetting& reader_setting,
                      WsWriterSetting writer_setting,
                      std::string& message,
-                     WsOpcode& opcode)
+                     WsOpcode& opcode,
+                     bool preserve_message = true)
         : m_conn(conn)
         , m_reader_setting(reader_setting)
         , m_read_state(conn->m_ring_buffer,
@@ -194,7 +315,8 @@ struct WsSslEchoMachine {
                        nullptr)
         , m_writer(resolveWriterSetting(conn, writer_setting), conn->m_socket)
         , m_message(&message)
-        , m_opcode(&opcode) {}
+        , m_opcode(&opcode)
+        , m_preserve_message(preserve_message) {}
 
     galay::ssl::SslMachineAction<result_type> advance() {
         ++m_conn->m_echo_counters.composite_advance_calls;
@@ -228,6 +350,26 @@ struct WsSslEchoMachine {
     }
 
     void onSend(std::expected<size_t, galay::ssl::SslError> result) {
+        if (m_direct_send.active()) {
+            if (!result) {
+                m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
+                return;
+            }
+
+            if (result.value() == 0) {
+                m_result = std::unexpected(WsError(kWsSendError, "SSL send returned zero bytes"));
+                return;
+            }
+
+            m_direct_send.sent_bytes += result.value();
+            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+                m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
+                m_direct_send.reset();
+                m_result = true;
+            }
+            return;
+        }
+
         if (!result) {
             m_writer.resetPendingState();
             m_result = std::unexpected(WsError(kWsSendError, result.error().message()));
@@ -255,6 +397,11 @@ private:
     };
 
     galay::ssl::SslMachineAction<result_type> advanceRead() {
+        if (!m_preserve_message && tryPrepareZeroCopy()) {
+            m_stage = Stage::kWrite;
+            return advanceWrite();
+        }
+
         if (m_read_state.parseFromBuffer()) {
             return onParsedMessage();
         }
@@ -279,7 +426,11 @@ private:
         if (*m_opcode == WsOpcode::Text) {
             ++m_conn->m_echo_counters.composite_hits;
             ++m_conn->m_echo_counters.ssl_direct_message_hits;
-            m_writer.prepareSslMessage(WsOpcode::Text, *m_message);
+            if (m_preserve_message) {
+                m_writer.prepareSslMessage(WsOpcode::Text, *m_message);
+            } else {
+                m_writer.prepareSslMessage(WsOpcode::Text, std::move(*m_message));
+            }
             m_stage = Stage::kWrite;
             return advanceWrite();
         }
@@ -287,7 +438,11 @@ private:
         if (*m_opcode == WsOpcode::Binary) {
             ++m_conn->m_echo_counters.composite_hits;
             ++m_conn->m_echo_counters.ssl_direct_message_hits;
-            m_writer.prepareSslMessage(WsOpcode::Binary, *m_message);
+            if (m_preserve_message) {
+                m_writer.prepareSslMessage(WsOpcode::Binary, *m_message);
+            } else {
+                m_writer.prepareSslMessage(WsOpcode::Binary, std::move(*m_message));
+            }
             m_stage = Stage::kWrite;
             return advanceWrite();
         }
@@ -298,6 +453,19 @@ private:
     }
 
     galay::ssl::SslMachineAction<result_type> advanceWrite() {
+        if (m_direct_send.active()) {
+            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+                m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
+                m_direct_send.reset();
+                m_result = true;
+                return galay::ssl::SslMachineAction<result_type>::complete(true);
+            }
+
+            return galay::ssl::SslMachineAction<result_type>::send(
+                m_direct_send.data + m_direct_send.sent_bytes,
+                m_direct_send.total_bytes - m_direct_send.sent_bytes);
+        }
+
         if (m_writer.getRemainingBytes() == 0) {
             m_result = true;
             return galay::ssl::SslMachineAction<result_type>::complete(true);
@@ -308,12 +476,46 @@ private:
             m_writer.getRemainingBytes());
     }
 
+    bool tryPrepareZeroCopy() {
+        auto read_iovecs = borrowReadIovecs(m_conn->m_ring_buffer);
+        WsConsumeFastPathView view;
+        if (!bindWsConsumeFastPathView(read_iovecs.data(), read_iovecs.size(), m_conn->m_is_server, view)) {
+            return false;
+        }
+
+        if (view.opcode == WsOpcode::Text &&
+            !wsIsValidUtf8MaskedSpan(view.payload_data, view.payload_length, view.masking_key)) {
+            return false;
+        }
+
+        char header[10];
+        const size_t header_size = encodeServerEchoHeader(header, view.opcode, view.payload_length);
+        if (view.payload_offset < header_size) {
+            return false;
+        }
+
+        wsApplyMaskInPlace(view.payload_data, view.payload_length, view.masking_key);
+        std::memcpy(view.payload_data - header_size, header, header_size);
+
+        *m_opcode = view.opcode;
+        m_message->clear();
+        ++m_conn->m_echo_counters.composite_hits;
+        ++m_conn->m_echo_counters.zero_copy_hits;
+        m_direct_send.data = view.payload_data - header_size;
+        m_direct_send.total_bytes = header_size + view.payload_length;
+        m_direct_send.consume_bytes = view.frame_length;
+        m_direct_send.sent_bytes = 0;
+        return true;
+    }
+
     WsConnImpl<SocketType>* m_conn;
     WsReaderSetting m_reader_setting;
     WsMessageReadState m_read_state;
     WsWriterImpl<SocketType> m_writer;
     std::string* m_message;
     WsOpcode* m_opcode;
+    bool m_preserve_message = true;
+    DirectSendState m_direct_send;
     Stage m_stage = Stage::kRead;
     std::optional<result_type> m_result;
 };
@@ -336,6 +538,7 @@ public:
         size_t composite_fallbacks = 0;
         size_t composite_advance_calls = 0;
         size_t ssl_direct_message_hits = 0;
+        size_t zero_copy_hits = 0;
     };
 
     /**
@@ -436,6 +639,34 @@ public:
             return AwaitableBuilder<ResultType>::fromStateMachine(
                        m_socket.controller(),
                        detail::WsEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode))
+                .build();
+        }
+    }
+
+    /**
+     * @brief 单次回显并允许消费 message 缓冲
+     * @details 仅适合调用方在返回后不再依赖 text/binary payload 内容的场景。
+     */
+    auto echoOnceConsume(std::string& message,
+                         WsOpcode& opcode,
+                         const WsReaderSetting& reader_setting = WsReaderSetting(),
+                         WsWriterSetting writer_setting = WsWriterSetting::byServer()) {
+        ++m_echo_counters.composite_awaitables_started;
+        using ResultType = std::expected<bool, WsError>;
+        if constexpr (is_ssl_socket_v<SocketType>) {
+#ifdef GALAY_HTTP_SSL_ENABLED
+            return galay::ssl::SslAwaitableBuilder<ResultType>::fromStateMachine(
+                       m_socket.controller(),
+                       &m_socket,
+                       detail::WsSslEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode, false))
+                .build();
+#else
+            static_assert(!sizeof(SocketType), "SSL support is disabled");
+#endif
+        } else {
+            return AwaitableBuilder<ResultType>::fromStateMachine(
+                       m_socket.controller(),
+                       detail::WsEchoMachine<SocketType>(this, reader_setting, writer_setting, message, opcode, false))
                 .build();
         }
     }

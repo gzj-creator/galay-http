@@ -135,6 +135,10 @@ int main() {
                    "composite text path should count one hit")) {
             return 1;
         }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 0,
+                   "preserve composite text path should not count zero-copy hit")) {
+            return 1;
+        }
 
         machine.onWrite(std::expected<size_t, galay::kernel::IOError>(expected_text.size()));
         const auto third = machine.advance();
@@ -148,6 +152,63 @@ int main() {
         }
         if (!check(message == payload,
                    "composite text path should preserve caller-visible message content")) {
+            return 1;
+        }
+    }
+
+    {
+        TcpSocket socket;
+        WsConn conn(std::move(socket), true);
+        std::string message;
+        WsOpcode opcode = WsOpcode::Close;
+        auto echo_op = conn.echoOnceConsume(message, opcode);
+        (void) echo_op;
+        if (!check(conn.m_echo_counters.composite_awaitables_started == 1,
+                   "consume composite path should also start one awaitable")) {
+            return 1;
+        }
+    }
+
+    {
+        TcpSocket socket;
+        WsConn conn(std::move(socket), true);
+        std::string message;
+        WsOpcode opcode = WsOpcode::Close;
+        galay::websocket::detail::WsEchoMachine<TcpSocket> machine(
+            &conn,
+            WsReaderSetting(),
+            WsWriterSetting::byServer(),
+            message,
+            opcode,
+            false);
+
+        const auto first = machine.advance();
+        if (!check(first.signal == MachineSignal::kWaitReadv,
+                   "consume composite text path should wait for readv first")) {
+            return 1;
+        }
+
+        const std::string payload = "consume composite echo";
+        const auto encoded = encodeMaskedFrame(WsOpcode::Text, payload);
+        if (!check(writeAll(first.iovecs, first.iov_count, encoded),
+                   "failed to copy masked text frame into consume machine read iovecs")) {
+            return 1;
+        }
+
+        machine.onRead(std::expected<size_t, galay::kernel::IOError>(encoded.size()));
+        const auto second = machine.advance();
+        if (!check(second.signal == MachineSignal::kWaitWritev,
+                   "consume composite text path should go directly to writev")) {
+            return 1;
+        }
+
+        const auto expected_text = WsFrameParser::toBytes(WsFrameParser::createTextFrame(payload), false);
+        if (!check(flattenIovecs(second.iovecs, second.iov_count) == expected_text,
+                   "consume composite text write layout mismatch")) {
+            return 1;
+        }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 1,
+                   "consume composite text path should count one zero-copy hit")) {
             return 1;
         }
     }

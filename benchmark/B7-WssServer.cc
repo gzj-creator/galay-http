@@ -43,7 +43,7 @@ Task<void> handleWssConnection(WssConn& ws_conn) {
     WsOpcode opcode = WsOpcode::Text;
     while (true) {
         message.clear();
-        auto echo_result = co_await ws_conn.echoOnce(message, opcode);
+        auto echo_result = co_await ws_conn.echoOnceConsume(message, opcode);
         if (!echo_result) {
             HTTP_LOG_DEBUG("[wss] [echo-fail] [{}]", echo_result.error().message());
             break;

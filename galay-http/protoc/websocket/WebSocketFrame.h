@@ -152,6 +152,20 @@ public:
                                   bool use_mask = false);
 
     /**
+     * @brief 直接按消息语义编码到复用缓冲区中，并尽量复用右值 payload 的底层存储
+     * @param out 输出缓冲区，函数会覆盖其现有内容
+     * @param opcode 帧类型
+     * @param payload 可被消费的负载内容
+     * @param fin 是否是最后一个分片
+     * @param use_mask 是否使用掩码（客户端必须使用）
+     */
+    static void encodeMessageInto(std::string& out,
+                                  WsOpcode opcode,
+                                  std::string&& payload,
+                                  bool fin = true,
+                                  bool use_mask = false);
+
+    /**
      * @brief 生成WebSocket帧的header部分（用于writev优化）
      * @param frame 要编码的帧
      * @param use_mask 是否使用掩码
