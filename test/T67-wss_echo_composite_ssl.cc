@@ -1,6 +1,7 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 #define private public
@@ -62,6 +63,68 @@ int main() {
     return 0;
 #else
     using namespace galay::websocket;
+
+    {
+        galay::ssl::SslSocket socket(nullptr);
+        WssConn conn(std::move(socket), true);
+        auto loop = conn.echoLoopConsume();
+        (void) loop;
+        if (!check(conn.m_echo_counters.composite_awaitables_started == 1,
+                   "ssl echo loop consume should start one awaitable")) {
+            return 1;
+        }
+    }
+
+    {
+        galay::ssl::SslSocket socket(nullptr);
+        galay::kernel::RingBuffer ring(256);
+        const auto text1 = encodeMaskedFrame(WsOpcode::Text, "loop-one");
+        const auto text2 = encodeMaskedFrame(WsOpcode::Text, "loop-two");
+        const auto close = encodeMaskedFrame(WsOpcode::Close, "");
+        const std::string encoded = text1 + text2 + close;
+        if (ring.write(encoded.data(), encoded.size()) != encoded.size()) {
+            std::cerr << "[T67] failed to seed loop ring buffer\n";
+            return 1;
+        }
+
+        WssConn conn(std::move(socket), std::move(ring), true);
+        galay::websocket::detail::WsSslEchoLoopMachine<galay::ssl::SslSocket> machine(
+            &conn,
+            WsReaderSetting(),
+            WsWriterSetting::byServer());
+
+        std::string sent_stream;
+        auto action = machine.advance();
+        while (action.signal != galay::ssl::SslMachineSignal::kComplete) {
+            if (!check(action.signal == galay::ssl::SslMachineSignal::kSend,
+                       "ssl echo loop should keep sending buffered frames")) {
+                return 1;
+            }
+
+            while (action.signal == galay::ssl::SslMachineSignal::kSend) {
+                sent_stream.append(action.write_buffer, action.write_length);
+                machine.onSend(std::expected<size_t, galay::ssl::SslError>(action.write_length));
+                action = machine.advance();
+            }
+        }
+
+        if (!check(action.result.has_value() && action.result->has_value() && action.result->value(),
+                   "ssl echo loop should complete successfully")) {
+            return 1;
+        }
+        const std::string expected_stream =
+            WsFrameParser::toBytes(WsFrameParser::createTextFrame("loop-one"), false) +
+            WsFrameParser::toBytes(WsFrameParser::createTextFrame("loop-two"), false) +
+            WsFrameParser::toBytes(WsFrameParser::createCloseFrame(WsCloseCode::Normal), false);
+        if (!check(sent_stream == expected_stream,
+                   "ssl echo loop output stream mismatch")) {
+            return 1;
+        }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 2,
+                   "ssl echo loop should keep zero-copy hits across multiple messages")) {
+            return 1;
+        }
+    }
 
     {
         galay::ssl::SslSocket socket(nullptr);

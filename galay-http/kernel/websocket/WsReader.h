@@ -872,6 +872,18 @@ struct WsMessageReadState {
 
     void setParseError(WsError&& error) { m_ws_error = std::move(error); }
 
+    void resetForNextMessage() {
+        m_total_received = 0;
+        m_first_frame = true;
+        m_fast_path_frames = 0;
+        m_recv_staged = false;
+        m_ws_error.reset();
+        m_write_iovecs.setCount(0);
+        if (m_message != nullptr) {
+            m_message->clear();
+        }
+    }
+
     ResultType takeResult() {
         if (m_ws_error.has_value()) {
             return std::unexpected(std::move(*m_ws_error));

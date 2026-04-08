@@ -39,36 +39,9 @@ Task<void> handleWssConnection(WssConn& ws_conn) {
         co_return;
     }
 
-    std::string message;
-    WsOpcode opcode = WsOpcode::Text;
-    while (true) {
-        message.clear();
-        auto echo_result = co_await ws_conn.echoOnceConsume(message, opcode);
-        if (!echo_result) {
-            HTTP_LOG_DEBUG("[wss] [echo-fail] [{}]", echo_result.error().message());
-            break;
-        }
-        if (!echo_result.value()) {
-            continue;
-        }
-
-        if (opcode == WsOpcode::Text) {
-            continue;
-        } else if (opcode == WsOpcode::Binary) {
-            continue;
-        } else if (opcode == WsOpcode::Ping) {
-            auto pong_result = co_await writer.sendPong(message);
-            if (!pong_result) {
-                HTTP_LOG_ERROR("[wss] [pong] [send-fail] [{}]", pong_result.error().message());
-                break;
-            }
-        } else if (opcode == WsOpcode::Close) {
-            auto close_result = co_await writer.sendClose();
-            if (!close_result) {
-                HTTP_LOG_WARN("[wss] [close] [send-fail] [{}]", close_result.error().message());
-            }
-            break;
-        }
+    auto echo_result = co_await ws_conn.echoLoopConsume();
+    if (!echo_result) {
+        HTTP_LOG_DEBUG("[wss] [echo-fail] [{}]", echo_result.error().message());
     }
 
     co_await ws_conn.close();
