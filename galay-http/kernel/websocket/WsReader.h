@@ -119,132 +119,17 @@ inline bool wsReadIovecBytes(const struct iovec* iovecs,
 }
 
 inline void wsApplyMaskInPlace(char* data, size_t len, const uint8_t masking_key[4]) noexcept {
-    for (size_t i = 0; i < len; ++i) {
-        data[i] ^= static_cast<char>(masking_key[i % 4]);
-    }
+    WsFrameParser::applyMaskBytes(data, len, masking_key);
 }
 
 inline bool wsIsValidUtf8Span(const char* data, size_t len) noexcept {
-    const auto* ptr = reinterpret_cast<const uint8_t*>(data);
-    size_t i = 0;
-
-    while (i < len) {
-        const uint8_t byte = ptr[i];
-        if (byte <= 0x7F) {
-            ++i;
-            continue;
-        }
-
-        if ((byte & 0xE0) == 0xC0) {
-            if (i + 1 >= len) return false;
-            const uint8_t byte2 = ptr[i + 1];
-            if ((byte2 & 0xC0) != 0x80) return false;
-            const uint32_t codepoint = ((byte & 0x1F) << 6) | (byte2 & 0x3F);
-            if (codepoint < 0x80) return false;
-            i += 2;
-            continue;
-        }
-
-        if ((byte & 0xF0) == 0xE0) {
-            if (i + 2 >= len) return false;
-            const uint8_t byte2 = ptr[i + 1];
-            const uint8_t byte3 = ptr[i + 2];
-            if ((byte2 & 0xC0) != 0x80) return false;
-            if ((byte3 & 0xC0) != 0x80) return false;
-            const uint32_t codepoint = ((byte & 0x0F) << 12) |
-                                       ((byte2 & 0x3F) << 6) |
-                                       (byte3 & 0x3F);
-            if (codepoint < 0x800) return false;
-            if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
-            i += 3;
-            continue;
-        }
-
-        if ((byte & 0xF8) == 0xF0) {
-            if (i + 3 >= len) return false;
-            const uint8_t byte2 = ptr[i + 1];
-            const uint8_t byte3 = ptr[i + 2];
-            const uint8_t byte4 = ptr[i + 3];
-            if ((byte2 & 0xC0) != 0x80) return false;
-            if ((byte3 & 0xC0) != 0x80) return false;
-            if ((byte4 & 0xC0) != 0x80) return false;
-            const uint32_t codepoint = ((byte & 0x07) << 18) |
-                                       ((byte2 & 0x3F) << 12) |
-                                       ((byte3 & 0x3F) << 6) |
-                                       (byte4 & 0x3F);
-            if (codepoint < 0x10000 || codepoint > 0x10FFFF) return false;
-            i += 4;
-            continue;
-        }
-
-        return false;
-    }
-
-    return true;
+    return WsFrameParser::isValidUtf8Bytes(data, len);
 }
 
 inline bool wsIsValidUtf8MaskedSpan(const char* data,
                                     size_t len,
                                     const uint8_t masking_key[4]) noexcept {
-    size_t i = 0;
-
-    const auto masked = [&](size_t index) noexcept -> uint8_t {
-        return static_cast<uint8_t>(data[index]) ^ masking_key[index % 4];
-    };
-
-    while (i < len) {
-        const uint8_t byte = masked(i);
-        if (byte <= 0x7F) {
-            ++i;
-            continue;
-        }
-
-        if ((byte & 0xE0) == 0xC0) {
-            if (i + 1 >= len) return false;
-            const uint8_t byte2 = masked(i + 1);
-            if ((byte2 & 0xC0) != 0x80) return false;
-            const uint32_t codepoint = ((byte & 0x1F) << 6) | (byte2 & 0x3F);
-            if (codepoint < 0x80) return false;
-            i += 2;
-            continue;
-        }
-
-        if ((byte & 0xF0) == 0xE0) {
-            if (i + 2 >= len) return false;
-            const uint8_t byte2 = masked(i + 1);
-            const uint8_t byte3 = masked(i + 2);
-            if ((byte2 & 0xC0) != 0x80) return false;
-            if ((byte3 & 0xC0) != 0x80) return false;
-            const uint32_t codepoint = ((byte & 0x0F) << 12) |
-                                       ((byte2 & 0x3F) << 6) |
-                                       (byte3 & 0x3F);
-            if (codepoint < 0x800) return false;
-            if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
-            i += 3;
-            continue;
-        }
-
-        if ((byte & 0xF8) == 0xF0) {
-            if (i + 3 >= len) return false;
-            const uint8_t byte2 = masked(i + 1);
-            const uint8_t byte3 = masked(i + 2);
-            const uint8_t byte4 = masked(i + 3);
-            if ((byte2 & 0xC0) != 0x80) return false;
-            if ((byte3 & 0xC0) != 0x80) return false;
-            if ((byte4 & 0xC0) != 0x80) return false;
-            const uint32_t codepoint = ((byte & 0x07) << 18) |
-                                       ((byte2 & 0x3F) << 12) |
-                                       ((byte3 & 0x3F) << 6) |
-                                       (byte4 & 0x3F);
-            if (codepoint < 0x10000 || codepoint > 0x10FFFF) return false;
-            i += 4;
-            continue;
-        }
-
-        return false;
-    }
-
-    return true;
+    return WsFrameParser::isValidUtf8MaskedBytes(data, len, masking_key);
 }
 
 inline bool wsIsValidUtf8MaskedIovecs(const struct iovec* iovecs,

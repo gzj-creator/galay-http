@@ -100,7 +100,7 @@ void appendFrameHeader(std::string& out,
                       masking_key);
 }
 
-void applyMaskBytes(char* data, size_t len, const uint8_t masking_key[4]) {
+void applyMaskBytesImpl(char* data, size_t len, const uint8_t masking_key[4]) {
     if (data == nullptr || len == 0) {
         return;
     }
@@ -385,7 +385,7 @@ void WsFrameParser::encodeInto(std::string& out, const WsFrame& frame, bool use_
     const size_t payload_offset = out.size();
     out.append(frame.payload.data(), frame.payload.size());
     if (use_mask) {
-        applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
+        WsFrameParser::applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
     }
 }
 
@@ -409,7 +409,7 @@ void WsFrameParser::encodeMessageInto(std::string& out,
     const size_t payload_offset = out.size();
     out.append(payload.data(), payload.size());
     if (use_mask) {
-        applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
+        WsFrameParser::applyMaskBytes(out.data() + payload_offset, static_cast<size_t>(payload_len), masking_key);
     }
 }
 
@@ -441,7 +441,7 @@ void WsFrameParser::encodeMessageInto(std::string& out,
     std::memmove(out.data() + header.size(), out.data(), payload_size);
     std::memcpy(out.data(), header.data(), header.size());
     if (use_mask) {
-        applyMaskBytes(out.data() + header.size(), static_cast<size_t>(payload_len), masking_key);
+        WsFrameParser::applyMaskBytes(out.data() + header.size(), static_cast<size_t>(payload_len), masking_key);
     }
 }
 
@@ -460,15 +460,23 @@ WsFrame WsFrameParser::createCloseFrame(WsCloseCode code, const std::string& rea
     return WsFrameBuilder().close(code, reason).buildMove();
 }
 
+void WsFrameParser::applyMaskBytes(char* data, size_t len, const uint8_t masking_key[4])
+{
+    applyMaskBytesImpl(data, len, masking_key);
+}
+
 void WsFrameParser::applyMask(std::string& data, const uint8_t masking_key[4])
 {
     applyMaskBytes(data.data(), data.size(), masking_key);
 }
 
-bool WsFrameParser::isValidUtf8(const std::string& data)
+bool WsFrameParser::isValidUtf8Bytes(const char* data, size_t len)
 {
-    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data.data());
-    size_t len = data.size();
+    if (data == nullptr) {
+        return len == 0;
+    }
+
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
     size_t i = 0;
 
 #if defined(GALAY_WS_SIMD_NEON)
@@ -558,6 +566,110 @@ bool WsFrameParser::isValidUtf8(const std::string& data)
         }
     }
     return true;
+}
+
+bool WsFrameParser::isValidUtf8MaskedBytes(const char* data,
+                                           size_t len,
+                                           const uint8_t masking_key[4])
+{
+    if (data == nullptr) {
+        return len == 0;
+    }
+
+    const uint8_t* ptr = reinterpret_cast<const uint8_t*>(data);
+    size_t i = 0;
+
+#if defined(GALAY_WS_SIMD_NEON)
+    if (len >= 16) {
+        uint8_t mask_array[16];
+        for (int j = 0; j < 16; ++j) {
+            mask_array[j] = masking_key[j % 4];
+        }
+        uint8x16_t mask_vec = vld1q_u8(mask_array);
+        const uint8x16_t high_bit_mask = vdupq_n_u8(0x80);
+
+        for (; i + 16 <= len; i += 16) {
+            const uint8x16_t chunk = vld1q_u8(ptr + i);
+            const uint8x16_t unmasked = veorq_u8(chunk, mask_vec);
+            const uint8x16_t high_bits = vandq_u8(unmasked, high_bit_mask);
+            const uint64x2_t result = vreinterpretq_u64_u8(high_bits);
+            if (vgetq_lane_u64(result, 0) != 0 || vgetq_lane_u64(result, 1) != 0) {
+                break;
+            }
+        }
+    }
+#elif defined(GALAY_WS_SIMD_X86)
+    if (len >= 16) {
+        uint8_t mask_array[16];
+        for (int j = 0; j < 16; ++j) {
+            mask_array[j] = masking_key[j % 4];
+        }
+        const __m128i mask_vec = _mm_loadu_si128(reinterpret_cast<const __m128i*>(mask_array));
+        const __m128i high_bit_mask = _mm_set1_epi8(0x80);
+
+        for (; i + 16 <= len; i += 16) {
+            const __m128i chunk = _mm_loadu_si128(reinterpret_cast<const __m128i*>(ptr + i));
+            const __m128i unmasked = _mm_xor_si128(chunk, mask_vec);
+            const __m128i high_bits = _mm_and_si128(unmasked, high_bit_mask);
+            if (_mm_movemask_epi8(high_bits) != 0) {
+                break;
+            }
+        }
+    }
+#endif
+
+    const auto masked = [&](size_t index) noexcept -> uint8_t {
+        return ptr[index] ^ masking_key[index % 4];
+    };
+
+    while (i < len) {
+        const uint8_t byte = masked(i);
+
+        if (byte <= 0x7F) {
+            ++i;
+        } else if ((byte & 0xE0) == 0xC0) {
+            if (i + 1 >= len) return false;
+            const uint8_t byte2 = masked(i + 1);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x1F) << 6) | (byte2 & 0x3F);
+            if (codepoint < 0x80) return false;
+            i += 2;
+        } else if ((byte & 0xF0) == 0xE0) {
+            if (i + 2 >= len) return false;
+            const uint8_t byte2 = masked(i + 1);
+            const uint8_t byte3 = masked(i + 2);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            if ((byte3 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x0F) << 12) |
+                                       ((byte2 & 0x3F) << 6) |
+                                       (byte3 & 0x3F);
+            if (codepoint < 0x800) return false;
+            if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
+            i += 3;
+        } else if ((byte & 0xF8) == 0xF0) {
+            if (i + 3 >= len) return false;
+            const uint8_t byte2 = masked(i + 1);
+            const uint8_t byte3 = masked(i + 2);
+            const uint8_t byte4 = masked(i + 3);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            if ((byte3 & 0xC0) != 0x80) return false;
+            if ((byte4 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x07) << 18) |
+                                       ((byte2 & 0x3F) << 12) |
+                                       ((byte3 & 0x3F) << 6) |
+                                       (byte4 & 0x3F);
+            if (codepoint < 0x10000 || codepoint > 0x10FFFF) return false;
+            i += 4;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool WsFrameParser::isValidUtf8(const std::string& data)
+{
+    return isValidUtf8Bytes(data.data(), data.size());
 }
 
 size_t WsFrameParser::getTotalLength(const std::vector<iovec>& iovecs)

@@ -236,11 +236,26 @@ public:
     }
 
     /**
+     * @brief 对原始字节区应用 WebSocket 掩码
+     */
+    static void applyMaskBytes(char* data, size_t len, const uint8_t masking_key[4]);
+
+    /**
      * @brief 应用掩码
      * @param data 要掩码的数据
      * @param masking_key 掩码密钥
      */
     static void applyMask(std::string& data, const uint8_t masking_key[4]);
+
+    /**
+     * @brief 验证原始字节区是否是有效 UTF-8
+     */
+    static bool isValidUtf8Bytes(const char* data, size_t len);
+
+    /**
+     * @brief 验证带掩码的原始字节区在解掩码后是否是有效 UTF-8
+     */
+    static bool isValidUtf8MaskedBytes(const char* data, size_t len, const uint8_t masking_key[4]);
 
     /**
      * @brief 验证UTF-8编码
