@@ -8,6 +8,7 @@
 #undef private
 #include "galay-http/protoc/websocket/WebSocketFrame.h"
 #include "galay-kernel/common/Bytes.h"
+#include "galay-kernel/common/Buffer.h"
 #include "galay-ssl/async/SslSocket.h"
 #endif
 
@@ -26,6 +27,31 @@ std::string encodeMaskedFrame(galay::websocket::WsOpcode opcode, std::string pay
     std::string encoded;
     galay::websocket::WsFrameParser::encodeInto(encoded, frame, true);
     return encoded;
+}
+
+galay::kernel::RingBuffer makeWrappedFrameBuffer(std::string_view encoded, size_t capacity = 64, size_t prefix = 40) {
+    galay::kernel::RingBuffer ring(capacity);
+    std::string head(prefix, 'x');
+    if (ring.write(head.data(), head.size()) != head.size()) {
+        throw std::runtime_error("failed to seed ring prefix");
+    }
+    ring.consume(prefix - 10);
+    if (ring.write(encoded.data(), encoded.size()) != encoded.size()) {
+        throw std::runtime_error("failed to wrap encoded frame into ring");
+    }
+    ring.consume(10);
+    return ring;
+}
+
+template<typename MachineT, typename ActionT>
+std::string drainSslSend(MachineT& machine, ActionT action) {
+    std::string sent;
+    while (action.signal == galay::ssl::SslMachineSignal::kSend) {
+        sent.append(action.write_buffer, action.write_length);
+        machine.onSend(std::expected<size_t, galay::ssl::SslError>(action.write_length));
+        action = machine.advance();
+    }
+    return sent;
 }
 
 } // namespace
@@ -158,12 +184,48 @@ int main() {
         }
 
         const auto expected = WsFrameParser::toBytes(WsFrameParser::createTextFrame(payload), false);
-        if (!check(std::string(second.write_buffer, second.write_length) == expected,
+        auto send_action = second;
+        const auto sent = drainSslSend(machine, send_action);
+        if (!check(sent == expected,
                    "ssl consume composite send payload mismatch")) {
             return 1;
         }
         if (!check(conn.m_echo_counters.zero_copy_hits == 1,
                    "ssl consume composite echo should count one zero-copy hit")) {
+            return 1;
+        }
+    }
+
+    {
+        galay::ssl::SslSocket socket(nullptr);
+        const std::string payload = "wrapped ssl zero-copy";
+        auto ring = makeWrappedFrameBuffer(encodeMaskedFrame(WsOpcode::Text, payload));
+        WssConn conn(std::move(socket), std::move(ring), true);
+        std::string message;
+        WsOpcode opcode = WsOpcode::Close;
+        galay::websocket::detail::WsSslEchoMachine<galay::ssl::SslSocket> machine(
+            &conn,
+            WsReaderSetting(),
+            WsWriterSetting::byServer(),
+            message,
+            opcode,
+            false);
+
+        const auto first = machine.advance();
+        if (!check(first.signal == galay::ssl::SslMachineSignal::kSend,
+                   "wrapped ssl consume path should send immediately")) {
+            return 1;
+        }
+
+        const auto expected = WsFrameParser::toBytes(WsFrameParser::createTextFrame(payload), false);
+        auto send_action = first;
+        const auto sent = drainSslSend(machine, send_action);
+        if (!check(sent == expected,
+                   "wrapped ssl consume send payload mismatch")) {
+            return 1;
+        }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 1,
+                   "wrapped ssl consume path should count one zero-copy hit")) {
             return 1;
         }
     }

@@ -8,6 +8,7 @@
 #undef private
 
 using galay::async::TcpSocket;
+using galay::kernel::RingBuffer;
 using galay::kernel::MachineSignal;
 using namespace galay::websocket;
 
@@ -47,6 +48,20 @@ std::string flattenIovecs(const struct iovec* iovecs, size_t count) {
         result.append(static_cast<const char*>(iovecs[index].iov_base), iovecs[index].iov_len);
     }
     return result;
+}
+
+RingBuffer makeWrappedFrameBuffer(std::string_view encoded, size_t capacity = 64, size_t prefix = 40) {
+    RingBuffer ring(capacity);
+    std::string head(prefix, 'x');
+    if (ring.write(head.data(), head.size()) != head.size()) {
+        throw std::runtime_error("failed to seed ring prefix");
+    }
+    ring.consume(prefix - 10);
+    if (ring.write(encoded.data(), encoded.size()) != encoded.size()) {
+        throw std::runtime_error("failed to wrap encoded frame into ring");
+    }
+    ring.consume(10);
+    return ring;
 }
 
 } // namespace
@@ -209,6 +224,38 @@ int main() {
         }
         if (!check(conn.m_echo_counters.zero_copy_hits == 1,
                    "consume composite text path should count one zero-copy hit")) {
+            return 1;
+        }
+    }
+
+    {
+        TcpSocket socket;
+        const std::string payload = "wrapped-zero-copy-hit";
+        auto ring = makeWrappedFrameBuffer(encodeMaskedFrame(WsOpcode::Text, payload));
+        WsConn conn(std::move(socket), std::move(ring), true);
+        std::string message;
+        WsOpcode opcode = WsOpcode::Close;
+        galay::websocket::detail::WsEchoMachine<TcpSocket> machine(
+            &conn,
+            WsReaderSetting(),
+            WsWriterSetting::byServer(),
+            message,
+            opcode,
+            false);
+
+        const auto first = machine.advance();
+        if (!check(first.signal == MachineSignal::kWaitWritev,
+                   "wrapped consume path should still enter writev immediately")) {
+            return 1;
+        }
+
+        const auto expected_text = WsFrameParser::toBytes(WsFrameParser::createTextFrame(payload), false);
+        if (!check(flattenIovecs(first.iovecs, first.iov_count) == expected_text,
+                   "wrapped consume text write layout mismatch")) {
+            return 1;
+        }
+        if (!check(conn.m_echo_counters.zero_copy_hits == 1,
+                   "wrapped consume text path should count one zero-copy hit")) {
             return 1;
         }
     }

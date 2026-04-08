@@ -69,9 +69,9 @@ struct WsConsumeFastPathView {
     size_t payload_length = 0;
     size_t payload_offset = 0;
     size_t frame_length = 0;
-    char* frame_data = nullptr;
     char* payload_data = nullptr;
     uint8_t masking_key[4] = {0, 0, 0, 0};
+    BorrowedIovecs<2> payload_iovecs;
 };
 
 inline size_t wsIovecTotalLength(const struct iovec* iovecs, size_t iovec_count) noexcept {
@@ -247,6 +247,95 @@ inline bool wsIsValidUtf8MaskedSpan(const char* data,
     return true;
 }
 
+inline bool wsIsValidUtf8MaskedIovecs(const struct iovec* iovecs,
+                                      size_t iovec_count,
+                                      const uint8_t masking_key[4]) noexcept {
+    size_t total_length = 0;
+    for (size_t i = 0; i < iovec_count; ++i) {
+        total_length += iovecs[i].iov_len;
+    }
+
+    size_t logical_index = 0;
+    auto masked = [&](size_t absolute_index) noexcept -> uint8_t {
+        size_t cursor = absolute_index;
+        for (size_t i = 0; i < iovec_count; ++i) {
+            if (cursor < iovecs[i].iov_len) {
+                return static_cast<uint8_t>(
+                    static_cast<const char*>(iovecs[i].iov_base)[cursor]) ^
+                    masking_key[absolute_index % 4];
+            }
+            cursor -= iovecs[i].iov_len;
+        }
+        return 0;
+    };
+
+    while (logical_index < total_length) {
+        const uint8_t byte = masked(logical_index);
+        if (byte <= 0x7F) {
+            ++logical_index;
+            continue;
+        }
+
+        if ((byte & 0xE0) == 0xC0) {
+            if (logical_index + 1 >= total_length) return false;
+            const uint8_t byte2 = masked(logical_index + 1);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x1F) << 6) | (byte2 & 0x3F);
+            if (codepoint < 0x80) return false;
+            logical_index += 2;
+            continue;
+        }
+
+        if ((byte & 0xF0) == 0xE0) {
+            if (logical_index + 2 >= total_length) return false;
+            const uint8_t byte2 = masked(logical_index + 1);
+            const uint8_t byte3 = masked(logical_index + 2);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            if ((byte3 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x0F) << 12) |
+                                       ((byte2 & 0x3F) << 6) |
+                                       (byte3 & 0x3F);
+            if (codepoint < 0x800) return false;
+            if (codepoint >= 0xD800 && codepoint <= 0xDFFF) return false;
+            logical_index += 3;
+            continue;
+        }
+
+        if ((byte & 0xF8) == 0xF0) {
+            if (logical_index + 3 >= total_length) return false;
+            const uint8_t byte2 = masked(logical_index + 1);
+            const uint8_t byte3 = masked(logical_index + 2);
+            const uint8_t byte4 = masked(logical_index + 3);
+            if ((byte2 & 0xC0) != 0x80) return false;
+            if ((byte3 & 0xC0) != 0x80) return false;
+            if ((byte4 & 0xC0) != 0x80) return false;
+            const uint32_t codepoint = ((byte & 0x07) << 18) |
+                                       ((byte2 & 0x3F) << 12) |
+                                       ((byte3 & 0x3F) << 6) |
+                                       (byte4 & 0x3F);
+            if (codepoint < 0x10000 || codepoint > 0x10FFFF) return false;
+            logical_index += 4;
+            continue;
+        }
+
+        return false;
+    }
+
+    return true;
+}
+
+inline void wsApplyMaskIovecsInPlace(struct iovec* iovecs,
+                                     size_t iovec_count,
+                                     const uint8_t masking_key[4]) noexcept {
+    size_t logical_index = 0;
+    for (size_t i = 0; i < iovec_count; ++i) {
+        auto* data = static_cast<char*>(iovecs[i].iov_base);
+        for (size_t j = 0; j < iovecs[i].iov_len; ++j, ++logical_index) {
+            data[j] ^= static_cast<char>(masking_key[logical_index % 4]);
+        }
+    }
+}
+
 inline WsFastPathPrefixResult scanWsMessageFastPathPrefix(const struct iovec* iovecs,
                                                           size_t iovec_count,
                                                           bool is_server) noexcept {
@@ -363,19 +452,44 @@ inline bool bindWsConsumeFastPathView(const struct iovec* iovecs,
         return false;
     }
 
-    const auto* first = IoVecWindow::firstNonEmpty(iovecs, iovec_count);
-    if (first == nullptr || first->iov_len < prefix.frame_length) {
-        return false;
-    }
-
-    auto* frame_data = static_cast<char*>(first->iov_base);
     view.opcode = prefix.opcode;
     view.payload_length = static_cast<size_t>(prefix.payload_length);
     view.payload_offset = prefix.payload_offset;
     view.frame_length = prefix.frame_length;
-    view.frame_data = frame_data;
-    view.payload_data = frame_data + prefix.payload_offset;
+    view.payload_data = nullptr;
     std::memcpy(view.masking_key, prefix.masking_key, sizeof(view.masking_key));
+    view.payload_iovecs.setCount(0);
+
+    size_t cursor = prefix.payload_offset;
+    size_t remaining = view.payload_length;
+    size_t out_count = 0;
+    for (size_t i = 0; i < iovec_count && remaining > 0; ++i) {
+        const auto& src = iovecs[i];
+        if (cursor >= src.iov_len) {
+            cursor -= src.iov_len;
+            continue;
+        }
+
+        const size_t available = src.iov_len - cursor;
+        const size_t take = std::min(available, remaining);
+        view.payload_iovecs.storage()[out_count++] = {
+            static_cast<char*>(src.iov_base) + cursor,
+            take,
+        };
+        remaining -= take;
+        cursor = 0;
+        if (out_count == view.payload_iovecs.storage().size() && remaining > 0) {
+            return false;
+        }
+    }
+
+    if (remaining != 0) {
+        return false;
+    }
+    view.payload_iovecs.setCount(out_count);
+    if (out_count == 1) {
+        view.payload_data = static_cast<char*>(view.payload_iovecs[0].iov_base);
+    }
     return true;
 }
 

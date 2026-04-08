@@ -46,18 +46,25 @@ struct WsEchoMachine {
     static constexpr auto kSequenceOwnerDomain = galay::kernel::SequenceOwnerDomain::ReadWrite;
 
     struct DirectSendState {
+        char header[10] = {0};
+        size_t header_size = 0;
+        size_t consume_bytes = 0;
         char* data = nullptr;
         size_t total_bytes = 0;
         size_t sent_bytes = 0;
-        size_t consume_bytes = 0;
+        IoVecCursor cursor;
 
-        bool active() const noexcept { return data != nullptr && total_bytes > 0; }
+        bool useContiguous() const noexcept { return data != nullptr && total_bytes > 0; }
+        bool useCursor() const noexcept { return !cursor.empty(); }
+        bool active() const noexcept { return useContiguous() || useCursor(); }
 
         void reset() noexcept {
+            header_size = 0;
+            consume_bytes = 0;
             data = nullptr;
             total_bytes = 0;
             sent_bytes = 0;
-            consume_bytes = 0;
+            cursor.clear();
         }
     };
 
@@ -121,8 +128,14 @@ struct WsEchoMachine {
                 return;
             }
 
-            m_direct_send.sent_bytes += result.value();
-            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+            if (m_direct_send.useContiguous()) {
+                m_direct_send.sent_bytes += result.value();
+            } else {
+                m_direct_send.cursor.advance(result.value());
+            }
+
+            if ((m_direct_send.useContiguous() && m_direct_send.sent_bytes >= m_direct_send.total_bytes) ||
+                (m_direct_send.useCursor() && m_direct_send.cursor.empty())) {
                 m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
                 m_direct_send.reset();
                 m_result = true;
@@ -212,18 +225,31 @@ private:
 
     MachineAction<result_type> advanceWrite() {
         if (m_direct_send.active()) {
-            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+            if (m_direct_send.useContiguous()) {
+                if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+                    m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
+                    m_direct_send.reset();
+                    m_result = true;
+                    return MachineAction<result_type>::complete(true);
+                }
+
+                m_direct_iovec = {
+                    m_direct_send.data + m_direct_send.sent_bytes,
+                    m_direct_send.total_bytes - m_direct_send.sent_bytes,
+                };
+                return MachineAction<result_type>::waitWritev(&m_direct_iovec, 1);
+            }
+
+            if (m_direct_send.cursor.empty()) {
                 m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
                 m_direct_send.reset();
                 m_result = true;
                 return MachineAction<result_type>::complete(true);
             }
 
-            m_direct_iovec = {
-                m_direct_send.data + m_direct_send.sent_bytes,
-                m_direct_send.total_bytes - m_direct_send.sent_bytes,
-            };
-            return MachineAction<result_type>::waitWritev(&m_direct_iovec, 1);
+            return MachineAction<result_type>::waitWritev(
+                m_direct_send.cursor.data(),
+                m_direct_send.cursor.count());
         }
 
         if (m_writer.getRemainingBytes() == 0) {
@@ -248,27 +274,54 @@ private:
         }
 
         if (view.opcode == WsOpcode::Text &&
-            !wsIsValidUtf8MaskedSpan(view.payload_data, view.payload_length, view.masking_key)) {
+            ((view.payload_iovecs.size() == 1)
+                 ? !wsIsValidUtf8MaskedSpan(view.payload_data, view.payload_length, view.masking_key)
+                 : !wsIsValidUtf8MaskedIovecs(view.payload_iovecs.data(),
+                                             view.payload_iovecs.size(),
+                                             view.masking_key))) {
             return false;
         }
 
-        char header[10];
-        const size_t header_size = encodeServerEchoHeader(header, view.opcode, view.payload_length);
-        if (view.payload_offset < header_size) {
-            return false;
+        const size_t header_size = encodeServerEchoHeader(
+            m_direct_send.header,
+            view.opcode,
+            view.payload_length);
+
+        if (view.payload_iovecs.size() == 1 &&
+            view.payload_data != nullptr &&
+            view.payload_offset >= header_size) {
+            wsApplyMaskInPlace(view.payload_data, view.payload_length, view.masking_key);
+            std::memcpy(view.payload_data - header_size, m_direct_send.header, header_size);
+
+            *m_opcode = view.opcode;
+            m_message->clear();
+            ++m_conn->m_echo_counters.composite_hits;
+            ++m_conn->m_echo_counters.zero_copy_hits;
+            m_direct_send.reset();
+            m_direct_send.data = view.payload_data - header_size;
+            m_direct_send.total_bytes = header_size + view.payload_length;
+            m_direct_send.sent_bytes = 0;
+            m_direct_send.consume_bytes = view.frame_length;
+            return true;
         }
 
-        wsApplyMaskInPlace(view.payload_data, view.payload_length, view.masking_key);
-        std::memcpy(view.payload_data - header_size, header, header_size);
+        wsApplyMaskIovecsInPlace(view.payload_iovecs.data(), view.payload_iovecs.size(), view.masking_key);
 
         *m_opcode = view.opcode;
         m_message->clear();
         ++m_conn->m_echo_counters.composite_hits;
         ++m_conn->m_echo_counters.zero_copy_hits;
-        m_direct_send.data = view.payload_data - header_size;
-        m_direct_send.total_bytes = header_size + view.payload_length;
+        m_direct_send.reset();
+        m_direct_send.header_size = header_size;
         m_direct_send.consume_bytes = view.frame_length;
-        m_direct_send.sent_bytes = 0;
+        m_direct_send.cursor.reserve(3);
+        m_direct_send.cursor.append({
+            m_direct_send.header,
+            m_direct_send.header_size,
+        });
+        for (size_t i = 0; i < view.payload_iovecs.size(); ++i) {
+            m_direct_send.cursor.append(view.payload_iovecs[i]);
+        }
         return true;
     }
 
@@ -361,8 +414,14 @@ struct WsSslEchoMachine {
                 return;
             }
 
-            m_direct_send.sent_bytes += result.value();
-            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+            if (m_direct_send.useContiguous()) {
+                m_direct_send.sent_bytes += result.value();
+            } else {
+                m_direct_send.cursor.advance(result.value());
+            }
+
+            if ((m_direct_send.useContiguous() && m_direct_send.sent_bytes >= m_direct_send.total_bytes) ||
+                (m_direct_send.useCursor() && m_direct_send.cursor.empty())) {
                 m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
                 m_direct_send.reset();
                 m_result = true;
@@ -454,16 +513,30 @@ private:
 
     galay::ssl::SslMachineAction<result_type> advanceWrite() {
         if (m_direct_send.active()) {
-            if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+            if (m_direct_send.useContiguous()) {
+                if (m_direct_send.sent_bytes >= m_direct_send.total_bytes) {
+                    m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
+                    m_direct_send.reset();
+                    m_result = true;
+                    return galay::ssl::SslMachineAction<result_type>::complete(true);
+                }
+
+                return galay::ssl::SslMachineAction<result_type>::send(
+                    m_direct_send.data + m_direct_send.sent_bytes,
+                    m_direct_send.total_bytes - m_direct_send.sent_bytes);
+            }
+
+            if (m_direct_send.cursor.empty()) {
                 m_conn->m_ring_buffer.consume(m_direct_send.consume_bytes);
                 m_direct_send.reset();
                 m_result = true;
                 return galay::ssl::SslMachineAction<result_type>::complete(true);
             }
 
+            const auto* direct_iov = m_direct_send.cursor.data();
             return galay::ssl::SslMachineAction<result_type>::send(
-                m_direct_send.data + m_direct_send.sent_bytes,
-                m_direct_send.total_bytes - m_direct_send.sent_bytes);
+                static_cast<const char*>(direct_iov->iov_base),
+                direct_iov->iov_len);
         }
 
         if (m_writer.getRemainingBytes() == 0) {
@@ -484,27 +557,54 @@ private:
         }
 
         if (view.opcode == WsOpcode::Text &&
-            !wsIsValidUtf8MaskedSpan(view.payload_data, view.payload_length, view.masking_key)) {
+            ((view.payload_iovecs.size() == 1)
+                 ? !wsIsValidUtf8MaskedSpan(view.payload_data, view.payload_length, view.masking_key)
+                 : !wsIsValidUtf8MaskedIovecs(view.payload_iovecs.data(),
+                                             view.payload_iovecs.size(),
+                                             view.masking_key))) {
             return false;
         }
 
-        char header[10];
-        const size_t header_size = encodeServerEchoHeader(header, view.opcode, view.payload_length);
-        if (view.payload_offset < header_size) {
-            return false;
+        const size_t header_size = encodeServerEchoHeader(
+            m_direct_send.header,
+            view.opcode,
+            view.payload_length);
+
+        if (view.payload_iovecs.size() == 1 &&
+            view.payload_data != nullptr &&
+            view.payload_offset >= header_size) {
+            wsApplyMaskInPlace(view.payload_data, view.payload_length, view.masking_key);
+            std::memcpy(view.payload_data - header_size, m_direct_send.header, header_size);
+
+            *m_opcode = view.opcode;
+            m_message->clear();
+            ++m_conn->m_echo_counters.composite_hits;
+            ++m_conn->m_echo_counters.zero_copy_hits;
+            m_direct_send.reset();
+            m_direct_send.data = view.payload_data - header_size;
+            m_direct_send.total_bytes = header_size + view.payload_length;
+            m_direct_send.sent_bytes = 0;
+            m_direct_send.consume_bytes = view.frame_length;
+            return true;
         }
 
-        wsApplyMaskInPlace(view.payload_data, view.payload_length, view.masking_key);
-        std::memcpy(view.payload_data - header_size, header, header_size);
+        wsApplyMaskIovecsInPlace(view.payload_iovecs.data(), view.payload_iovecs.size(), view.masking_key);
 
         *m_opcode = view.opcode;
         m_message->clear();
         ++m_conn->m_echo_counters.composite_hits;
         ++m_conn->m_echo_counters.zero_copy_hits;
-        m_direct_send.data = view.payload_data - header_size;
-        m_direct_send.total_bytes = header_size + view.payload_length;
+        m_direct_send.reset();
+        m_direct_send.header_size = header_size;
         m_direct_send.consume_bytes = view.frame_length;
-        m_direct_send.sent_bytes = 0;
+        m_direct_send.cursor.reserve(3);
+        m_direct_send.cursor.append({
+            m_direct_send.header,
+            m_direct_send.header_size,
+        });
+        for (size_t i = 0; i < view.payload_iovecs.size(); ++i) {
+            m_direct_send.cursor.append(view.payload_iovecs[i]);
+        }
         return true;
     }
 
