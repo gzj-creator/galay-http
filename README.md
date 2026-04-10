@@ -36,12 +36,16 @@
 
 ## 最新 WSS 验收
 
-`2026-04-06` 按计划文档完成了一轮 WSS server/client 双路径优化与 fresh 验收，详细结果见 [05-性能测试](docs/05-性能测试.md)。
+`2026-04-08` 又继续完成了一轮 WSS server follow-up 优化与 fresh 复验，详细结果见 [05-性能测试](docs/05-性能测试.md)。
 
 - 验证环境：系统安装版 `galay-kernel=3.4.4`、`galay-ssl=1.2.1`
-- fresh 回归：`ctest --test-dir /tmp/galay-http-wss-opt-current --output-on-failure`，`46/46` 通过
-- 同日 clean `HEAD` 对照下，`B8 -> Rust` 的 `8/4/256` 与 `60/8/1024` 分别提升 `+1.72%`、`+1.21%`
-- `B7-WssServer` 在 `20/4/256` 提升 `+1.11%`，但 `60/8/1024` 基本与 clean `HEAD` 持平，当前仍不能声称已经追平 Rust WSS server
+- fresh 回归：`ctest --test-dir /tmp/galay-http-wss-opt-current --output-on-failure`，`50/50` 通过
+- 这轮保留并提交的 server 增量包括：
+  - 扩展 `WSS` 零拷贝回显到 ring buffer wrap 场景
+  - 文本帧 `mask` / `UTF-8` 快路径接入向量化原语
+  - `B7-WssServer` steady-state 回显循环改成长生命周期 `Ssl` loop machine
+- 在同机三轮 `B7 + Go client` `60/15/1024` 样本里，当前版本分别达到 `190216.00 / 178575.67 / 174214.53 rps`，三轮都高于上一提交，也都高于同轮 Rust WSS 对照
+- `B8-WssClient` 双基线 sanity 继续通过；本轮没有发现新的、稳定可提交的 client-side 增量
 
 ## 构建要求
 
