@@ -6,12 +6,12 @@
 
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
+#include <string_view>
 #include <thread>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
@@ -20,15 +20,23 @@ using namespace galay::http;
 using namespace galay::kernel;
 
 static volatile bool g_running = true;
+static constexpr std::string_view kPlainTextOkResponse =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Connection: keep-alive\r\n"
+    "Content-Length: 2\r\n"
+    "\r\n"
+    "OK";
 
 void signalHandler(int) {
     g_running = false;
 }
 
 Task<void> handleHttpsRequest(HttpConnImpl<galay::ssl::SslSocket> conn) {
+    auto reader = conn.getReader();
+    auto writer = conn.getWriter();
+
     while (true) {
-        auto reader = conn.getReader();
-        auto writer = conn.getWriter();
         HttpRequest request;
 
         while (true) {
@@ -41,14 +49,7 @@ Task<void> handleHttpsRequest(HttpConnImpl<galay::ssl::SslSocket> conn) {
             }
         }
 
-        auto response = Http1_1ResponseBuilder()
-            .status(HttpStatusCode::OK_200)
-            .header("Content-Type", "text/plain")
-            .header("Connection", "keep-alive")
-            .body("OK")
-            .buildMove();
-
-        auto send_result = co_await writer.sendResponse(response);
+        auto send_result = co_await writer.sendView(kPlainTextOkResponse);
         if (!send_result) {
             co_return;
         }

@@ -17,14 +17,21 @@
 #include "galay-http/kernel/http/HttpServer.h"
 #include "galay-http/kernel/http/HttpConn.h"
 #include "galay-http/protoc/http/HttpRequest.h"
-#include "galay-http/utils/Http1_1ResponseBuilder.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include <iostream>
 #include <csignal>
+#include <string_view>
 using namespace galay::http;
 using namespace galay::kernel;
 
 static volatile bool g_running = true;
+static constexpr std::string_view kPlainTextOkResponse =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/plain\r\n"
+    "Connection: keep-alive\r\n"
+    "Content-Length: 2\r\n"
+    "\r\n"
+    "OK";
 
 void signalHandler(int) {
     g_running = false;
@@ -34,8 +41,10 @@ void signalHandler(int) {
  * @brief HTTP 请求处理器 - 简单的 OK 响应
  */
 Task<void> handleHttpRequest(HttpConn conn) {
+    auto reader = conn.getReader();
+    auto writer = conn.getWriter();
+
     while(true) {
-        auto reader = conn.getReader();
         HttpRequest request;
 
         while (true) {
@@ -46,18 +55,10 @@ Task<void> handleHttpRequest(HttpConn conn) {
             if (read_result.value()) break;
         }
 
-        // 构建响应
-        auto response = Http1_1ResponseBuilder()
-            .status(HttpStatusCode::OK_200)
-            .header("Content-Type", "text/plain")
-            .header("Connection", "keep-alive")
-            .body("OK")
-            .buildMove();
-
-        auto writer = conn.getWriter();
-        auto result = co_await writer.sendResponse(response);
+        auto result = co_await writer.sendView(kPlainTextOkResponse);
         if (!result) {
             HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
+            co_return;
         }
     }
 

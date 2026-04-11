@@ -305,6 +305,7 @@ public:
 
     auto send(std::string&& data) {
         if (m_remaining_bytes == 0) {
+            clearExternalBuffer();
             m_buffer = std::move(data);
             m_remaining_bytes = m_buffer.size();
         }
@@ -314,6 +315,7 @@ public:
 
     auto send(const char* buffer, size_t length) {
         if (m_remaining_bytes == 0) {
+            clearExternalBuffer();
             m_buffer.assign(buffer, length);
             m_remaining_bytes = m_buffer.size();
         }
@@ -321,8 +323,29 @@ public:
         return makeSendAwaitable();
     }
 
+    /**
+     * @brief 发送外部持有的连续字节视图
+     * @param data 待发送的连续只读字节视图
+     * @return 发送等待体
+     * @note 调用方必须保证 data 对应的底层存储在 await 完成前保持有效
+     * @note 该接口适用于静态响应或连接级缓存响应，避免重复复制到 writer 内部缓冲区
+     */
+    auto sendView(std::string_view data) {
+        if (m_remaining_bytes == 0) {
+            m_buffer.clear();
+            m_body_buffer.clear();
+            m_writev_cursor.reset(std::vector<iovec>{});
+            m_external_buffer = data.data();
+            m_external_buffer_size = data.size();
+            m_remaining_bytes = data.size();
+        }
+
+        return makeSendAwaitable();
+    }
+
     auto sendChunk(const std::string& data, bool is_last = false) {
         if (m_remaining_bytes == 0) {
+            clearExternalBuffer();
             m_buffer = Chunk::toChunk(data, is_last);
             m_remaining_bytes = m_buffer.size();
         }
@@ -335,6 +358,7 @@ public:
             m_remaining_bytes = 0;
             m_buffer.clear();
             m_body_buffer.clear();
+            clearExternalBuffer();
             m_writev_cursor.reset(std::vector<iovec>{});
         } else {
             m_remaining_bytes -= bytes_sent;
@@ -347,6 +371,7 @@ public:
             m_remaining_bytes = 0;
             m_buffer.clear();
             m_body_buffer.clear();
+            clearExternalBuffer();
             m_writev_cursor.reset(std::vector<iovec>{});
         } else {
             m_remaining_bytes -= advanced;
@@ -358,11 +383,11 @@ public:
     }
 
     const char* bufferData() const {
-        return m_buffer.data();
+        return m_external_buffer != nullptr ? m_external_buffer : m_buffer.data();
     }
 
     size_t sentBytes() const {
-        return m_buffer.size() - m_remaining_bytes;
+        return currentBufferSize() - m_remaining_bytes;
     }
 
     std::vector<iovec> getIovecsCopy() const {
@@ -420,6 +445,7 @@ private:
     }
 
     void prepareSslSendLayout(std::string header, std::string_view body) {
+        clearExternalBuffer();
         m_buffer.clear();
         m_buffer.reserve(header.size() + body.size());
         m_buffer.append(std::move(header));
@@ -441,11 +467,22 @@ private:
         }
     }
 
+    size_t currentBufferSize() const {
+        return m_external_buffer != nullptr ? m_external_buffer_size : m_buffer.size();
+    }
+
+    void clearExternalBuffer() {
+        m_external_buffer = nullptr;
+        m_external_buffer_size = 0;
+    }
+
     HttpWriterSetting m_setting;
     SocketType* m_socket;
     std::string m_buffer;
     size_t m_remaining_bytes;
     std::string m_body_buffer;
+    const char* m_external_buffer = nullptr;
+    size_t m_external_buffer_size = 0;
     IoVecCursor m_writev_cursor;
     FastPathCounters m_fast_path_counters;
 };
