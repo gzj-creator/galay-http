@@ -159,6 +159,15 @@ struct HttpRequestReadState {
         , m_setting(&setting)
         , m_request(&request) {}
 
+    void resetForNextRead(HttpRequest& request) {
+        m_request = &request;
+        m_request->reset();
+        m_total_received = 0;
+        m_parse_iovecs.clear();
+        m_write_iovecs = {};
+        m_http_error.reset();
+    }
+
     bool parseFromRingBuffer() {
         auto read_iovecs = borrowReadIovecs(*m_ring_buffer);
         if (read_iovecs.empty()) {
@@ -513,9 +522,8 @@ public:
         , m_socket(&socket) {}
 
     auto getRequest(HttpRequest& request) {
-        return detail::buildReadOperation(
-            *m_socket,
-            std::make_shared<detail::HttpRequestReadState>(*m_ring_buffer, m_setting, request));
+        auto state = getReusableRequestReadState(request);
+        return detail::buildReadOperation(*m_socket, std::move(state));
     }
 
     auto getResponse(HttpResponse& response) {
@@ -531,9 +539,23 @@ public:
     }
 
 private:
+    std::shared_ptr<detail::HttpRequestReadState> getReusableRequestReadState(HttpRequest& request) {
+        if (m_request_read_state && m_request_read_state.use_count() == 1) {
+            m_request_read_state->resetForNextRead(request);
+            return m_request_read_state;
+        }
+
+        m_request_read_state = std::make_shared<detail::HttpRequestReadState>(
+            *m_ring_buffer,
+            m_setting,
+            request);
+        return m_request_read_state;
+    }
+
     RingBuffer* m_ring_buffer;
     HttpReaderSetting m_setting;
     SocketType* m_socket;
+    std::shared_ptr<detail::HttpRequestReadState> m_request_read_state;
 };
 
 using HttpReader = HttpReaderImpl<TcpSocket>;
