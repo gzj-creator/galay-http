@@ -15,6 +15,7 @@
 #include <memory>
 #include <optional>
 #include <array>
+#include <bitset>
 #include <iterator>
 #include <type_traits>
 #include <functional>
@@ -341,6 +342,51 @@ private:
     mutable std::vector<std::string> m_single_view_cache;
 };
 
+namespace detail {
+
+enum class Http2RequestCommonHeaderIndex : uint8_t {
+    ContentLength = 0,
+    ContentType,
+    AcceptEncoding,
+    UserAgent,
+    Count
+};
+
+inline bool equalsLowerAscii(std::string_view lhs, std::string_view rhs) {
+    if (lhs.size() != rhs.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        unsigned char ch = static_cast<unsigned char>(lhs[i]);
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<unsigned char>(ch - 'A' + 'a');
+        }
+        if (ch != static_cast<unsigned char>(rhs[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+inline std::optional<Http2RequestCommonHeaderIndex>
+matchHttp2RequestCommonHeader(std::string_view name) {
+    if (equalsLowerAscii(name, "content-length")) {
+        return Http2RequestCommonHeaderIndex::ContentLength;
+    }
+    if (equalsLowerAscii(name, "content-type")) {
+        return Http2RequestCommonHeaderIndex::ContentType;
+    }
+    if (equalsLowerAscii(name, "accept-encoding")) {
+        return Http2RequestCommonHeaderIndex::AcceptEncoding;
+    }
+    if (equalsLowerAscii(name, "user-agent")) {
+        return Http2RequestCommonHeaderIndex::UserAgent;
+    }
+    return std::nullopt;
+}
+
+} // namespace detail
+
 /**
  * @brief HTTP/2 请求结构
  */
@@ -355,10 +401,19 @@ struct Http2Request
     
     // 获取伪头部
     std::string getHeader(const std::string& name) const {
+        if (const auto* common = getCommonHeaderPtr(name); common != nullptr) {
+            return *common;
+        }
         for (const auto& h : headers) {
             if (h.name == name) return h.value;
         }
         return "";
+    }
+
+    void setCommonHeader(detail::Http2RequestCommonHeaderIndex idx, std::string value) {
+        const size_t index = static_cast<size_t>(idx);
+        m_common_headers[index] = std::move(value);
+        m_common_header_present.set(index);
     }
 
     void setBody(std::string data) { body.set(std::move(data)); }
@@ -369,6 +424,10 @@ struct Http2Request
         path.clear();
         headers.clear();
         body.clear();
+        for (auto& value : m_common_headers) {
+            value.clear();
+        }
+        m_common_header_present.reset();
     }
     size_t bodySize() const { return body.size(); }
     size_t bodyChunkCount() const { return body.chunkCount(); }
@@ -377,6 +436,23 @@ struct Http2Request
     std::string coalescedBody() const { return body.coalesce(); }
     std::string takeCoalescedBody() { return body.takeCoalesced(); }
     std::string takeSingleBodyChunk() { return body.takeSingleChunk(); }
+
+private:
+    const std::string* getCommonHeaderPtr(std::string_view name) const {
+        auto slot = detail::matchHttp2RequestCommonHeader(name);
+        if (!slot) {
+            return nullptr;
+        }
+
+        const size_t index = static_cast<size_t>(*slot);
+        if (!m_common_header_present.test(index)) {
+            return nullptr;
+        }
+        return &m_common_headers[index];
+    }
+
+    std::array<std::string, static_cast<size_t>(detail::Http2RequestCommonHeaderIndex::Count)> m_common_headers{};
+    std::bitset<static_cast<size_t>(detail::Http2RequestCommonHeaderIndex::Count)> m_common_header_present;
 };
 
 /**
@@ -685,12 +761,28 @@ public:
         if (!m_decoded_headers.empty()) {
             m_request.headers.reserve(m_request.headers.size() + m_decoded_headers.size());
         }
-        for (const auto& f : decodedHeaders()) {
-            if (f.name == ":method") m_request.method = f.value;
-            else if (f.name == ":scheme") m_request.scheme = f.value;
-            else if (f.name == ":authority") m_request.authority = f.value;
-            else if (f.name == ":path") m_request.path = f.value;
-            else m_request.headers.push_back({f.name, f.value});
+        for (auto& f : m_decoded_headers) {
+            if (f.name == ":method") m_request.method = std::move(f.value);
+            else if (f.name == ":scheme") m_request.scheme = std::move(f.value);
+            else if (f.name == ":authority") m_request.authority = std::move(f.value);
+            else if (f.name == ":path") m_request.path = std::move(f.value);
+            else if (f.name == "content-length") {
+                m_request.setCommonHeader(detail::Http2RequestCommonHeaderIndex::ContentLength,
+                                          std::move(f.value));
+            }
+            else if (f.name == "content-type") {
+                m_request.setCommonHeader(detail::Http2RequestCommonHeaderIndex::ContentType,
+                                          std::move(f.value));
+            }
+            else if (f.name == "accept-encoding") {
+                m_request.setCommonHeader(detail::Http2RequestCommonHeaderIndex::AcceptEncoding,
+                                          std::move(f.value));
+            }
+            else if (f.name == "user-agent") {
+                m_request.setCommonHeader(detail::Http2RequestCommonHeaderIndex::UserAgent,
+                                          std::move(f.value));
+            }
+            else m_request.headers.push_back(std::move(f));
         }
         clearDecodedHeaders();
     }
@@ -699,13 +791,13 @@ public:
         if (!m_decoded_headers.empty()) {
             m_response.headers.reserve(m_response.headers.size() + m_decoded_headers.size());
         }
-        for (const auto& f : decodedHeaders()) {
+        for (auto& f : m_decoded_headers) {
             if (f.name == ":status") {
                 int status = 0;
                 std::from_chars(f.value.data(), f.value.data() + f.value.size(), status);
                 m_response.status = status;
             } else {
-                m_response.headers.push_back({f.name, f.value});
+                m_response.headers.push_back(std::move(f));
             }
         }
         clearDecodedHeaders();

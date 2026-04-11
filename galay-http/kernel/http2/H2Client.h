@@ -51,6 +51,31 @@ struct H2ClientConnectMachine;
 class H2ClientConnectSequence;
 struct H2RequestMachine;
 auto buildRequestOperation(H2Client& client, Http2Request&& request);
+
+class CaptureSchedulerAwaitable {
+public:
+    explicit CaptureSchedulerAwaitable(Scheduler** out) noexcept
+        : m_out(out)
+    {
+    }
+
+    bool await_ready() const noexcept {
+        return false;
+    }
+
+    template<typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> handle) noexcept {
+        if (m_out != nullptr) {
+            *m_out = handle.promise().taskRefView().belongScheduler();
+        }
+        return false;
+    }
+
+    void await_resume() const noexcept {}
+
+private:
+    Scheduler** m_out = nullptr;
+};
 } // namespace detail
 
 /**
@@ -92,7 +117,7 @@ private:
 class H2Client
 {
 public:
-    using ConnectAwaitable = detail::H2ClientConnectSequence;
+    using ConnectAwaitable = Task<std::expected<bool, Http2ErrorCode>>;
 
     H2Client(const H2ClientConfig& config = H2ClientConfig());
     ~H2Client() = default;
@@ -106,9 +131,9 @@ public:
      * @brief 建立到目标主机的 h2 连接
      * @param host 目标主机名，会同时用于 TCP 连接与 TLS SNI / authority 语义
      * @param port 目标端口，默认 443
-     * @return 自定义 connect awaitable；成功后连接进入可发起 stream 的状态
+     * @return `Task<std::expected<bool, Http2ErrorCode>>`；成功后连接进入可发起 stream 的状态
      */
-    auto connect(const std::string& host, uint16_t port = 443);
+    ConnectAwaitable connect(const std::string& host, uint16_t port = 443);
 
     /**
      * @brief 发送一个完整的 HTTP/2 请求
@@ -983,8 +1008,133 @@ inline H2Client::H2Client(const H2ClientConfig& config)
     }
 }
 
-inline auto H2Client::connect(const std::string& host, uint16_t port) {
-    return detail::H2ClientConnectSequence(*this, host, port);
+inline H2Client::ConnectAwaitable H2Client::connect(const std::string& host, uint16_t port) {
+    const auto discard_socket = [](std::unique_ptr<galay::ssl::SslSocket>& socket) {
+        if (socket && socket->handle().fd >= 0) {
+            ::close(socket->handle().fd);
+        }
+        socket.reset();
+    };
+
+    const auto discard_transport = [this, &discard_socket]() {
+        if (m_conn) {
+            if (m_conn->socket().handle().fd >= 0) {
+                ::close(m_conn->socket().handle().fd);
+            }
+            m_conn.reset();
+        }
+        discard_socket(m_socket);
+        m_connected = false;
+        m_scheduler = nullptr;
+    };
+
+    const auto finalize_transport = [this]() -> bool {
+        if (m_socket == nullptr) {
+            return false;
+        }
+
+        m_conn = std::make_unique<Http2ConnImpl<galay::ssl::SslSocket>>(std::move(*m_socket));
+        m_socket.reset();
+        m_conn->setIsClient(true);
+        m_conn->localSettings().max_concurrent_streams = m_config.max_concurrent_streams;
+        m_conn->localSettings().initial_window_size = m_config.initial_window_size;
+        m_conn->localSettings().max_frame_size = m_config.max_frame_size;
+        m_conn->localSettings().max_header_list_size = m_config.max_header_list_size;
+        m_conn->localSettings().enable_push = 0;
+        m_conn->markSettingsSent();
+        m_connected = true;
+        m_connect_result = true;
+        HTTP_LOG_INFO("[connect] [h2] [{}:{}]", m_host, m_port);
+        return true;
+    };
+
+    m_connected = false;
+    m_host = host;
+    m_port = port;
+    m_authority = m_host + ":" + std::to_string(m_port);
+    m_alpn_protocol.clear();
+    m_scheduler = nullptr;
+    m_connect_result = std::unexpected(Http2ErrorCode::ConnectError);
+    m_close_result = true;
+    m_conn.reset();
+    m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
+
+    co_await detail::CaptureSchedulerAwaitable(&m_scheduler);
+    if (m_scheduler == nullptr) {
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    auto nonblock_result = m_socket->option().handleNonBlock();
+    if (!nonblock_result) {
+        HTTP_LOG_ERROR("[h2] [connect] [nonblock-fail] [{}]", nonblock_result.error().message());
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    auto sni_result = m_socket->setHostname(m_host);
+    if (!sni_result) {
+        HTTP_LOG_ERROR("[h2] [sni-fail] [{}]", sni_result.error().message());
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    Host server_host(IPType::IPV4, m_host, m_port);
+    auto connect_result = co_await m_socket->connect(server_host);
+    if (!connect_result) {
+        HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", connect_result.error().message());
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    auto handshake_result = co_await m_socket->handshake();
+    if (!handshake_result) {
+        HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    m_alpn_protocol = m_socket->getALPNProtocol();
+    if (m_alpn_protocol != "h2") {
+        HTTP_LOG_ERROR("[h2] [alpn-fail] [got={}] [expect=h2]", m_alpn_protocol);
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    Http2Settings local_settings;
+    local_settings.max_concurrent_streams = m_config.max_concurrent_streams;
+    local_settings.initial_window_size = m_config.initial_window_size;
+    local_settings.max_frame_size = m_config.max_frame_size;
+    local_settings.max_header_list_size = m_config.max_header_list_size;
+    local_settings.enable_push = 0;
+
+    std::string preface(kHttp2ConnectionPreface.begin(), kHttp2ConnectionPreface.end());
+    auto settings = local_settings.toFrame();
+    settings.header().stream_id = 0;
+    preface.append(settings.serialize());
+
+    size_t offset = 0;
+    while (offset < preface.size()) {
+        auto send_result = co_await m_socket->send(preface.data() + offset, preface.size() - offset);
+        if (!send_result) {
+            HTTP_LOG_ERROR("[h2] [preface-send-fail] [{}]", send_result.error().message());
+            discard_transport();
+            co_return std::unexpected(Http2ErrorCode::ConnectError);
+        }
+        if (send_result.value() == 0) {
+            HTTP_LOG_ERROR("[h2] [preface-send-fail] [short-write]");
+            discard_transport();
+            co_return std::unexpected(Http2ErrorCode::ConnectError);
+        }
+        offset += send_result.value();
+    }
+
+    if (!finalize_transport()) {
+        discard_transport();
+        co_return std::unexpected(Http2ErrorCode::ConnectError);
+    }
+
+    co_return std::expected<bool, Http2ErrorCode>(true);
 }
 
 inline auto H2Client::request(Http2Request request) {

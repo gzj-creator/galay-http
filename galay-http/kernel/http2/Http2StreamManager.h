@@ -625,8 +625,8 @@ public:
 private:
     static constexpr size_t kSslIoOwnerBatchSize = 64;
     static constexpr auto kSslIoOwnerHotWaitInterval = std::chrono::milliseconds(1);
-    static constexpr auto kSslIoOwnerActivePollInterval = std::chrono::milliseconds(50);
-    static constexpr auto kSslIoOwnerIdlePollInterval = std::chrono::milliseconds(5);
+    static constexpr auto kSslIoOwnerActivePollInterval = std::chrono::milliseconds(5);
+    static constexpr auto kSslIoOwnerIdlePollInterval = std::chrono::milliseconds(50);
 
     void collectOutgoingFrame(Http2OutgoingFrame&& item,
                               std::vector<Http2OutgoingFrame>& outgoing_batch,
@@ -1718,6 +1718,10 @@ private:
             events |= Http2StreamEvent::RequestComplete;
         }
         if (m_active_conn_mode) {
+            if (shouldDeferHeadersOnlyActiveDelivery(stream, end_stream)) {
+                stream->m_pending_events |= events;
+                return;
+            }
             markStreamActive(stream, events);
         } else {
             queueStreamHandler(stream);
@@ -2142,6 +2146,27 @@ private:
             return;
         }
         m_active_batch.mark(stream, events);
+    }
+
+    bool shouldDeferHeadersOnlyActiveDelivery(const Http2Stream::ptr& stream,
+                                              bool end_stream) const {
+        if (!stream || !m_active_conn_mode || m_conn.isClient() || end_stream) {
+            return false;
+        }
+
+        const auto content_length = stream->request().getHeader("content-length");
+        if (content_length.empty()) {
+            return false;
+        }
+
+        size_t parsed = 0;
+        const auto* begin = content_length.data();
+        const auto* end = begin + content_length.size();
+        const auto [ptr, ec] = std::from_chars(begin, end, parsed);
+        if (ec != std::errc{} || ptr != end) {
+            return false;
+        }
+        return parsed > 0;
     }
 
     void closeActiveStreamQueue() {
