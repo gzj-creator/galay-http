@@ -17,53 +17,103 @@
 #include <iostream>
 #include <csignal>
 #include <atomic>
+#include <memory>
 
 using namespace galay::http2;
 using namespace galay::kernel;
 
 static volatile bool g_running = true;
-static const Http2HeaderField kStatus200{":status", "200"};
-static const Http2HeaderField kContentTypeTextPlain{"content-type", "text/plain"};
+static bool g_debug_log = false;
+static std::atomic<int> g_debug_logs{0};
+
+static const std::string& encodedEchoHeaders(size_t body_size) {
+    static const std::string kEncoded0 = [] {
+        HpackEncoder encoder;
+        return encoder.encodeStateless({
+            {":status", "200"},
+            {"content-type", "text/plain"},
+            {"content-length", "0"},
+        });
+    }();
+    static const std::string kEncoded128 = [] {
+        HpackEncoder encoder;
+        return encoder.encodeStateless({
+            {":status", "200"},
+            {"content-type", "text/plain"},
+            {"content-length", "128"},
+        });
+    }();
+
+    if (body_size == 0) {
+        return kEncoded0;
+    }
+    if (body_size == 128) {
+        return kEncoded128;
+    }
+
+    static thread_local std::string dynamic_headers;
+    HpackEncoder encoder;
+    dynamic_headers = encoder.encodeStateless({
+        {":status", "200"},
+        {"content-type", "text/plain"},
+        {"content-length", std::to_string(body_size)},
+    });
+    return dynamic_headers;
+}
+
+static std::shared_ptr<const std::string> sharedEncodedEchoHeaders(size_t body_size) {
+    static const auto kEncoded0 = std::make_shared<const std::string>(encodedEchoHeaders(0));
+    static const auto kEncoded128 = std::make_shared<const std::string>(encodedEchoHeaders(128));
+
+    if (body_size == 0) {
+        return kEncoded0;
+    }
+    if (body_size == 128) {
+        return kEncoded128;
+    }
+    return std::make_shared<const std::string>(encodedEchoHeaders(body_size));
+}
 
 void signalHandler(int) {
     g_running = false;
 }
 
-Task<void> handleStream(Http2Stream::ptr stream) {
-    std::string body;
+Task<void> handleActiveConn(Http2ConnContext& ctx) {
+    while (true) {
+        auto streams = co_await ctx.getActiveStreams(64);
+        if (!streams) {
+            break;
+        }
 
-    bool end_stream = false;
-    while (!end_stream) {
-        auto batch_result = co_await stream->getFrames(16);
-        if (!batch_result) break;
+        for (auto& stream : *streams) {
+            auto events = stream->takeEvents();
+            if (!hasHttp2StreamEvent(events, Http2StreamEvent::RequestComplete)) {
+                continue;
+            }
 
-        auto frames = std::move(batch_result.value());
-        for (auto& frame : frames) {
-            if (!frame) {
-                end_stream = true;
-                break;
+            const size_t body_size = stream->request().bodySize();
+            const size_t body_chunk_count = stream->request().bodyChunkCount();
+            auto response_headers = sharedEncodedEchoHeaders(body_size);
+
+            if (g_debug_log) {
+                int idx = g_debug_logs.fetch_add(1);
+                if (idx < 10) {
+                    std::cerr << "[echo] recv body_len=" << body_size << "\n";
+                }
             }
-            if (frame->isData()) {
-                body.append(frame->asData()->data());
-            }
-            if (frame->isEndStream()) {
-                end_stream = true;
-                break;
+
+            if (body_chunk_count == 1) {
+                stream->sendEncodedHeadersAndData(
+                    std::move(response_headers), stream->request().takeSingleBodyChunk(), true);
+            } else if (body_chunk_count > 1) {
+                stream->sendEncodedHeadersAndDataChunks(
+                    std::string(*response_headers), stream->request().takeBodyChunks(), true);
+            } else {
+                stream->sendEncodedHeadersAndData(
+                    std::move(response_headers), std::string(), true);
             }
         }
     }
-
-    std::vector<Http2HeaderField> headers;
-    headers.reserve(3);
-    headers.push_back(kStatus200);
-    headers.push_back(kContentTypeTextPlain);
-    headers.push_back({"content-length", std::to_string(body.size())});
-
-    stream->sendHeaders(headers, body.empty(), true);
-    if (!body.empty()) {
-        stream->sendData(body, true);
-    }
-
     co_return;
 }
 
@@ -83,6 +133,7 @@ int main(int argc, char* argv[]) {
     } else {
         galay::http::HttpLogger::disable();
     }
+    g_debug_log = (debug_log > 0);
 
     std::cout << "========================================\n";
     std::cout << "H2c Mux Server Benchmark\n";
@@ -105,10 +156,15 @@ int main(int argc, char* argv[]) {
             .computeSchedulerCount(0)
             .maxConcurrentStreams(static_cast<uint32_t>(max_streams))
             .initialWindowSize(65535)
+            .activeConnHandler(handleActiveConn)
             .build());
-        server.start(handleStream);
+        server.start();
 
-        std::cout << "Server started. Waiting for requests...\n\n";
+        std::cout << "Server started successfully!\n";
+        std::cout << "Runtime Config: io=" << server.getRuntime().getIOSchedulerCount()
+                  << " compute=" << server.getRuntime().getComputeSchedulerCount()
+                  << " (configured io=" << io_threads << " compute=0)\n";
+        std::cout << "Waiting for requests...\n\n";
 
         while (g_running) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

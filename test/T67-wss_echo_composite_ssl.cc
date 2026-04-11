@@ -23,6 +23,7 @@ bool check(bool condition, const char* message) {
     return true;
 }
 
+#ifdef GALAY_HTTP_SSL_ENABLED
 std::string encodeMaskedFrame(galay::websocket::WsOpcode opcode, std::string payload, bool fin = true) {
     galay::websocket::WsFrame frame(opcode, std::move(payload), fin);
     std::string encoded;
@@ -54,6 +55,7 @@ std::string drainSslSend(MachineT& machine, ActionT action) {
     }
     return sent;
 }
+#endif
 
 } // namespace
 
