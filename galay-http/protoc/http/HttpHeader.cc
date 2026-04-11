@@ -277,6 +277,58 @@ namespace galay::http
         return false;
     }
 
+    HttpMethod parseHttpMethodFast(std::string_view method)
+    {
+        if (method == "GET") {
+            return HttpMethod::GET;
+        }
+        if (method == "POST") {
+            return HttpMethod::POST;
+        }
+        if (method == "HEAD") {
+            return HttpMethod::HEAD;
+        }
+        if (method == "PUT") {
+            return HttpMethod::PUT;
+        }
+        if (method == "DELETE") {
+            return HttpMethod::DELETE;
+        }
+        if (method == "TRACE") {
+            return HttpMethod::TRACE;
+        }
+        if (method == "OPTIONS") {
+            return HttpMethod::OPTIONS;
+        }
+        if (method == "CONNECT") {
+            return HttpMethod::CONNECT;
+        }
+        if (method == "PATCH") {
+            return HttpMethod::PATCH;
+        }
+        if (method == "PRI") {
+            return HttpMethod::PRI;
+        }
+        return HttpMethod::UNKNOWN;
+    }
+
+    HttpVersion parseHttpVersionFast(std::string_view version)
+    {
+        if (version == "HTTP/1.1") {
+            return HttpVersion::HttpVersion_1_1;
+        }
+        if (version == "HTTP/1.0") {
+            return HttpVersion::HttpVersion_1_0;
+        }
+        if (version == "HTTP/2.0") {
+            return HttpVersion::HttpVersion_2_0;
+        }
+        if (version == "HTTP/3.0") {
+            return HttpVersion::HttpVersion_3_0;
+        }
+        return HttpVersion::HttpVersion_Unknown;
+    }
+
     } // namespace
 
     HeaderPair::HeaderPair(Mode mode)
@@ -505,6 +557,14 @@ namespace galay::http
 
     void HeaderPair::clear()
     {
+        if (m_mode == Mode::ServerSide) {
+            for (size_t i = 0; i < m_commonHeaders.size(); ++i) {
+                if (m_commonHeaderPresent.test(i)) {
+                    m_commonHeaders[i].clear();
+                }
+            }
+            m_commonHeaderPresent.reset();
+        }
         if(!m_headerPairs.empty()) m_headerPairs.clear();
     }
 
