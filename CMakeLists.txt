@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 2.0.1 LANGUAGES CXX)
+project(galay-http VERSION 2.0.2 LANGUAGES CXX)
 
 include(CTest)
 
