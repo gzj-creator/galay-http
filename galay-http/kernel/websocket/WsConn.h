@@ -1134,7 +1134,9 @@ public:
     friend class WsServerImpl;
     friend struct detail::WsEchoMachine<SocketType>;
     friend struct detail::WsSslEchoMachine<SocketType>;
+#ifdef GALAY_HTTP_SSL_ENABLED
     friend struct detail::WsSslEchoLoopMachine<SocketType>;
+#endif
 
 private:
     SocketType m_socket;

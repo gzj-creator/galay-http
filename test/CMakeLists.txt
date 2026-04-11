@@ -36,7 +36,6 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     add_executable(${TEST_NAME} ${TEST_SOURCE})
     target_link_libraries(${TEST_NAME}
         galay-http
-        pthread
     )
     if(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED)
         target_compile_options(${TEST_NAME} PRIVATE ${GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS})

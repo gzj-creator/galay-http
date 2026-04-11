@@ -17,7 +17,6 @@ foreach(BENCHMARK_SOURCE ${BENCHMARK_SOURCES})
     add_executable(${BENCHMARK_NAME} ${BENCHMARK_SOURCE})
     target_link_libraries(${BENCHMARK_NAME}
         galay-http
-        pthread
     )
     if(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED)
         target_compile_options(${BENCHMARK_NAME} PRIVATE ${GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS})

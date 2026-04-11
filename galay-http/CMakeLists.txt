@@ -45,7 +45,6 @@ endif()
 target_link_libraries(${PROJECT_NAME}
     PUBLIC ${GALAY_HTTP_UTILS_TARGET}
     PUBLIC galay-kernel::galay-kernel
-    PUBLIC pthread
 )
 
 # 如果启用 SSL，链接 galay-ssl 库
