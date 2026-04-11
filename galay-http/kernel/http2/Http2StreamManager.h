@@ -865,6 +865,7 @@ private:
                     }
 
                     processPendingActions();
+                    drainRetiredStreams();
                     flushActiveStreams();
 
                     while (!m_pending_spawns.empty()) {
@@ -962,6 +963,7 @@ private:
             stream->closeFrameQueue();
         });
         closeActiveStreamQueue();
+        drainRetiredStreams();
 
         co_return;
     }
@@ -1142,6 +1144,7 @@ private:
                 had_ready_active_streams =
                     had_ready_active_streams || (m_active_conn_mode && !m_active_batch.empty());
                 processPendingActions();
+                drainRetiredStreams();
                 flushActiveStreams();
 
                 had_pending_spawns = had_pending_spawns || !m_pending_spawns.empty();
@@ -1158,6 +1161,7 @@ private:
             }
 
             if (!m_send_channel.empty()) {
+                drainRetiredStreams();
                 continue;
             }
 
@@ -1188,6 +1192,7 @@ private:
                     if (has_shutdown) {
                         break;
                     }
+                    drainRetiredStreams();
                     continue;
                 }
                 if (hot_batch_result.error().code() != kTimeout) {
@@ -1286,13 +1291,14 @@ private:
             stream->closeFrameQueue();
         });
         closeActiveStreamQueue();
+        drainRetiredStreams();
         co_return;
     }
 
     Task<void> runHandler(Http2StreamHandler handler, Http2Stream::ptr stream) {
         co_await handler(stream);
-        // 流处理完毕，从连接的流表中移除，释放 max_concurrent_streams 配额
-        m_conn.removeStream(stream->streamId());
+        // Handler 可能在非 IO owner 线程恢复，流表回收统一回送给主循环串行处理。
+        enqueueRetireStream(stream ? stream->streamId() : 0);
         int remaining = m_active_handlers.fetch_sub(1, std::memory_order_acq_rel) - 1;
         if (remaining == 0 && m_draining_handlers.load(std::memory_order_acquire)) {
             m_handler_waiter.notify();
@@ -1625,6 +1631,20 @@ private:
     void enqueueWindowUpdateAction(uint32_t stream_id, uint32_t increment) {
         m_pending_actions.push_back({
             PendingAction::Type::SendWindowUpdate, stream_id, Http2ErrorCode::NoError, increment});
+    }
+
+    void enqueueRetireStream(uint32_t stream_id) {
+        if (stream_id == 0) {
+            return;
+        }
+        m_retire_stream_channel.send(stream_id);
+    }
+
+    void drainRetiredStreams() {
+        while (auto stream_id = m_retire_stream_channel.tryRecv()) {
+            clearHotStream(*stream_id);
+            m_conn.removeStream(*stream_id);
+        }
     }
 
     Http2Stream::ptr findAttachedStream(uint32_t stream_id) {
@@ -2189,8 +2209,7 @@ private:
         stream->attachIO(&m_send_channel, encoder, decoder);
         if (m_active_conn_mode && !m_conn.isClient()) {
             stream->setRetireCallback([this](uint32_t stream_id) {
-                clearHotStream(stream_id);
-                m_conn.removeStream(stream_id);
+                enqueueRetireStream(stream_id);
             });
         } else {
             stream->setRetireCallback(nullptr);
@@ -2241,6 +2260,7 @@ private:
 
     // 待 spawn 的流队列（按优先级排序）
     std::priority_queue<Http2Stream::ptr, std::vector<Http2Stream::ptr>, StreamPriorityCompare> m_pending_spawns;
+    MpscChannel<uint32_t> m_retire_stream_channel;
 };
 
 // 类型别名
