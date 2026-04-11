@@ -8,6 +8,7 @@
 #include "galay-http/kernel/IoVecUtils.h"
 #include "galay-http/kernel/http/HttpLog.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
+#include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/common/Sleep.hpp"
 #include <memory>
 #include <queue>
@@ -313,7 +314,6 @@ public:
     Http2StreamManagerImpl(Http2ConnImpl<SocketType>& conn)
         : m_conn(conn)
         , m_running(false)
-        , m_send_channel(galay::kernel::UnsafeChannelWakeMode::Deferred)
     {
     }
 
@@ -2234,7 +2234,7 @@ private:
     Http2StreamPool m_stream_pool;
 
     // 发送通道：空指针表示关闭信号
-    UnsafeChannel<Http2OutgoingFrame> m_send_channel;
+    MpscChannel<Http2OutgoingFrame> m_send_channel;
 
     // 待处理动作队列
     std::deque<PendingAction> m_pending_actions;

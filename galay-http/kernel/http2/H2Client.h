@@ -391,11 +391,6 @@ private:
         if (phase != nullptr && detail != nullptr) {
             HTTP_LOG_ERROR("[h2] [{}] [{}]", phase, detail);
         }
-        if (m_client->m_socket && m_client->m_socket->handle().fd >= 0) {
-            ::close(m_client->m_socket->handle().fd);
-        }
-        m_client->m_socket.reset();
-        m_client->m_conn.reset();
         m_client->m_connected = false;
         m_client->m_connect_result = std::unexpected(Http2ErrorCode::ConnectError);
         m_result = std::unexpected(Http2ErrorCode::ConnectError);
@@ -537,7 +532,12 @@ public:
         }
 
         auto result = resumeInner();
-        if (result && !finalizeTransport(*m_client)) {
+        if (!result) {
+            discardTransport(*m_client);
+            m_client->m_connect_result = std::unexpected(result.error());
+            return result;
+        }
+        if (!finalizeTransport(*m_client)) {
             discardTransport(*m_client);
             m_client->m_connect_result = std::unexpected(Http2ErrorCode::ConnectError);
             return std::unexpected(Http2ErrorCode::ConnectError);

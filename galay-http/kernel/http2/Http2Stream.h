@@ -6,6 +6,7 @@
 #include "galay-http/protoc/http2/Http2Hpack.h"
 #include "galay-http/protoc/http2/Http2Error.h"
 #include "galay-kernel/concurrency/AsyncWaiter.h"
+#include "galay-kernel/concurrency/MpscChannel.h"
 #include "galay-kernel/concurrency/UnsafeChannel.h"
 #include <string>
 #include <string_view>
@@ -1049,7 +1050,7 @@ private:
         m_io_attached = true;
     }
 
-    void attachIO(galay::kernel::UnsafeChannel<Http2OutgoingFrame>* send_channel,
+    void attachIO(galay::kernel::MpscChannel<Http2OutgoingFrame>* send_channel,
                   HpackEncoder* encoder,
                   HpackDecoder* decoder) {
         m_send_channel = send_channel;
@@ -1093,7 +1094,7 @@ private:
     bool m_exclusive = false;
 
     // 发送队列和编解码器（由 StreamManager 绑定）
-    galay::kernel::UnsafeChannel<Http2OutgoingFrame>* m_send_channel = nullptr;
+    galay::kernel::MpscChannel<Http2OutgoingFrame>* m_send_channel = nullptr;
     std::vector<Http2OutgoingFrame>* m_send_queue = nullptr;
     HpackEncoder* m_encoder = nullptr;
     HpackDecoder* m_decoder = nullptr;
