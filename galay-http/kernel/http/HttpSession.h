@@ -39,6 +39,10 @@ struct HttpSessionState {
         , m_request(std::move(request))
         , m_send_buffer(m_request.toString()) {}
 
+    HttpSessionState(HttpSessionImpl<SocketType>& session, std::string&& serialized_request)
+        : m_session(&session)
+        , m_send_buffer(std::move(serialized_request)) {}
+
     bool sendCompleted() const {
         return m_send_offset >= m_send_buffer.size();
     }
@@ -347,6 +351,30 @@ auto buildSessionOperation(HttpSessionImpl<SocketType>& session, HttpRequest&& r
     }
 }
 
+template<typename SocketType>
+auto buildSessionOperation(HttpSessionImpl<SocketType>& session, std::string&& serialized_request) {
+    using State = HttpSessionState<SocketType>;
+    using ResultType = typename State::ResultType;
+    auto state = std::make_shared<State>(session, std::move(serialized_request));
+
+    if constexpr (std::is_same_v<SocketType, TcpSocket>) {
+        return AwaitableBuilder<ResultType>::fromStateMachine(
+                   session.getSocket().controller(),
+                   HttpSessionTcpMachine<SocketType>(std::move(state)))
+            .build();
+    } else {
+#ifdef GALAY_HTTP_SSL_ENABLED
+        return galay::ssl::SslAwaitableBuilder<ResultType>::fromStateMachine(
+                   session.getSocket().controller(),
+                   &session.getSocket(),
+                   HttpSessionSslMachine<SocketType>(std::move(state)))
+            .build();
+#else
+        static_assert(!sizeof(SocketType), "SSL support is disabled");
+#endif
+    }
+}
+
 } // namespace detail
 
 template<typename SocketType>
@@ -383,6 +411,22 @@ public:
               const std::string& content_type = "application/x-www-form-urlencoded",
               const std::map<std::string, std::string>& headers = {}) {
         return createRequest(HttpMethod::POST, uri, body, content_type, headers);
+    }
+
+    /**
+     * @brief 发送带右值请求体的 POST 请求
+     * @param uri 请求 URI
+     * @param body 调用方可转移所有权的请求体
+     * @param content_type 请求体 Content-Type
+     * @param headers 额外请求头
+     * @return 请求-响应一体化 awaitable
+     * @note 该重载会把请求体直接移动进内部 HttpRequest，适合热点路径避免额外 body 拷贝
+     */
+    auto post(const std::string& uri,
+              std::string&& body,
+              const std::string& content_type = "application/x-www-form-urlencoded",
+              const std::map<std::string, std::string>& headers = {}) {
+        return createRequest(HttpMethod::POST, uri, std::move(body), content_type, headers);
     }
 
     auto put(const std::string& uri,
@@ -428,6 +472,18 @@ public:
         return m_writer.sendRequest(request);
     }
 
+    /**
+     * @brief 发送调用方已预先序列化好的完整 HTTP/1.x 请求字节
+     * @param request 包含 start-line、headers、空行与 body 的完整请求报文
+     * @return 请求-响应一体化 awaitable
+     * @note 该接口复用 HttpSession 的超时、收包与响应解析状态机，但跳过 HttpRequest/Header 序列化
+     * @note request 的所有权会转移到 awaitable 内部；await 完成前无需额外保持外部缓冲存活
+     * @note 调用方必须自行保证报文格式合法，尤其是 Content-Length、Connection 与请求行
+     */
+    auto sendSerializedRequest(std::string request) {
+        return detail::buildSessionOperation(*this, std::move(request));
+    }
+
     auto getResponse(HttpResponse& response) {
         return m_reader.getResponse(response);
     }
@@ -439,7 +495,7 @@ public:
 private:
     auto createRequest(HttpMethod method,
                        const std::string& uri,
-                       const std::string& body,
+                       std::string body,
                        const std::string& content_type,
                        const std::map<std::string, std::string>& headers) {
         HttpRequest request;
@@ -460,8 +516,7 @@ private:
 
         request.setHeader(std::move(header));
         if (!body.empty()) {
-            std::string body_copy = body;
-            request.setBodyStr(std::move(body_copy));
+            request.setBodyStr(std::move(body));
         }
 
         return detail::buildSessionOperation(*this, std::move(request));

@@ -315,6 +315,32 @@ auto session = client.getSession();
 
 - `HttpsClient::connect()` 复用 `HttpUrl::parse(...)`，因此传入 `http://` 形状的 URL 不会立刻报错；当前实现只记录 warning，随后仍按 TLS 连接处理。为了避免语义歧义，实际调用应始终传 `https://`
 
+### `HttpSession`
+
+来源：`galay-http/kernel/http/HttpSession.h`
+
+`HttpSession` 是 `HttpClient::getSession()` / `HttpsClient::getSession()` 返回的 HTTP/1.x 会话层。
+
+常用入口：
+
+- `get(...)`
+- `post(const std::string& uri, const std::string& body, ...)`
+- `post(const std::string& uri, std::string&& body, ...)`
+- `put(...)`
+- `del(...)`
+- `sendRequest(HttpRequest&)`
+- `sendSerializedRequest(std::string)`
+- `getResponse(HttpResponse&)`
+- `sendChunk(...)`
+
+关键语义：
+
+- 常规调用优先使用 `get()` / `post()` / `put()` 这类按语义构造请求的入口。
+- `post(..., std::string&& body, ...)` 会把请求体直接移动进内部 `HttpRequest`，适合热点路径减少一次 body 拷贝。
+- `sendSerializedRequest(std::string)` 属于高级入口：调用方直接提供完整 HTTP/1.x 请求报文，`HttpSession` 只负责发送、超时控制和响应解析，不再帮你构造请求头。
+- 使用 `sendSerializedRequest(...)` 时，调用方必须自行保证请求行、Header、空行、Body 和 `Content-Length` 一致；该接口不会再校正这些字段。
+- 传入 `sendSerializedRequest(...)` 的字符串所有权会转移到 awaitable 内部；await 完成前不需要额外保活外部缓冲。
+
 ## WebSocket / WSS
 
 ### `WsClient` 与 `WsSession`
