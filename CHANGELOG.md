@@ -8,6 +8,15 @@
 
 ## [Unreleased]
 
+## [v2.1.1] - 2026-04-23
+
+### Changed
+- 将源码仓库中的包配置模板重命名为统一的小写 kebab-case `galay-http-config.cmake.in`，与其他 `galay-*` 项目的模板命名保持一致。
+- 同步更新 `configure_package_config_file(...)` 的模板路径，继续保留安装导出的 `GalayHttpConfig.cmake` / `GalayHttpConfigVersion.cmake` 与 `GalayHttp` 包名兼容。
+
+### Chore
+- 删除 `docker/galay-sdk/` 下的构建、校验与远程运行脚本，清理已经不再维护的 HTTP SDK 镜像工作流目录。
+
 ## [v2.1.0] - 2026-04-22
 
 ### Added

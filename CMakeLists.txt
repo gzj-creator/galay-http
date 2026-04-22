@@ -191,7 +191,7 @@ write_basic_package_version_file(
 
 # 配置主配置文件
 configure_package_config_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GalayHttpConfig.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/galay-http-config.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/GalayHttpConfig.cmake"
     INSTALL_DESTINATION lib/cmake/GalayHttp
 )
