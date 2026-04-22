@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <atomic>
 
-#define GALAY_VERSION "2.0.2"
+#define GALAY_VERSION "2.1.0"
 
 namespace galay::http 
 {

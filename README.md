@@ -52,7 +52,7 @@
 - CMake `>= 3.22`
 - `C++23` 编译器
 - `spdlog`
-- `galay-kernel >= 3.4.4`（`CONFIG` package）
+- `galay-kernel >= 3.4.5`（`CONFIG` package）
 - 启用 TLS 时额外需要 `galay-ssl` 与 OpenSSL
 
 依赖解析优先级：

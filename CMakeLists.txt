@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 2.0.2 LANGUAGES CXX)
+project(galay-http VERSION 2.1.0 LANGUAGES CXX)
 
 include(CTest)
 
@@ -66,7 +66,7 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # 先锁定 galay-kernel，避免 galay-ssl 的 find_dependency() 抢先注入旧的导入目标。
-find_package(galay-kernel 3.4.4 REQUIRED CONFIG)
+find_package(galay-kernel 3.4.5 REQUIRED CONFIG)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
