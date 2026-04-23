@@ -8,6 +8,10 @@
 
 ## [Unreleased]
 
+### Changed
+- 将安装导出的 CMake package 文件统一为小写 kebab-case：`galay-http-config.cmake`、`galay-http-config-version.cmake` 与 `galay-http-targets.cmake`。
+- 将安装后消费入口收敛为 `find_package(galay-http CONFIG REQUIRED)` 与 `galay-http::galay-http`，移除旧的 `GalayHttp` 包名导出。
+
 ## [v2.1.2] - 2026-04-23
 
 ### Changed

@@ -194,7 +194,7 @@ include(CMakePackageConfigHelpers)
 
 # 配置版本文件
 write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/GalayHttpConfigVersion.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/galay-http-config-version.cmake"
     VERSION ${PROJECT_VERSION}
     COMPATIBILITY AnyNewerVersion
 )
@@ -202,20 +202,20 @@ write_basic_package_version_file(
 # 配置主配置文件
 configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/galay-http-config.cmake.in"
-    "${CMAKE_CURRENT_BINARY_DIR}/GalayHttpConfig.cmake"
-    INSTALL_DESTINATION lib/cmake/GalayHttp
+    "${CMAKE_CURRENT_BINARY_DIR}/galay-http-config.cmake"
+    INSTALL_DESTINATION lib/cmake/galay-http
 )
 
 # 安装导出的目标文件（使用正确的文件名）
 install(EXPORT galay-http-targets
-    FILE GalayHttpTargets.cmake
-    NAMESPACE GalayHttp::
-    DESTINATION lib/cmake/GalayHttp
+    FILE galay-http-targets.cmake
+    NAMESPACE galay-http::
+    DESTINATION lib/cmake/galay-http
 )
 
 # 安装配置文件
 install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/GalayHttpConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/GalayHttpConfigVersion.cmake"
-    DESTINATION lib/cmake/GalayHttp
+    "${CMAKE_CURRENT_BINARY_DIR}/galay-http-config.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/galay-http-config-version.cmake"
+    DESTINATION lib/cmake/galay-http
 )
