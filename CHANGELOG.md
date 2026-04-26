@@ -8,9 +8,10 @@
 
 ## [Unreleased]
 
-### Changed
-- 将安装导出的 CMake package 文件统一为小写 kebab-case：`galay-http-config.cmake`、`galay-http-config-version.cmake` 与 `galay-http-targets.cmake`。
-- 将安装后消费入口收敛为 `find_package(galay-http CONFIG REQUIRED)` 与 `galay-http::galay-http`，移除旧的 `GalayHttp` 包名导出。
+## [v2.1.3] - 2026-04-26
+
+### Fixed
+- 修复 `iouring` 合约测试在多处 HTTP / WS / H2 用例中的构建问题，补齐缺失头文件与相关测试依赖，恢复测试目标可编译性。
 
 ## [v2.1.2] - 2026-04-23
 

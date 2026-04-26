@@ -31,3 +31,12 @@
   - 新增 `HttpSession::sendSerializedRequest(std::string)`，允许上层直接发送完整 `HTTP/1.x` 请求报文，同时复用现有超时控制、收包与响应解析状态机。
   - 为 `HttpSession::post(...)` 增加右值请求体重载，减少热点请求路径的一次 body 拷贝，并补齐 `T78-http_session_serialized_request` 回归测试。
   - 将源码构建、测试与导出包配置中的 `galay-kernel` 依赖基线统一提升到 `3.4.5`，保持与最新内核发布一致。
+
+## v2.1.3 - 2026-04-26
+
+- 版本级别：小版本（patch）
+- Git 提交消息：`test: 修复 iouring 合约测试构建`
+- Git Tag：`v2.1.3`
+- 自述摘要：
+  - 修复 `iouring` 合约测试在多处 HTTP、WebSocket、HTTP/2 与 TLS 相关用例中的构建问题。
+  - 为受影响测试目标补齐缺失头文件与必要依赖声明，恢复 `iouring` 测试矩阵下的可编译性。
