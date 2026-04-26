@@ -7,6 +7,8 @@ namespace test {
 struct FakeTcpSocket {};
 }
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/websocket/WsWriter.h"
 #undef private

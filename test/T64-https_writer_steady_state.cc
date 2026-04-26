@@ -3,6 +3,8 @@
 #include <string>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http/HttpWriter.h"
 #undef private

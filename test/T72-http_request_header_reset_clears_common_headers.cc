@@ -2,6 +2,8 @@
 #include <vector>
 #include <sys/uio.h>
 
+#include <sstream>
+
 #define private public
 #include "galay-http/protoc/http/HttpHeader.h"
 #undef private

@@ -3,6 +3,8 @@
  * @brief HTTP/2 active-connection mode should defer headers-only delivery for known non-zero request bodies
  */
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http2/Http2StreamManager.h"
 #undef private

@@ -2,6 +2,8 @@
 #include <string>
 #include <vector>
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http2/Http2Stream.h"
 #undef private

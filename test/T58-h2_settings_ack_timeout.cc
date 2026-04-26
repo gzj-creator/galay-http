@@ -1,3 +1,5 @@
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http2/Http2StreamManager.h"
 #undef private

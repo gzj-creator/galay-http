@@ -4,6 +4,8 @@
 #include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/websocket/WsConn.h"
 #undef private

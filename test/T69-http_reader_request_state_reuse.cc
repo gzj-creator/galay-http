@@ -1,6 +1,8 @@
 #include <iostream>
 #include <vector>
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http/HttpReader.h"
 #undef private

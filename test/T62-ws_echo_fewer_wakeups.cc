@@ -3,6 +3,8 @@
 #include <iostream>
 #include <string>
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/websocket/WsConn.h"
 #undef private

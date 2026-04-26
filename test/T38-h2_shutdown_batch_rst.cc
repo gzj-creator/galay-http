@@ -28,10 +28,13 @@ int main() {
     std::cout << "[T38] Starting HTTP/2 shutdown batch RST contract tests\n";
 
     // ========== Static contract checks ==========
+    struct StreamVisitor {
+        void operator()(uint32_t, Http2Stream::ptr&) const {}
+    };
 
     // 1. Http2Conn 必须提供 forEachStream() 方法
-    static_assert(requires(Http2Conn* conn) {
-        conn->forEachStream([](uint32_t, Http2Stream::ptr&) {});
+    static_assert(requires(Http2Conn* conn, StreamVisitor visitor) {
+        conn->forEachStream(visitor);
     }, "Http2Conn must expose forEachStream() for stream iteration");
 
     // 2. Http2Stream 必须提供 state() 方法

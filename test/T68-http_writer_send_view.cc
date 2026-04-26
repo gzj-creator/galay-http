@@ -2,6 +2,8 @@
 #include <string>
 #include <string_view>
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http/HttpWriter.h"
 #undef private

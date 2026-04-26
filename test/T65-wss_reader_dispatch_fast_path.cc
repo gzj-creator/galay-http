@@ -1,6 +1,8 @@
 #include <iostream>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/websocket/WsReader.h"
 #undef private

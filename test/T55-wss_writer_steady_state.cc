@@ -4,6 +4,8 @@
 #include <string_view>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/websocket/WsWriter.h"
 #undef private

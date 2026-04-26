@@ -3,6 +3,8 @@
  * @brief HTTP/2 h2c server raw frame-view fast-path contract
  */
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http2/Http2StreamManager.h"
 #undef private

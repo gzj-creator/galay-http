@@ -3,6 +3,8 @@
  * @brief HTTP/2 chunk-first request body contract
  */
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http2/Http2Stream.h"
 #undef private

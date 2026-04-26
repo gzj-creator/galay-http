@@ -1,6 +1,8 @@
 #include <iostream>
 #include <string_view>
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/websocket/WsReader.h"
 #undef private

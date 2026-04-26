@@ -9,6 +9,8 @@
 #include "galay-kernel/kernel/Runtime.h"
 #include "galay-ssl/common/Error.h"
 
+#include <sstream>
+
 #define private public
 #include "galay-http/kernel/http2/Http2StreamManager.h"
 #undef private
