@@ -1,7 +1,7 @@
 project(test)
 
 find_package(spdlog REQUIRED)
-find_package(galay-kernel 3.4.5 REQUIRED CONFIG)
+find_package(galay-kernel 4.0.0 REQUIRED CONFIG)
 
 include_directories(${CMAKE_SOURCE_DIR}/galay-http)
 
@@ -66,7 +66,7 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
 endforeach()
 
 if(BUILD_TESTING AND GALAY_HTTP_MODULE_TARGET_ENABLED)
-    add_executable(T59-module_smoke T59-module_smoke.cpp)
+    add_executable(T59-module_smoke t59_module.cpp)
     target_link_libraries(T59-module_smoke
         PRIVATE galay-http-modules
     )

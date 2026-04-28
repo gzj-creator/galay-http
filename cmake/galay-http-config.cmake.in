@@ -3,7 +3,7 @@
 include(CMakeFindDependencyMacro)
 
 find_dependency(galay-utils REQUIRED CONFIG)
-find_dependency(galay-kernel 3.4.5 REQUIRED CONFIG)
+find_dependency(galay-kernel 4.0.0 REQUIRED CONFIG)
 
 if(@GALAY_HTTP_ENABLE_SSL@)
     find_dependency(galay-ssl REQUIRED CONFIG)

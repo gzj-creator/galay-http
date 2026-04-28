@@ -14,8 +14,8 @@
 
 **Files:**
 - Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/docs/plans/2026-04-06-wss-dual-path-optimization.md`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B7-WssServer.cc`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B8-WssClient.cc`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b7_wss.cc`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b8_wss.cc`
 
 **Step 1: 准备干净的系统安装版构建目录**
 
@@ -64,8 +64,8 @@ Expected: `fail=0`，记录 `success/rps/avg_ms`
 
 Run:
 ```bash
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<rust-port>/ws 60 8 1024
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<galay-port>/ws 60 8 1024
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<rust-port>/ws 60 8 1024
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<galay-port>/ws 60 8 1024
 ```
 
 Expected: 两条基线都有稳定结果，记录吞吐与延迟
@@ -73,10 +73,10 @@ Expected: 两条基线都有稳定结果，记录吞吐与延迟
 ### Task 2: 采样并定位 WSS server 热点
 
 **Files:**
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsReader.h`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsWriter.h`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsConn.h`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B7-WssServer.cc`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_reader.h`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_writer.h`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_conn.h`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b7_wss.cc`
 
 **Step 1: 查找 steady-state 回显路径的对象构造和拷贝点**
 
@@ -84,7 +84,7 @@ Run:
 ```bash
 rg -n "getMessage|sendText|sendBinary|getReader|getWriter|std::string|std::move|reserve|append" \
   /Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket \
-  /Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B7-WssServer.cc
+  /Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b7_wss.cc
 ```
 
 Expected: 找到稳定循环中的消息解析、帧编码、字符串复用点
@@ -106,10 +106,10 @@ Expected: 记录现状，证明测试能观测目标热点
 ### Task 3: 优化 WSS server steady-state
 
 **Files:**
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsReader.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsWriter.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsConn.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B7-WssServer.cc`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_reader.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_writer.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_conn.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b7_wss.cc`
 - Test: 选取受影响的 websocket/wss fast-path 测试
 
 **Step 1: 写 failing/observability 测试**
@@ -147,17 +147,17 @@ Expected: `fail=0` 且吞吐提升；若无提升，回到热点分析
 ### Task 4: 采样并定位 WSS client 热点
 
 **Files:**
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsClient.h`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsReader.h`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsWriter.h`
-- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B8-WssClient.cc`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_client.h`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_reader.h`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_writer.h`
+- Reference: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b8_wss.cc`
 
 **Step 1: 查客户端循环中的固定开销**
 
 Run:
 ```bash
 rg -n "upgrade|welcome|getMessage|sendText|latency|atomic|std::string|timeout" \
-  /Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B8-WssClient.cc \
+  /Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b8_wss.cc \
   /Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket
 ```
 
@@ -174,10 +174,10 @@ Expected: 新测试或局部复测能够证明该热点可被消除
 ### Task 5: 优化 WSS client steady-state
 
 **Files:**
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/B8-WssClient.cc`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsClient.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsReader.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/WsWriter.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/b8_wss.cc`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_client.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_reader.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/websocket/ws_writer.h`
 
 **Step 1: 先写/更新测试**
 
@@ -203,8 +203,8 @@ Expected: 全绿
 
 Run:
 ```bash
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<rust-port>/ws 60 8 1024
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<galay-port>/ws 60 8 1024
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<rust-port>/ws 60 8 1024
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<galay-port>/ws 60 8 1024
 ```
 
 Expected: 两条基线都提升，且无崩溃/无错误
@@ -230,9 +230,9 @@ Run:
 ```bash
 /tmp/galay-http-go-proto-client -proto wss -addr 127.0.0.1:<galay-port> -path /ws -conns 20 -duration 4 -size 256
 /tmp/galay-http-go-proto-client -proto wss -addr 127.0.0.1:<galay-port> -path /ws -conns 60 -duration 8 -size 1024
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<rust-port>/ws 8 4 256
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<rust-port>/ws 60 8 1024
-/tmp/galay-http-wss-opt-baseline/benchmark/B8-WssClient wss://127.0.0.1:<galay-port>/ws 60 8 1024
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<rust-port>/ws 8 4 256
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<rust-port>/ws 60 8 1024
+/tmp/galay-http-wss-opt-baseline/benchmark/b8_wssient wss://127.0.0.1:<galay-port>/ws 60 8 1024
 ```
 
 Expected:

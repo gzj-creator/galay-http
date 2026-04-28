@@ -26,12 +26,12 @@
 
 本轮优化只在 `galay-http` 仓库内完成，优先修改：
 
-- `benchmark/B7-WssServer.cc`
-- `benchmark/B8-WssClient.cc`
-- `galay-http/kernel/websocket/WsReader.h`
-- `galay-http/kernel/websocket/WsWriter.h`
-- `galay-http/kernel/websocket/WsConn.h`
-- `galay-http/kernel/websocket/WsClient.h`
+- `benchmark/b7_wss.cc`
+- `benchmark/b8_wss.cc`
+- `galay-http/kernel/websocket/ws_reader.h`
+- `galay-http/kernel/websocket/ws_writer.h`
+- `galay-http/kernel/websocket/ws_conn.h`
+- `galay-http/kernel/websocket/ws_client.h`
 
 不在本轮主动修改：
 

@@ -8,15 +8,15 @@
 
 | 能力 | 公开入口 | 构建条件 | 真实示例 / 测试 | 边界说明 |
 | --- | --- | --- | --- | --- |
-| HTTP/1.1 服务端 | `galay-http/kernel/http/HttpServer.h` | 默认启用 | `E1-EchoServer`、`E11-StaticServer`、`E12-HttpProxy` / `T5-http_server`、`T14-static_file_transfer_modes`、`T15-range_etag_server`、`T27-proxy_try_files_e2_e` | 标准明文 HTTP 服务面。 |
-| HTTP/1.1 客户端 | `galay-http/kernel/http/HttpClient.h` | 默认启用 | `E2-EchoClient` / `T6-http_client_awaitable`、`T7-http_client_awaitable_edge_cases`、`T16-http_client_timeout` | `HttpClient::connect()` 只接受 `http://`。 |
-| HTTPS | `galay-http/kernel/http/HttpServer.h`、`galay-http/kernel/http/HttpClient.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E5-HttpsServer`、`E6-HttpsClient` / `T21-https_server`、`T22-https_client`、`T23-https_stress_test`、`T24-simple_https_test` | `HttpsClient` 需要 `connect(url)` 之后显式 `co_await handshake()`。 |
-| WebSocket 客户端 (`ws`) | `galay-http/kernel/websocket/WsClient.h`、`galay-http/kernel/websocket/WsSession.h` | 默认启用 | `E4-WebsocketClient` / `T19-ws_client`、`T20-websocket_client` | 使用 `WsClient::connect()` 后通过 `session.upgrade()` 完成协议升级。 |
-| WebSocket 服务端 (`ws`) | `galay-http/kernel/http/HttpServer.h` + `galay-http/kernel/websocket/WsSession.h` | 默认启用 | `E3-WebsocketServer` / `T18-ws_server` | 仓库没有独立的 `WsServer` 公共类，服务端模式通过 HTTP Upgrade 组合实现。 |
-| WSS 客户端 | `galay-http/kernel/websocket/WsClient.h`、`galay-http/kernel/websocket/WsSession.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E8-WssClient` | `WssClient` 需要 `connect()` 后显式 `handshake()`，再 `session.upgrade()`。 |
-| WSS 服务端模式 | `galay-http/kernel/http/HttpServer.h` + `galay-http/kernel/websocket/WsUpgrade.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E7-WssServer` | 当前仓库没有独立 `WssServer` 公共类；`E7` 通过 `HttpsServer` + 手动帧处理工作，原因是示例注释明确指出 `SslSocket` 缺少 `readv` 支撑。 |
-| HTTP/2 cleartext (`h2c`) | `galay-http/kernel/http2/Http2Server.h`、`galay-http/kernel/http2/H2cClient.h` | 默认启用 | `E9-H2cEchoServer`、`E10-H2cEchoClient` / `T26-h2c_server`、`T25-h2c_client`、`T43-h2c_client_shutdown`、`T51-h2c_server_fast_path` | 客户端序列是 `connect(host, port)` → `upgrade(path)` → `get/post`。 |
-| HTTP/2 over TLS (`h2`) | `galay-http/kernel/http2/Http2Server.h`、`galay-http/kernel/http2/H2Client.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E13-H2EchoServer`、`E14-H2EchoClient` / `T28-h2_server`、`T29-h2_client`、`T30-h2_error_model` 至 `T53-h2_stream_pool` | `H2Client::connect(host, port)` 内部完成 TCP 连接、TLS 握手、ALPN=`h2` 校验与 preface 发送。 |
+| HTTP/1.1 服务端 | `galay-http/kernel/http/http_server.h` | 默认启用 | `E1-EchoServer`、`E11-StaticServer`、`E12-HttpProxy` / `T5-http_server`、`T14-static_file_transfer_modes`、`T15-range_etag_server`、`T27-proxy_try_files_e2_e` | 标准明文 HTTP 服务面。 |
+| HTTP/1.1 客户端 | `galay-http/kernel/http/http_client.h` | 默认启用 | `E2-EchoClient` / `T6-http_client_awaitable`、`T7-http_client_awaitable_edge_cases`、`T16-http_client_timeout` | `HttpClient::connect()` 只接受 `http://`。 |
+| HTTPS | `galay-http/kernel/http/http_server.h`、`galay-http/kernel/http/http_client.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E5-HttpsServer`、`E6-HttpsClient` / `T21-https_server`、`T22-https_client`、`T23-https_stress_test`、`T24-simple_https_test` | `HttpsClient` 需要 `connect(url)` 之后显式 `co_await handshake()`。 |
+| WebSocket 客户端 (`ws`) | `galay-http/kernel/websocket/ws_client.h`、`galay-http/kernel/websocket/ws_session.h` | 默认启用 | `E4-WebsocketClient` / `T19-ws_client`、`T20-websocket_client` | 使用 `WsClient::connect()` 后通过 `session.upgrade()` 完成协议升级。 |
+| WebSocket 服务端 (`ws`) | `galay-http/kernel/http/http_server.h` + `galay-http/kernel/websocket/ws_session.h` | 默认启用 | `E3-WebsocketServer` / `T18-ws_server` | 仓库没有独立的 `WsServer` 公共类，服务端模式通过 HTTP Upgrade 组合实现。 |
+| WSS 客户端 | `galay-http/kernel/websocket/ws_client.h`、`galay-http/kernel/websocket/ws_session.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E8-WssClient` | `WssClient` 需要 `connect()` 后显式 `handshake()`，再 `session.upgrade()`。 |
+| WSS 服务端模式 | `galay-http/kernel/http/http_server.h` + `galay-http/kernel/websocket/ws_upgrade.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E7-WssServer` | 当前仓库没有独立 `WssServer` 公共类；`E7` 通过 `HttpsServer` + 手动帧处理工作，原因是示例注释明确指出 `SslSocket` 缺少 `readv` 支撑。 |
+| HTTP/2 cleartext (`h2c`) | `galay-http/kernel/http2/http2_server.h`、`galay-http/kernel/http2/h2c_client.h` | 默认启用 | `E9-H2cEchoServer`、`E10-H2cEchoClient` / `T26-h2c_server`、`T25-h2c_client`、`T43-h2c_client_shutdown`、`T51-h2c_server_fast_path` | 客户端序列是 `connect(host, port)` → `upgrade(path)` → `get/post`。 |
+| HTTP/2 over TLS (`h2`) | `galay-http/kernel/http2/http2_server.h`、`galay-http/kernel/http2/h2_client.h` | `-DGALAY_HTTP_ENABLE_SSL=ON` | `E13-H2EchoServer`、`E14-H2EchoClient` / `T28-h2_server`、`T29-h2_client`、`T30-h2_error_model` 至 `T53-h2_stream_pool` | `H2Client::connect(host, port)` 内部完成 TCP 连接、TLS 握手、ALPN=`h2` 校验与 preface 发送。 |
 | C++23 模块目标 | `galay-http/module/*.cppm` | `-DBUILD_MODULE_EXAMPLES=ON`、CMake `>= 3.28`、`Ninja`/`Visual Studio`、非 `AppleClang` | `galay-http-modules` | 这里构建的是模块库 target，不是额外的示例二进制。 |
 
 ## 文档导航
@@ -73,8 +73,8 @@
 
 当前安装边界由 `galay-http/CMakeLists.txt` 中的显式清单维护，而不是按目录整树复制：
 
-- 稳定 direct-include 入口：`HttpServer.h`、`HttpClient.h`、`WsClient.h`、`WsSession.h`、`H2cClient.h`、`H2Client.h`、`Http2Server.h` 以及它们对应的协议类型 / builder / stream 头
-- 安装支撑头：`IoVecUtils.h`、`HttpLog.h`、`HttpParseUtils.h`、`.inl` 等为了模板、内联实现或模块预导入仍随安装包分发，但不应默认视为主工作流入口
+- 稳定 direct-include 入口：`http_server.h`、`http_client.h`、`ws_client.h`、`ws_session.h`、`h2c_client.h`、`h2_client.h`、`http2_server.h` 以及它们对应的协议类型 / builder / stream 头
+- 安装支撑头：`iov_utils.h`、`http_log.h`、`parse_utils.h`、`.inl` 等为了模板、内联实现或模块预导入仍随安装包分发，但不应默认视为主工作流入口
 
 完整清单见 [02-API参考](docs/02-API参考.md)。
 
@@ -126,7 +126,7 @@ cmake --build build-mod --target galay-http-modules --parallel
 当模块门禁全部满足时，仓库还会额外暴露：
 
 - `examples/import/` 下的 import 示例 target
-- `test/T59-module_smoke.cpp` 对应的 `T59-module_smoke`
+- `test/t59_module.cpp` 对应的 `T59-module_smoke`
 
 其中 `examples/import/` 现在和 `examples/include/` 保持 E1~E14 场景对齐；TLS 相关 import target 还要求 `-DGALAY_HTTP_ENABLE_SSL=ON`。
 

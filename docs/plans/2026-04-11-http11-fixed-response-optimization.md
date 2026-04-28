@@ -13,7 +13,7 @@
 ### Task 1: Add writer view-send fast path
 
 **Files:**
-- Modify: `galay-http/galay-http/kernel/http/HttpWriter.h`
+- Modify: `galay-http/galay-http/kernel/http/http_writer.h`
 
 **Step 1: Add a non-owning send interface**
 
@@ -32,8 +32,8 @@ Expected: build succeeds
 ### Task 2: Reuse fixed HTTP/HTTPS responses in benchmarks
 
 **Files:**
-- Modify: `benchmark/B1-HttpServer.cc`
-- Modify: `benchmark/B14-HttpsServer.cc`
+- Modify: `benchmark/b1_http.cc`
+- Modify: `benchmark/b14_https.cc`
 
 **Step 1: Replace per-request builder path**
 

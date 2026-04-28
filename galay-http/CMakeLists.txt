@@ -20,7 +20,7 @@ set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES} ${HTTP2_SOURCES})
 
 find_package(spdlog REQUIRED)
 find_package(galay-utils REQUIRED CONFIG)
-find_package(galay-kernel 3.4.5 REQUIRED CONFIG)
+find_package(galay-kernel 4.0.0 REQUIRED CONFIG)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")

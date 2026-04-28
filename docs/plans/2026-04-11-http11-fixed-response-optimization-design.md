@@ -10,9 +10,9 @@
 
 本轮只覆盖以下路径：
 
-- `benchmark/B1-HttpServer.cc`
-- `benchmark/B14-HttpsServer.cc`
-- `galay-http/kernel/http/HttpWriter.h`
+- `benchmark/b1_http.cc`
+- `benchmark/b14_https.cc`
+- `galay-http/kernel/http/http_writer.h`
 
 本轮不进入：
 

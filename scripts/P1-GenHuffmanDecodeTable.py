@@ -2,7 +2,7 @@
 """
 Generate HPACK Huffman 4-bit nibble decode table from RFC 7541 Appendix B.
 
-Outputs C++ static const arrays suitable for inclusion in Http2Hpack.cc.
+Outputs C++ static const arrays suitable for inclusion in http2_hpack.cc.
 Each state has 16 entries (one per 4-bit nibble). Each entry contains:
   - next state
   - flags (EMIT, FAIL)

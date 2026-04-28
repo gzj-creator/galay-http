@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 2.1.2 LANGUAGES CXX)
+project(galay-http VERSION 3.0.0 LANGUAGES CXX)
 
 # Keep tests opt-in even though CTest defaults BUILD_TESTING to ON.
 set(GALAY_HTTP_BUILD_TESTING_USER_DEFINED FALSE)
@@ -76,7 +76,7 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # 先锁定 galay-kernel，避免 galay-ssl 的 find_dependency() 抢先注入旧的导入目标。
-find_package(galay-kernel 3.4.5 REQUIRED CONFIG)
+find_package(galay-kernel 4.0.0 REQUIRED CONFIG)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
@@ -163,9 +163,9 @@ if(BUILD_MODULE_EXAMPLES AND GALAY_HTTP_MODULES_SUPPORTED AND GALAY_HTTP_MODULES
         PUBLIC
             FILE_SET CXX_MODULES
             FILES
-                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay.http.cppm"
-                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay.http2.cppm"
-                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay.websocket.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay_http.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay_http2.cppm"
+                "${CMAKE_CURRENT_SOURCE_DIR}/galay-http/module/galay_websocket.cppm"
     )
 
     install(TARGETS galay-http-modules

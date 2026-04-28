@@ -2,13 +2,13 @@
 
 本页只记录当前公开头中存在且仍可从示例/测试验证的公共 API。若与旧文档冲突，以以下头文件与 `galay-http/CMakeLists.txt` 中的显式安装清单为准。
 
-- `galay-http/kernel/http/HttpServer.h`
-- `galay-http/kernel/http/HttpClient.h`
-- `galay-http/kernel/websocket/WsClient.h`
-- `galay-http/kernel/websocket/WsSession.h`
-- `galay-http/kernel/http2/H2cClient.h`
-- `galay-http/kernel/http2/H2Client.h`
-- `galay-http/kernel/http2/Http2Server.h`
+- `galay-http/kernel/http/http_server.h`
+- `galay-http/kernel/http/http_client.h`
+- `galay-http/kernel/websocket/ws_client.h`
+- `galay-http/kernel/websocket/ws_session.h`
+- `galay-http/kernel/http2/h2c_client.h`
+- `galay-http/kernel/http2/h2_client.h`
+- `galay-http/kernel/http2/http2_server.h`
 
 ## 头文件索引
 
@@ -19,84 +19,84 @@
 
 | 头文件 | 主要类型 | 说明 |
 | --- | --- | --- |
-| `galay-http/kernel/http/HttpServer.h` | `HttpServer`、`HttpServerBuilder`、`HttpsServer`、`HttpsServerBuilder` | HTTP/HTTPS 服务端 builder、启动与停止语义 |
-| `galay-http/kernel/http/HttpClient.h` | `HttpClient`、`HttpClientBuilder`、`HttpsClient`、`HttpsClientBuilder` | HTTP/HTTPS 客户端连接、握手与 `HttpSession` 入口 |
-| `galay-http/kernel/websocket/WsClient.h` | `WsClient`、`WsClientBuilder`、`WssClient`、`WssClientBuilder` | WebSocket / WSS 客户端连接与升级入口 |
-| `galay-http/kernel/websocket/WsSession.h` | `WsSessionImpl`、`WssSession` | `upgrade()`、`sendText()`、`getMessage()` 等会话能力 |
-| `galay-http/kernel/http2/H2cClient.h` | `H2cClient`、`H2cClientBuilder` | h2c 客户端连接、Upgrade、请求与关闭 |
-| `galay-http/kernel/http2/H2Client.h` | `H2Client`、`H2ClientBuilder` | h2 客户端连接、ALPN 校验、请求与关闭 |
-| `galay-http/kernel/http2/Http2Server.h` | `H2cServer`、`H2cServerBuilder`、`H2Server`、`H2ServerBuilder` | h2c / h2 服务端与 fallback 入口 |
+| `galay-http/kernel/http/http_server.h` | `HttpServer`、`HttpServerBuilder`、`HttpsServer`、`HttpsServerBuilder` | HTTP/HTTPS 服务端 builder、启动与停止语义 |
+| `galay-http/kernel/http/http_client.h` | `HttpClient`、`HttpClientBuilder`、`HttpsClient`、`HttpsClientBuilder` | HTTP/HTTPS 客户端连接、握手与 `HttpSession` 入口 |
+| `galay-http/kernel/websocket/ws_client.h` | `WsClient`、`WsClientBuilder`、`WssClient`、`WssClientBuilder` | WebSocket / WSS 客户端连接与升级入口 |
+| `galay-http/kernel/websocket/ws_session.h` | `WsSessionImpl`、`WssSession` | `upgrade()`、`sendText()`、`getMessage()` 等会话能力 |
+| `galay-http/kernel/http2/h2c_client.h` | `H2cClient`、`H2cClientBuilder` | h2c 客户端连接、Upgrade、请求与关闭 |
+| `galay-http/kernel/http2/h2_client.h` | `H2Client`、`H2ClientBuilder` | h2 客户端连接、ALPN 校验、请求与关闭 |
+| `galay-http/kernel/http2/http2_server.h` | `H2cServer`、`H2cServerBuilder`、`H2Server`、`H2ServerBuilder` | h2c / h2 服务端与 fallback 入口 |
 
 补充公开头分组：
 
 - 稳定 direct-include 入口：
-  - `galay-http/kernel/http/HttpServer.h`
-  - `galay-http/kernel/http/HttpClient.h`
-  - `galay-http/kernel/websocket/WsClient.h`
-  - `galay-http/kernel/websocket/WsSession.h`
-  - `galay-http/kernel/http2/H2cClient.h`
-  - `galay-http/kernel/http2/H2Client.h`
-  - `galay-http/kernel/http2/Http2Server.h`
+  - `galay-http/kernel/http/http_server.h`
+  - `galay-http/kernel/http/http_client.h`
+  - `galay-http/kernel/websocket/ws_client.h`
+  - `galay-http/kernel/websocket/ws_session.h`
+  - `galay-http/kernel/http2/h2c_client.h`
+  - `galay-http/kernel/http2/h2_client.h`
+  - `galay-http/kernel/http2/http2_server.h`
 - 其他稳定 direct-include 公共头：
-  - `galay-http/protoc/http/HttpBase.h`
-  - `galay-http/protoc/http/HttpBody.h`
-  - `galay-http/protoc/http/HttpChunk.h`
-  - `galay-http/protoc/http/HttpError.h`
-  - `galay-http/protoc/http/HttpHeader.h`
-  - `galay-http/protoc/http/HttpParseUtils.h`
-  - `galay-http/protoc/http/HttpRequest.h`
-  - `galay-http/protoc/http/HttpResponse.h`
-  - `galay-http/kernel/http/HttpConn.h`
-  - `galay-http/kernel/http/HttpSession.h`
-  - `galay-http/kernel/http/HttpReader.h`
-  - `galay-http/kernel/http/HttpWriter.h`
-  - `galay-http/kernel/http/HttpReaderSetting.h`
-  - `galay-http/kernel/http/HttpWriterSetting.h`
-  - `galay-http/kernel/http/HttpRouter.h`
-  - `galay-http/kernel/http/FileDescriptor.h`
-  - `galay-http/kernel/http/HttpRange.h`
-  - `galay-http/kernel/http/HttpETag.h`
-  - `galay-http/kernel/http/StaticFileConfig.h`
+  - `galay-http/protoc/http/http_base.h`
+  - `galay-http/protoc/http/http_body.h`
+  - `galay-http/protoc/http/http_chunk.h`
+  - `galay-http/protoc/http/http_error.h`
+  - `galay-http/protoc/http/http_header.h`
+  - `galay-http/protoc/http/parse_utils.h`
+  - `galay-http/protoc/http/http_request.h`
+  - `galay-http/protoc/http/http_response.h`
+  - `galay-http/kernel/http/http_conn.h`
+  - `galay-http/kernel/http/http_session.h`
+  - `galay-http/kernel/http/http_reader.h`
+  - `galay-http/kernel/http/http_writer.h`
+  - `galay-http/kernel/http/reader_cfg.h`
+  - `galay-http/kernel/http/writer_cfg.h`
+  - `galay-http/kernel/http/http_router.h`
+  - `galay-http/kernel/http/file_descriptor.h`
+  - `galay-http/kernel/http/http_range.h`
+  - `galay-http/kernel/http/http_etag.h`
+  - `galay-http/kernel/http/static_cfg.h`
 - WebSocket：
-  - `galay-http/protoc/websocket/WebSocketBase.h`
-  - `galay-http/protoc/websocket/WebSocketError.h`
-  - `galay-http/protoc/websocket/WebSocketFrame.h`
-  - `galay-http/kernel/websocket/WsConn.h`
-  - `galay-http/kernel/websocket/WsReader.h`
-  - `galay-http/kernel/websocket/WsWriter.h`
-  - `galay-http/kernel/websocket/WsReaderSetting.h`
-  - `galay-http/kernel/websocket/WsWriterSetting.h`
-  - `galay-http/kernel/websocket/WsUpgrade.h`
+  - `galay-http/protoc/websocket/ws_base.h`
+  - `galay-http/protoc/websocket/ws_error.h`
+  - `galay-http/protoc/websocket/ws_frame.h`
+  - `galay-http/kernel/websocket/ws_conn.h`
+  - `galay-http/kernel/websocket/ws_reader.h`
+  - `galay-http/kernel/websocket/ws_writer.h`
+  - `galay-http/kernel/websocket/reader_cfg.h`
+  - `galay-http/kernel/websocket/writer_cfg.h`
+  - `galay-http/kernel/websocket/ws_upgrade.h`
 - HTTP/2：
-  - `galay-http/protoc/http2/Http2Base.h`
-  - `galay-http/protoc/http2/Http2Error.h`
-  - `galay-http/protoc/http2/Http2Frame.h`
-  - `galay-http/protoc/http2/Http2Hpack.h`
-  - `galay-http/kernel/http2/Http2Conn.h`
-  - `galay-http/kernel/http2/Http2ConnectionCore.h`
-  - `galay-http/kernel/http2/Http2FrameDispatcher.h`
-  - `galay-http/kernel/http2/Http2OutboundScheduler.h`
-  - `galay-http/kernel/http2/Http2Stream.h`
-  - `galay-http/kernel/http2/Http2StreamManager.h`
+  - `galay-http/protoc/http2/http2_base.h`
+  - `galay-http/protoc/http2/http2_error.h`
+  - `galay-http/protoc/http2/http2_frame.h`
+  - `galay-http/protoc/http2/http2_hpack.h`
+  - `galay-http/kernel/http2/http2_conn.h`
+  - `galay-http/kernel/http2/h2_core.h`
+  - `galay-http/kernel/http2/frame_disp.h`
+  - `galay-http/kernel/http2/out_sched.h`
+  - `galay-http/kernel/http2/http2_stream.h`
+  - `galay-http/kernel/http2/stream_mgr.h`
 - 工具与模块：
-  - `galay-http/utils/Http1_1RequestBuilder.h`
-  - `galay-http/utils/Http1_1ResponseBuilder.h`
-  - `galay-http/utils/HttpLogger.h`
-  - `galay-http/utils/HttpUtils.h`
+  - `galay-http/utils/req_bld.h`
+  - `galay-http/utils/rsp_bld.h`
+  - `galay-http/utils/http_logger.h`
+  - `galay-http/utils/http_utils.h`
 - 安装支撑头：
-  - `galay-http/kernel/IoVecUtils.h`
-  - `galay-http/kernel/http/HttpLog.h`
-  - `galay-http/protoc/http/HttpParseUtils.h`
-  - `galay-http/protoc/http/HttpRequest.inl`
-  - `galay-http/protoc/http/HttpResponse.inl`
-  - `galay-http/module/ModulePrelude.hpp`
-  - `galay-http/module/galay.http.cppm`
-  - `galay-http/module/galay.http2.cppm`
-  - `galay-http/module/galay.websocket.cppm`
+  - `galay-http/kernel/iov_utils.h`
+  - `galay-http/kernel/http/http_log.h`
+  - `galay-http/protoc/http/parse_utils.h`
+  - `galay-http/protoc/http/http_request.inl`
+  - `galay-http/protoc/http/http_response.inl`
+  - `galay-http/module/module_prelude.hpp`
+  - `galay-http/module/galay_http.cppm`
+  - `galay-http/module/galay_http2.cppm`
+  - `galay-http/module/galay_websocket.cppm`
 
 ## 模块与导入边界
 
-来源：`galay-http/module/galay.http.cppm`、`galay-http/module/galay.http2.cppm`、`galay-http/module/galay.websocket.cppm`
+来源：`galay-http/module/galay_http.cppm`、`galay-http/module/galay_http2.cppm`、`galay-http/module/galay_websocket.cppm`
 
 ### `galay.http`
 
@@ -119,13 +119,13 @@
 - 这是 WebSocket 的 canonical import，直接导出 `WebSocketFrame`
 - 同时导出 `WsClient`、`WsConn`、`WsReader`、`WsReaderSetting`、`WsSession`、`WsUpgrade`、`WsWriter`、`WsWriterSetting`
 - `WssClient` / `WssSession` 也经由对应头文件进入该模块，但它们仍受 `GALAY_HTTP_SSL_ENABLED` 约束
-- 模块 consumer 的真实验证入口是 `examples/import/*.cpp` 与 `test/T59-module_smoke.cpp`
+- 模块 consumer 的真实验证入口是 `examples/import/*.cpp` 与 `test/t59_module.cpp`
 
 ## HTTP / HTTPS 服务端
 
 ### `HttpServerConfig`
 
-来源：`galay-http/kernel/http/HttpServer.h`
+来源：`galay-http/kernel/http/http_server.h`
 
 ```cpp
 struct HttpServerConfig {
@@ -143,7 +143,7 @@ struct HttpServerConfig {
 
 ### `HttpServerBuilder`
 
-`HttpServerBuilder` 的真实配置项来自 `galay-http/kernel/http/HttpServer.h`：
+`HttpServerBuilder` 的真实配置项来自 `galay-http/kernel/http/http_server.h`：
 
 - `host(std::string)`
 - `port(uint16_t)`
@@ -164,7 +164,7 @@ struct HttpServerConfig {
 
 ### `HttpsServerConfig`
 
-来源：`galay-http/kernel/http/HttpServer.h`
+来源：`galay-http/kernel/http/http_server.h`
 
 ```cpp
 struct HttpsServerConfig {
@@ -215,13 +215,13 @@ server.start(handler);
 
 - `HttpsServer` 没有单独的 `listen()` 或 `bind()` 公共 API。
 - 证书加载发生在服务端启动阶段；缺少 `certPath` / `keyPath` 会直接影响 TLS 上线。
-- 参考真实示例：`examples/include/E5-https_server.cpp`。
+- 参考真实示例：`examples/include/e5_https.cpp`。
 
 ## HTTP / HTTPS 客户端
 
 ### `HttpUrl`
 
-来源：`galay-http/kernel/http/HttpClient.h`
+来源：`galay-http/kernel/http/http_client.h`
 
 ```cpp
 struct HttpUrl {
@@ -242,7 +242,7 @@ struct HttpUrl {
 
 ### `HttpClientConfig` / `HttpsClientConfig`
 
-来源：`galay-http/kernel/http/HttpClient.h`
+来源：`galay-http/kernel/http/http_client.h`
 
 ```cpp
 struct HttpClientConfig {
@@ -309,7 +309,7 @@ co_await client.handshake();
 auto session = client.getSession();
 ```
 
-这与旧文档里“`connect()` 自动完成 HTTPS 握手”的说法不同；当前公开头和真实示例 `examples/include/E6-https_client.cpp` 明确要求显式 `handshake()`。
+这与旧文档里“`connect()` 自动完成 HTTPS 握手”的说法不同；当前公开头和真实示例 `examples/include/e6_https.cpp` 明确要求显式 `handshake()`。
 
 补充边界：
 
@@ -317,7 +317,7 @@ auto session = client.getSession();
 
 ### `HttpSession`
 
-来源：`galay-http/kernel/http/HttpSession.h`
+来源：`galay-http/kernel/http/http_session.h`
 
 `HttpSession` 是 `HttpClient::getSession()` / `HttpsClient::getSession()` 返回的 HTTP/1.x 会话层。
 
@@ -401,22 +401,22 @@ co_await upgrader();
 
 - `connect()` 只建立 TCP/TLS 连接准备；WebSocket 升级仍由 `session.upgrade()` 完成。
 - `handshake()` 必须在 `connect()` 成功之后调用。
-- 参考真实示例：`examples/include/E8-wss_client.cpp`。
+- 参考真实示例：`examples/include/e8_wss.cpp`。
 
 ### 服务端边界
 
 当前仓库没有独立的 `WsServer` / `WssServer` 公共类。服务端模式分为：
 
-- `ws`：通过 `HttpServer` handler + `WsSession`/Upgrade 组合实现，参考 `examples/include/E3-websocket_server.cpp`
-- `wss`：通过 `HttpsServer` + `WsUpgrade` + 手动帧处理实现，参考 `examples/include/E7-wss_server.cpp`
+- `ws`：通过 `HttpServer` handler + `WsSession`/Upgrade 组合实现，参考 `examples/include/e3_ws.cpp`
+- `wss`：通过 `HttpsServer` + `WsUpgrade` + 手动帧处理实现，参考 `examples/include/e7_wss.cpp`
 
-`E7-wss_server.cpp` 的文件头已经明确说明：当前 `SslSocket` 缺少 `readv`，因此 WSS 服务端是“示例级模式”，不是单独高层 server API。
+`e7_wss_server.cpp` 的文件头已经明确说明：当前 `SslSocket` 缺少 `readv`，因此 WSS 服务端是“示例级模式”，不是单独高层 server API。
 
 ## h2c
 
 ### `H2cClientConfig`
 
-来源：`galay-http/kernel/http2/H2cClient.h`
+来源：`galay-http/kernel/http2/h2c_client.h`
 
 ```cpp
 struct H2cClientConfig {
@@ -440,7 +440,7 @@ struct H2cClientConfig {
 
 ### `H2cClientBuilder`
 
-`galay-http/kernel/http2/H2cClient.h` 当前暴露的配置项：
+`galay-http/kernel/http2/h2c_client.h` 当前暴露的配置项：
 
 - `maxConcurrentStreams(uint32_t)`
 - `initialWindowSize(uint32_t)`
@@ -473,7 +473,7 @@ co_await client.shutdown();
 
 ### `H2cServerConfig`
 
-来源：`galay-http/kernel/http2/Http2Server.h`
+来源：`galay-http/kernel/http2/http2_server.h`
 
 ```cpp
 struct H2cServerConfig {
@@ -507,7 +507,7 @@ struct H2cServerConfig {
 
 ### `H2cServerBuilder`
 
-`galay-http/kernel/http2/Http2Server.h` 中的 `H2cServerBuilder` 暴露：
+`galay-http/kernel/http2/http2_server.h` 中的 `H2cServerBuilder` 暴露：
 
 - `host` / `port` / `backlog`
 - `ioSchedulerCount` / `computeSchedulerCount`
@@ -534,7 +534,7 @@ struct H2cServerConfig {
 
 ### `H2ClientConfig`
 
-来源：`galay-http/kernel/http2/H2Client.h`
+来源：`galay-http/kernel/http2/h2_client.h`
 
 ```cpp
 struct H2ClientConfig {
@@ -595,7 +595,7 @@ auto stream = client.post("/echo", "hello", "text/plain");
 
 ### `H2ServerConfig`
 
-来源：`galay-http/kernel/http2/Http2Server.h`
+来源：`galay-http/kernel/http2/http2_server.h`
 
 ```cpp
 struct H2ServerConfig {
@@ -672,7 +672,7 @@ struct H2ServerConfig {
 
 ## HttpRouter 与静态文件配置
 
-来源：`galay-http/kernel/http/HttpRouter.h`、`galay-http/kernel/http/StaticFileConfig.h`
+来源：`galay-http/kernel/http/http_router.h`、`galay-http/kernel/http/static_cfg.h`
 
 ### `FileTransferMode`
 
@@ -784,7 +784,7 @@ public:
 
 ### `HttpRangeParser`
 
-来源：`galay-http/kernel/http/HttpRange.h`
+来源：`galay-http/kernel/http/http_range.h`
 
 ```cpp
 enum class RangeType {
@@ -819,7 +819,7 @@ public:
 
 ### `Http2ErrorCode`
 
-来源：`galay-http/protoc/http2/Http2Base.h`、`galay-http/protoc/http2/Http2Base.cc`
+来源：`galay-http/protoc/http2/http2_base.h`、`galay-http/protoc/http2/http2_base.cc`
 
 ```cpp
 enum class Http2ErrorCode : uint32_t {
@@ -861,19 +861,19 @@ std::string http2ErrorCodeToString(Http2ErrorCode code);
 
 当 RAG 问题已经落到“解析失败 / 升级失败 / path 安全 / range / hpack / frame”这类底层细节时，优先回到这些公开头：
 
-- HTTP/1.x：`galay-http/protoc/http/HttpError.h`、`HttpParseUtils.h`、`HttpHeader.h`
-- HTTP/2：`galay-http/protoc/http2/Http2Error.h`、`Http2Frame.h`、`Http2Hpack.h`
-- WebSocket：`galay-http/protoc/websocket/WebSocketError.h`、`WebSocketFrame.h`
-- 静态文件与安全边界：`HttpRange.h`、`HttpETag.h`、`StaticFileConfig.h`
-- 请求/响应快速构造：`galay-http/utils/Http1_1RequestBuilder.h`、`Http1_1ResponseBuilder.h`
+- HTTP/1.x：`galay-http/protoc/http/http_error.h`、`http_parse_utils.h`、`http_header.h`
+- HTTP/2：`galay-http/protoc/http2/http2_error.h`、`http2_frame.h`、`http2_hpack.h`
+- WebSocket：`galay-http/protoc/websocket/ws_error.h`、`web_socket_frame.h`
+- 静态文件与安全边界：`http_range.h`、`http_e_tag.h`、`static_file_config.h`
+- 请求/响应快速构造：`galay-http/utils/req_bld.h`、`http1_1_response_builder.h`
 
 这些头文件属于公开面，但不在主工作流里逐一展开。它们是回答协议级细节问题时的 canonical source。
 
 ## 交叉验证入口
 
-- HTTPS 客户端示例：`examples/include/E6-https_client.cpp`
-- WSS 客户端示例：`examples/include/E8-wss_client.cpp`
-- h2c 客户端示例：`examples/include/E10-h2c_echo_client.cpp`
-- h2 客户端示例：`examples/include/E14-h2_echo_client.cpp`
-- HTTPS 测试：`test/T21-https_server.cc`、`test/T22-https_client.cc`
-- h2 测试：`test/T28-h2_server.cc`、`test/T29-h2_client.cc`
+- HTTPS 客户端示例：`examples/include/e6_https.cpp`
+- WSS 客户端示例：`examples/include/e8_wss.cpp`
+- h2c 客户端示例：`examples/include/e10_h2cecho.cpp`
+- h2 客户端示例：`examples/include/e14_h2echo.cpp`
+- HTTPS 测试：`test/t21_https.cc`、`test/t22_https.cc`
+- h2 测试：`test/t28_h2.cc`、`test/t29_h2.cc`

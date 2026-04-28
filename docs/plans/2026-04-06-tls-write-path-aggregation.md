@@ -13,10 +13,10 @@
 ### Task 1: 锁住 SSL HttpWriter steady-state 聚合行为
 
 **Files:**
-- Create: `/Users/gongzhijie/Desktop/projects/git/galay-http/test/T64-https_writer_steady_state.cc`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/http/HttpWriter.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/protoc/http/HttpResponse.h`
-- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/protoc/http/HttpResponse.cc`
+- Create: `/Users/gongzhijie/Desktop/projects/git/galay-http/test/t64_httpswrite.cc`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/kernel/http/http_writer.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/protoc/http/http_response.h`
+- Modify: `/Users/gongzhijie/Desktop/projects/git/galay-http/galay-http/protoc/http/http_response.cc`
 
 **Step 1:** 写 failing test，要求 `HttpWriter<SslSocket>` 在 `sendResponse/sendRequest` 后产生正确字节布局，并暴露一次 SSL 聚合发送命中。
 
