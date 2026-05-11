@@ -15,6 +15,7 @@ files/*.bin
 
 # benchmark / profiling temp outputs
 benchmark/results/
+benchmark/compare/
 benchmark/compare/protocols/go-client/go-proto-client-bin
 benchmark/compare/protocols/go-server/go-proto-server-bin
 benchmark/compare/protocols/go-client/benchmark/

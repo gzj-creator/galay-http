@@ -1,1 +1,0 @@
-/Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/compare/protocols/rust-server/target/release/galay-http-rust-proto-server: /Users/gongzhijie/Desktop/projects/git/galay-http/benchmark/compare/protocols/rust-server/src/main.rs
