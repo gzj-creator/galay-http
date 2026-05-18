@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 3.0.0 LANGUAGES CXX)
+project(galay-http VERSION 3.0.2 LANGUAGES CXX)
 
 # Keep tests opt-in even though CTest defaults BUILD_TESTING to ON.
 set(GALAY_HTTP_BUILD_TESTING_USER_DEFINED FALSE)
@@ -208,7 +208,7 @@ configure_package_config_file(
 
 # 安装导出的目标文件（使用正确的文件名）
 install(EXPORT galay-http-targets
-    FILE galay-http-targets.cmake
+    FILE galayHttpConfigTargets.cmake
     NAMESPACE galay-http::
     DESTINATION lib/cmake/galay-http
 )

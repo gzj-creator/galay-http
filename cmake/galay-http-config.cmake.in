@@ -9,7 +9,7 @@ if(@GALAY_HTTP_ENABLE_SSL@)
     find_dependency(galay-ssl REQUIRED CONFIG)
 endif()
 
-include("${CMAKE_CURRENT_LIST_DIR}/galay-http-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/galayHttpConfigTargets.cmake")
 
 # 检查必需的组件
 check_required_components(galay-http)
