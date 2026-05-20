@@ -4,7 +4,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <atomic>
 #include <csignal>
@@ -38,8 +37,6 @@ Task<void> handleStream(Http2Stream::ptr stream) {
         }
     }
 
-    HTTP_LOG_INFO("[h2] [req] [#{}] [stream={}]",
-                  g_request_count.load(), stream->streamId());
 
     std::string body = "Hello from H2 Test Server!\n";
     body += "Request #" + std::to_string(g_request_count.load()) + "\n";

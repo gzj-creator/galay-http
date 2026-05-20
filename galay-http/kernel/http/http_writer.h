@@ -2,7 +2,7 @@
 #define GALAY_HTTP_WRITER_H
 
 #include "writer_cfg.h"
-#include "http_log.h"
+#include "galay-http/common/http_log.h"
 #include "galay-http/kernel/iov_utils.h"
 #include "galay-http/protoc/http/http_response.h"
 #include "galay-http/protoc/http/http_request.h"
@@ -19,7 +19,7 @@
 #include <sys/uio.h>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #endif
 
@@ -118,7 +118,6 @@ struct HttpTcpWriteMachine {
 
 private:
     void failWithIo(const IOError& io_error, const char* op) {
-        HTTP_LOG_DEBUG("[{}] [fail] [{}]", op, io_error.message());
         m_result = std::unexpected(HttpError(kSendError, io_error.message()));
     }
 
@@ -160,7 +159,6 @@ struct HttpSslSendMachine {
 
     void onSend(std::expected<size_t, galay::ssl::SslError> result) {
         if (!result) {
-            HTTP_LOG_DEBUG("[send] [fail] [{}]", result.error().message());
             m_writer->updateRemaining(m_writer->getRemainingBytes());
             m_result = std::unexpected(HttpError(kSendError, result.error().message()));
             return;
@@ -459,11 +457,11 @@ private:
     static void logResponseStatus(HttpStatusCode code) {
         const int status = static_cast<int>(code);
         if (status >= 500) {
-            HTTP_LOG_ERROR("[{}] [{}]", status, httpStatusCodeToString(code));
+            HTTP_LOG_ERROR("[response]", "status={}", status);
         } else if (status >= 400) {
-            HTTP_LOG_WARN("[{}] [{}]", status, httpStatusCodeToString(code));
+            HTTP_LOG_WARN("[response]", "status={}", status);
         } else {
-            HTTP_LOG_INFO("[{}] [{}]", status, httpStatusCodeToString(code));
+            HTTP_LOG_DEBUG("[response]", "status={}", status);
         }
     }
 

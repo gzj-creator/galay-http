@@ -16,7 +16,7 @@
 #include <sys/uio.h>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #endif
 

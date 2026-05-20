@@ -1,7 +1,6 @@
 project(test)
 
-find_package(spdlog REQUIRED)
-find_package(galay-kernel 4.0.0 REQUIRED CONFIG)
+find_package(galay-kernel 5.0.0 REQUIRED CONFIG)
 
 include_directories(${CMAKE_SOURCE_DIR}/galay-http)
 

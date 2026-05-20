@@ -1,5 +1,6 @@
 # 自动收集源文件
 file(GLOB_RECURSE HTTP_SOURCES
+    "common/*.cc"
     "protoc/http/*.cc"
     "utils/*.cc"
     "kernel/http/*.cc"
@@ -18,9 +19,8 @@ file(GLOB_RECURSE HTTP2_SOURCES
 # 合并所有源文件
 set(SRC_LIST ${HTTP_SOURCES} ${WS_SOURCES} ${HTTP2_SOURCES})
 
-find_package(spdlog REQUIRED)
 find_package(galay-utils REQUIRED CONFIG)
-find_package(galay-kernel 4.0.0 REQUIRED CONFIG)
+find_package(galay-kernel 5.0.0 REQUIRED CONFIG)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")

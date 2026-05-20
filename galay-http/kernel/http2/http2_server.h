@@ -9,7 +9,7 @@
 #include "galay-http/protoc/http2/http2_frame.h"
 #include "galay-http/protoc/http/http_header.h"
 #include "galay-http/protoc/http/http_request.h"
-#include "galay-http/kernel/http/http_log.h"
+#include "galay-http/common/http_log.h"
 #include "galay-http/kernel/http/http_conn.h"
 #include "galay-http/utils/rsp_bld.h"
 #include "galay-kernel/async/tcp_socket.h"
@@ -55,7 +55,10 @@ inline Task<void> runDefaultHttp1FallbackLoop(const char* log_tag,
         auto reader = conn.getReader();
         auto read_result = co_await reader.getRequest(request);
         if (!read_result) {
-            HTTP_LOG_DEBUG("{} [recv-fail] [{}]", log_tag, read_result.error().message());
+            HTTP_LOG_DEBUG("[h1-fallback]",
+                           "{} recv failed: {}",
+                           log_tag,
+                           read_result.error().message());
             break;
         }
 
@@ -69,7 +72,10 @@ inline Task<void> runDefaultHttp1FallbackLoop(const char* log_tag,
         auto writer = conn.getWriter();
         auto write_result = co_await writer.sendResponse(response);
         if (!write_result) {
-            HTTP_LOG_DEBUG("{} [send-fail] [{}]", log_tag, write_result.error().message());
+            HTTP_LOG_DEBUG("[h1-fallback]",
+                           "{} send failed: {}",
+                           log_tag,
+                           write_result.error().message());
             break;
         }
     }
@@ -302,14 +308,14 @@ public:
         }
 
         m_running.store(false);
-        HTTP_LOG_INFO("[h2c] [server] [stopping]");
+        HTTP_LOG_INFO("[h2c] [server] [stopping]", "port={}", m_config.port);
 
         wakeTcpAcceptLoops(m_config.host,
                            m_config.port,
                            m_server_loop_count.load(std::memory_order_acquire));
         waitForLoopDrain(m_server_loop_count, std::chrono::milliseconds(100));
         m_runtime.stop();
-        HTTP_LOG_INFO("[h2c] [server] [stopped]");
+        HTTP_LOG_INFO("[h2c] [server] [stopped]", "port={}", m_config.port);
     }
     
     bool isRunning() const {
@@ -323,19 +329,22 @@ public:
 private:
     bool startInternal() {
         if (m_running.load()) {
-            HTTP_LOG_WARN("[server] [already-running]");
+            HTTP_LOG_WARN("[h2c] [server]", "already running");
             return false;
         }
 
         if (!m_stream_handler && !m_active_conn_handler) {
-            HTTP_LOG_ERROR("[handler] [missing]");
+            HTTP_LOG_ERROR("[h2c] [handler]", "missing");
             return false;
         }
 
         m_runtime.start();
 
         m_running.store(true);
-        HTTP_LOG_INFO("[server] [listen] [h2c] [{}:{}]", m_config.host, m_config.port);
+        HTTP_LOG_INFO("[server] [listen] [h2c]",
+                      "host={} port={}",
+                      m_config.host,
+                      m_config.port);
 
         // Spawn one serverLoop per IO scheduler with SO_REUSEPORT
         size_t io_scheduler_count = m_runtime.getIOSchedulerCount();
@@ -346,7 +355,7 @@ private:
                 m_server_loop_count.fetch_add(1, std::memory_order_acq_rel);
                 if (!scheduleTask(scheduler, std::move(loop))) {
                     m_server_loop_count.fetch_sub(1, std::memory_order_acq_rel);
-                    HTTP_LOG_ERROR("[h2c] [schedule-fail] [server-loop]");
+                    HTTP_LOG_ERROR("[h2c] [schedule-fail]", "server-loop");
                     return false;
                 }
             }
@@ -368,32 +377,44 @@ private:
 
         auto reuse_result = listener.option().handleReuseAddr();
         if (!reuse_result) {
-            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseaddr-fail]",
+                           "error={}",
+                           reuse_result.error().message());
             co_return;
         }
 
         auto reuse_port_result = listener.option().handleReusePort();
         if (!reuse_port_result) {
-            HTTP_LOG_ERROR("[socket] [reuseport-fail] [{}]", reuse_port_result.error().message());
+            HTTP_LOG_ERROR("[socket] [reuseport-fail]",
+                           "error={}",
+                           reuse_port_result.error().message());
             co_return;
         }
 
         auto nonblock_result = listener.option().handleNonBlock();
         if (!nonblock_result) {
-            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
+            HTTP_LOG_ERROR("[socket] [nonblock-fail]",
+                           "error={}",
+                           nonblock_result.error().message());
             co_return;
         }
 
         Host bind_host(IPType::IPV4, m_config.host, m_config.port);
         auto bind_result = listener.bind(bind_host);
         if (!bind_result) {
-            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
+            HTTP_LOG_ERROR("[bind] [fail]",
+                           "host={} port={} error={}",
+                           m_config.host,
+                           m_config.port,
+                           bind_result.error().message());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
-            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
+            HTTP_LOG_ERROR("[listen] [fail]",
+                           "error={}",
+                           listen_result.error().message());
             co_return;
         }
 
@@ -403,30 +424,39 @@ private:
 
             if (!accept_result) {
                 if (m_running.load()) {
-                    HTTP_LOG_ERROR("[accept] [fail] [{}]", accept_result.error().message());
+                    HTTP_LOG_ERROR("[accept] [fail]",
+                                   "error={}",
+                                   accept_result.error().message());
                 }
                 continue;
             }
 
-            HTTP_LOG_INFO("[connect] [h2c] [{}:{}]", client_host.ip(), client_host.port());
+            HTTP_LOG_INFO("[connect] [h2c]",
+                          "ip={} port={}",
+                          client_host.ip(),
+                          client_host.port());
 
             TcpSocket client_socket(accept_result.value());
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
-                HTTP_LOG_ERROR("[socket] [nonblock-fail] [client] [{}]", nonblock_result.error().message());
+                HTTP_LOG_ERROR("[socket] [nonblock-fail] [client]",
+                               "error={}",
+                               nonblock_result.error().message());
                 continue;
             }
 
             // Handle connection on the same scheduler
             if (!scheduleTask(scheduler, handleConnection(std::move(client_socket)))) {
-                HTTP_LOG_ERROR("[h2] [schedule-fail] [handle-connection]");
+                HTTP_LOG_ERROR("[h2c] [schedule-fail]", "handle-connection");
                 co_await client_socket.close();
             }
         }
 
         auto close_result = co_await listener.close();
         if (!close_result) {
-            HTTP_LOG_WARN("[socket] [close-fail] [listener] [{}]", close_result.error().message());
+            HTTP_LOG_WARN("[socket] [close-fail] [listener]",
+                          "error={}",
+                          close_result.error().message());
         }
         co_return;
     }
@@ -451,13 +481,13 @@ private:
             // 初始化 StreamManager 并启动帧分发循环
             conn.initStreamManager();
             auto* mgr = conn.streamManager();
-            HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
+            HTTP_LOG_DEBUG("[h2] [stream-mgr]", "starting");
             if (m_active_conn_handler) {
                 co_await mgr->start(m_active_conn_handler);
             } else {
                 co_await mgr->start(m_stream_handler);
             }
-            HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
+            HTTP_LOG_DEBUG("[h2] [stream-mgr]", "stopped");
             co_await conn.close();
             break;
         }
@@ -465,7 +495,7 @@ private:
             co_await handleHttp1Fallback(std::move(conn), std::move(upgrade_request));
             break;
         default:
-            HTTP_LOG_ERROR("[protocol] [detect-fail]");
+            HTTP_LOG_ERROR("[protocol] [detect-fail]", "h2c unknown");
             co_await conn.close();
             break;
         }
@@ -508,7 +538,7 @@ private:
 
         // ===== Prior Knowledge =====
         if (std::memcmp(peek_buf, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) == 0) {
-            HTTP_LOG_DEBUG("[h2] [prior-knowledge]");
+            HTTP_LOG_DEBUG("[h2] [prior-knowledge]", "detected");
             rb.consume(kHttp2ConnectionPrefaceLength);
 
             auto settings_result = co_await conn.sendSettings();
@@ -522,7 +552,7 @@ private:
 
         // ===== HTTP/1.1 (Upgrade or fallback) =====
         if (looksLikeHttpMethod(peek_buf)) {
-            HTTP_LOG_DEBUG("[h1] [detect]");
+            HTTP_LOG_DEBUG("[h1] [detect]", "h2c fallback or upgrade");
 
             std::string header_data = drainRingBuffer(rb);
             while (header_data.find("\r\n\r\n") == std::string::npos && header_data.size() < 8192) {
@@ -537,14 +567,16 @@ private:
 
             size_t header_end = header_data.find("\r\n\r\n");
             if (header_end == std::string::npos) {
-                HTTP_LOG_ERROR("[header] [invalid] [too-large]");
+                HTTP_LOG_ERROR("[header] [invalid]", "too large");
                 co_return;
             }
 
             auto parse_result = upgrade_request.fromString(
                 std::string_view(header_data.data(), header_end + 4));
             if (parse_result.first != galay::http::kNoError || parse_result.second <= 0) {
-                HTTP_LOG_ERROR("[header] [parse-fail]");
+                HTTP_LOG_ERROR("[header] [parse-fail]",
+                               "code={}",
+                               static_cast<int>(parse_result.first));
                 co_return;
             }
 
@@ -558,7 +590,7 @@ private:
             bool has_http2_settings = headers.hasKey("HTTP2-Settings");
 
             if (has_upgrade && has_http2_settings) {
-                HTTP_LOG_DEBUG("[h1] [upgrade] [h2c]");
+                HTTP_LOG_DEBUG("[h1] [upgrade] [h2c]", "detected");
 
                 static constexpr char kUpgradeResp[] =
                     "HTTP/1.1 101 Switching Protocols\r\n"
@@ -572,12 +604,14 @@ private:
                     auto send_result = co_await conn.socket().send(
                         kUpgradeResp + sent, kUpgradeRespLen - sent);
                     if (!send_result) {
-                        HTTP_LOG_ERROR("[upgrade] [send-fail]");
+                        HTTP_LOG_ERROR("[upgrade] [send-fail]",
+                                       "error={}",
+                                       send_result.error().message());
                         co_return;
                     }
                     sent += send_result.value();
                 }
-                HTTP_LOG_DEBUG("[upgrade] [101-sent]");
+                HTTP_LOG_DEBUG("[upgrade] [101-sent]", "h2c");
 
                 // HTTP 头后面可能已带部分 Connection Preface，写入 RingBuffer
                 if (header_data.size() > header_end + 4) {
@@ -587,16 +621,16 @@ private:
 
                 co_await readAtLeast(conn, kHttp2ConnectionPrefaceLength);
                 if (rb.readable() < kHttp2ConnectionPrefaceLength) {
-                    HTTP_LOG_ERROR("[preface] [recv-fail]");
+                    HTTP_LOG_ERROR("[preface] [recv-fail]", "h2c");
                     co_return;
                 }
 
                 peekRingBuffer(rb, peek_buf, kHttp2ConnectionPrefaceLength);
                 if (std::memcmp(peek_buf, kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
-                    HTTP_LOG_ERROR("[preface] [invalid] [after-upgrade]");
+                    HTTP_LOG_ERROR("[preface] [invalid]", "after upgrade");
                     co_return;
                 }
-                HTTP_LOG_DEBUG("[preface] [ok]");
+                HTTP_LOG_DEBUG("[preface] [ok]", "h2c");
 
                 rb.consume(kHttp2ConnectionPrefaceLength);
 
@@ -618,7 +652,7 @@ private:
             co_return;
         }
 
-        HTTP_LOG_WARN("[protocol] [unknown] [h2c]");
+        HTTP_LOG_WARN("[protocol] [unknown]", "h2c");
         co_return;
     }
 
@@ -803,13 +837,11 @@ public:
         }
 
         m_running.store(false);
-        HTTP_LOG_INFO("[h2] [server] [stopping]");
         wakeTcpAcceptLoops(m_config.host,
                            m_config.port,
                            m_server_loop_count.load(std::memory_order_acquire));
         waitForLoopDrain(m_server_loop_count, std::chrono::milliseconds(100));
         m_runtime.stop();
-        HTTP_LOG_INFO("[h2] [server] [stopped]");
     }
 
     bool isRunning() const {
@@ -867,22 +899,18 @@ private:
 
     bool startInternal() {
         if (m_running.load()) {
-            HTTP_LOG_WARN("[h2] [server] [already-running]");
             return false;
         }
         if (!m_stream_handler && !m_active_conn_handler) {
-            HTTP_LOG_ERROR("[h2] [handler] [missing]");
             return false;
         }
         if (!initSslContext()) {
-            HTTP_LOG_ERROR("[h2] [ssl] [context-init-fail]");
             return false;
         }
 
         m_runtime.start();
         configureLowLatencyIoTimers();
         m_running.store(true);
-        HTTP_LOG_INFO("[server] [listen] [h2] [{}:{}]", m_config.host, m_config.port);
 
         size_t io_scheduler_count = m_runtime.getIOSchedulerCount();
         for (size_t i = 0; i < io_scheduler_count; i++) {
@@ -892,7 +920,6 @@ private:
                 m_server_loop_count.fetch_add(1, std::memory_order_acq_rel);
                 if (!scheduleTask(scheduler, std::move(loop))) {
                     m_server_loop_count.fetch_sub(1, std::memory_order_acq_rel);
-                    HTTP_LOG_ERROR("[h2] [schedule-fail] [server-loop]");
                     return false;
                 }
             }
@@ -902,34 +929,26 @@ private:
 
     bool initSslContext() {
         if (!m_ssl_ctx.isValid()) {
-            HTTP_LOG_ERROR("[h2] [ssl] [context-invalid]");
             return false;
         }
 
         if (m_config.cert_path.empty() || m_config.key_path.empty()) {
-            HTTP_LOG_ERROR("[h2] [ssl] [missing-cert-or-key]");
             return false;
         }
 
         auto cert_result = m_ssl_ctx.loadCertificate(m_config.cert_path);
         if (!cert_result) {
-            HTTP_LOG_ERROR("[h2] [ssl] [cert-load-fail] [{}] [{}]",
-                           m_config.cert_path, cert_result.error().message());
             return false;
         }
 
         auto key_result = m_ssl_ctx.loadPrivateKey(m_config.key_path);
         if (!key_result) {
-            HTTP_LOG_ERROR("[h2] [ssl] [key-load-fail] [{}] [{}]",
-                           m_config.key_path, key_result.error().message());
             return false;
         }
 
         if (!m_config.ca_path.empty()) {
             auto ca_result = m_ssl_ctx.loadCACertificate(m_config.ca_path);
             if (!ca_result) {
-                HTTP_LOG_ERROR("[h2] [ssl] [ca-load-fail] [{}] [{}]",
-                               m_config.ca_path, ca_result.error().message());
                 return false;
             }
         }
@@ -943,12 +962,10 @@ private:
 
         auto alpn_result = m_ssl_ctx.setALPNProtocols({"h2", "http/1.1"});
         if (!alpn_result) {
-            HTTP_LOG_ERROR("[h2] [ssl] [alpn-set-fail] [{}]", alpn_result.error().message());
             return false;
         }
         SSL_CTX_set_alpn_select_cb(m_ssl_ctx.native(), &H2Server::selectH2AlpnCallback, nullptr);
 
-        HTTP_LOG_INFO("[h2] [ssl] [context-ready]");
         return true;
     }
 
@@ -964,32 +981,27 @@ private:
 
         auto reuse_result = listener.option().handleReuseAddr();
         if (!reuse_result) {
-            HTTP_LOG_ERROR("[socket] [reuseaddr-fail] [{}]", reuse_result.error().message());
             co_return;
         }
 
         auto reuse_port_result = listener.option().handleReusePort();
         if (!reuse_port_result) {
-            HTTP_LOG_ERROR("[socket] [reuseport-fail] [{}]", reuse_port_result.error().message());
             co_return;
         }
 
         auto nonblock_result = listener.option().handleNonBlock();
         if (!nonblock_result) {
-            HTTP_LOG_ERROR("[socket] [nonblock-fail] [{}]", nonblock_result.error().message());
             co_return;
         }
 
         Host bind_host(IPType::IPV4, m_config.host, m_config.port);
         auto bind_result = listener.bind(bind_host);
         if (!bind_result) {
-            HTTP_LOG_ERROR("[bind] [fail] [{}:{}] [{}]", m_config.host, m_config.port, bind_result.error().message());
             co_return;
         }
 
         auto listen_result = listener.listen(m_config.backlog);
         if (!listen_result) {
-            HTTP_LOG_ERROR("[listen] [fail] [{}]", listen_result.error().message());
             co_return;
         }
 
@@ -998,7 +1010,6 @@ private:
             auto accept_result = co_await listener.accept(&client_host);
             if (!accept_result) {
                 if (m_running.load()) {
-                    HTTP_LOG_ERROR("[accept] [fail] [{}]", accept_result.error().message());
                 }
                 continue;
             }
@@ -1006,12 +1017,10 @@ private:
             galay::ssl::SslSocket client_socket(&m_ssl_ctx, accept_result.value());
             auto nonblock_result = client_socket.option().handleNonBlock();
             if (!nonblock_result) {
-                HTTP_LOG_ERROR("[socket] [nonblock-fail] [h2] [{}]", nonblock_result.error().message());
                 continue;
             }
             auto nodelay_result = client_socket.option().handleTcpNoDelay();
             if (!nodelay_result) {
-                HTTP_LOG_WARN("[socket] [nodelay-fail] [h2] [{}]", nodelay_result.error().message());
             }
 
             auto* target_scheduler = m_runtime.getNextIOScheduler();
@@ -1019,14 +1028,12 @@ private:
                 target_scheduler = scheduler;
             }
             if (!scheduleTask(target_scheduler, handleConnection(std::move(client_socket)))) {
-                HTTP_LOG_ERROR("[h2] [schedule-fail] [handle-connection]");
                 co_await client_socket.close();
             }
         }
 
         auto close_result = co_await listener.close();
         if (!close_result) {
-            HTTP_LOG_WARN("[socket] [close-fail] [h2-listener] [{}]", close_result.error().message());
         }
         co_return;
     }
@@ -1050,26 +1057,21 @@ private:
     Task<void> handleConnection(galay::ssl::SslSocket socket) {
         auto handshake_result = co_await socket.handshake();
         if (!handshake_result) {
-            HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
             co_await socket.close();
             co_return;
         }
 
         std::string alpn = socket.getALPNProtocol();
         if (alpn != "h2") {
-            HTTP_LOG_INFO("[h2] [alpn-fallback] [to=http/1.1] [got={}]",
-                          alpn.empty() ? "(empty)" : alpn);
             co_await handleHttp1Fallback(std::move(socket));
             co_return;
         }
-        HTTP_LOG_DEBUG("[h2] [alpn-ok]");
 
         std::array<char, kHttp2ConnectionPrefaceLength> preface{};
         bool preface_ok = false;
         co_await readConnectionPreface(socket, preface, preface_ok);
         if (!preface_ok ||
             std::memcmp(preface.data(), kHttp2ConnectionPreface.data(), kHttp2ConnectionPrefaceLength) != 0) {
-            HTTP_LOG_ERROR("[h2] [preface-invalid]");
             co_await socket.close();
             co_return;
         }
@@ -1080,20 +1082,17 @@ private:
 
         auto settings_result = co_await conn.sendSettings();
         if (!settings_result) {
-            HTTP_LOG_ERROR("[h2] [settings-send-fail] [code={}]", static_cast<int>(settings_result.error()));
             co_await conn.close();
             co_return;
         }
 
         conn.initStreamManager();
         auto* mgr = conn.streamManager();
-        HTTP_LOG_DEBUG("[h2] [stream-mgr] [starting]");
         if (m_active_conn_handler) {
             co_await mgr->start(m_active_conn_handler);
         } else {
             co_await mgr->start(m_stream_handler);
         }
-        HTTP_LOG_DEBUG("[h2] [stream-mgr] [stopped]");
         co_await conn.close();
         co_return;
     }

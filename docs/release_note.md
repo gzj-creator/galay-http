@@ -68,3 +68,13 @@
   - 将安装导出的 CMake targets 文件改为 `galayHttpConfigTargets.cmake`，并同步 `galay-http-config.cmake` 的 include 路径。
   - Release 安装随主 targets 文件生成 `galayHttpConfigTargets-release.cmake`，统一驼峰导出文件命名。
   - 将 CMake project 版本提升到 `3.0.2`，确保源码版本元数据、tag 与发布记录一致。
+
+## v3.1.0 - 2026-05-20
+
+- 版本级别：中版本（minor）
+- Git 提交消息：`feat: 增加 http 库级 BaseLogger 日志入口`
+- Git Tag：`v3.1.0`
+- 自述摘要：
+  - 新增 `galay-http/common/http_log.h` 与 `galay::http::log::set/get`，HTTP 日志使用独立 `BaseLogger` 槽位，不再依赖全局 logger 或 `spdlog` 包装。
+  - HTTP、HTTPS、WebSocket、HTTP/2、静态文件、代理和 TLS 路径的关键失败/状态事件已迁移到新的 `HTTP_LOG_*` 埋点宏；未设置 HTTP logger 时不写日志，也不会构造格式化字符串。
+  - 将 `galay-kernel` 依赖基线提升到 `5.0.0`，TLS 路径对齐 `galay-ssl >= 2.1.0` 当前公开头，同时更新 README/docs、CMake 版本与 `GALAY_VERSION`。

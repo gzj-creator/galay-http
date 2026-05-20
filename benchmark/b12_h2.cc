@@ -4,7 +4,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <csignal>
 #include <atomic>
@@ -255,9 +254,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (g_debug_log) {
-        galay::http::HttpLogger::console();
     } else {
-        galay::http::HttpLogger::disable();
     }
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);

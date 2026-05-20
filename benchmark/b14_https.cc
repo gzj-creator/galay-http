@@ -6,7 +6,6 @@
 
 #include "galay-http/kernel/http/http_server.h"
 #include "galay-http/protoc/http/http_request.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -57,7 +56,6 @@ Task<void> handleHttpsRequest(HttpConnImpl<galay::ssl::SslSocket> conn) {
 }
 
 int main(int argc, char* argv[]) {
-    galay::http::HttpLogger::disable();
 
     uint16_t port = 9444;
     int io_threads = 4;

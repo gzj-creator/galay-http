@@ -12,7 +12,6 @@
 #include "galay-http/utils/rsp_bld.h"
 #include "galay-kernel/async/tcp_socket.h"
 #include "galay-kernel/common/buffer.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-kernel/kernel/runtime.h"
 
 #ifdef USE_KQUEUE
@@ -38,7 +37,6 @@ std::atomic<int> g_request_count{0};
 
 // 处理客户端连接
 Task<void> handleClient(TcpSocket client, Host clientHost) {
-    HTTP_LOG_INFO("Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
     client.option().handleNonBlock();
 
@@ -59,9 +57,7 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
         if (!result) {
             auto& error = result.error();
             if (error.code() == kConnectionClose) {
-                HTTP_LOG_INFO("Client disconnected");
             } else {
-                HTTP_LOG_ERROR("Request parse error: {}", error.message());
             }
             co_await client.close();
             co_return;
@@ -71,16 +67,10 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
     }
 
     g_request_count++;
-    HTTP_LOG_INFO("Request #{} received: {} {}",
-            g_request_count.load(),
-            static_cast<int>(request.header().method()),
-            request.header().uri());
 
     const std::string& requestBody = request.bodyStr();
 
     if (!requestBody.empty()) {
-        HTTP_LOG_INFO("Decoded request body: {} bytes", requestBody.size());
-        HTTP_LOG_INFO("Request body: {}", requestBody);
 
         // `getRequest()` 当前会在 chunked 请求完成时把 body 聚合完毕，
         // 因此这里直接基于聚合后的正文回发 chunked 响应。
@@ -93,7 +83,6 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
 
         auto headerResult = co_await writer.sendHeader(std::move(respHeader));
         if (!headerResult) {
-            HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
             co_await client.close();
             co_return;
         }
@@ -101,7 +90,6 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
         std::string chunk1 = "Decoded body bytes: " + std::to_string(requestBody.size()) + "\n";
         auto chunk1Result = co_await writer.sendChunk(chunk1, false);
         if (!chunk1Result) {
-            HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
             co_await client.close();
             co_return;
         }
@@ -109,14 +97,12 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
         std::string chunk2 = "Echo: ";
         auto chunk2Result = co_await writer.sendChunk(chunk2, false);
         if (!chunk2Result) {
-            HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
             co_await client.close();
             co_return;
         }
 
         auto chunk3Result = co_await writer.sendChunk(requestBody, false);
         if (!chunk3Result) {
-            HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
             co_await client.close();
             co_return;
         }
@@ -124,15 +110,12 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
         std::string emptyChunk;
         auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
         if (!lastChunkResult) {
-            HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
             co_await client.close();
             co_return;
         }
 
-        HTTP_LOG_INFO("Chunked response sent successfully");
     } else {
         // 非chunked请求
-        HTTP_LOG_INFO("Non-chunked request");
 
         // 发送简单响应
         auto response = Http1_1ResponseBuilder()
@@ -144,33 +127,26 @@ Task<void> handleClient(TcpSocket client, Host clientHost) {
 
         auto sendResult = co_await writer.sendResponse(response);
         if (!sendResult) {
-            HTTP_LOG_ERROR("Failed to send response: {}", sendResult.error().message());
         } else {
-            HTTP_LOG_INFO("Response sent: complete");
         }
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("Connection closed\n");
 }
 
 // Chunk测试服务器
 Task<void> chunkedTestServer() {
-    HTTP_LOG_INFO("=== HTTP Chunked Encoding Test Server ===");
-    HTTP_LOG_INFO("Starting server...");
 
     TcpSocket listener;
 
     // 设置选项
     auto optResult = listener.option().handleReuseAddr();
     if (!optResult) {
-        HTTP_LOG_ERROR("Failed to set reuse addr: {}", optResult.error().message());
         co_return;
     }
 
     optResult = listener.option().handleNonBlock();
     if (!optResult) {
-        HTTP_LOG_ERROR("Failed to set non-block: {}", optResult.error().message());
         co_return;
     }
 
@@ -178,30 +154,24 @@ Task<void> chunkedTestServer() {
     Host bindHost(IPType::IPV4, "127.0.0.1", 9999);
     auto bindResult = listener.bind(bindHost);
     if (!bindResult) {
-        HTTP_LOG_ERROR("Failed to bind: {}", bindResult.error().message());
         co_return;
     }
 
     // 监听
     auto listenResult = listener.listen(128);
     if (!listenResult) {
-        HTTP_LOG_ERROR("Failed to listen: {}", listenResult.error().message());
         co_return;
     }
 
-    HTTP_LOG_INFO("Server listening on 127.0.0.1:9999");
-    HTTP_LOG_INFO("Waiting for client connections...");
 
     while (true) {
         // 接受连接
         Host clientHost;
         auto acceptResult = co_await listener.accept(&clientHost);
         if (!acceptResult) {
-            HTTP_LOG_ERROR("Failed to accept: {}", acceptResult.error().message());
             continue;
         }
 
-        HTTP_LOG_INFO("Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
         // 创建客户端socket
         TcpSocket client(acceptResult.value());
@@ -224,9 +194,7 @@ Task<void> chunkedTestServer() {
             if (!result) {
                 auto& error = result.error();
                 if (error.code() == kConnectionClose) {
-                    HTTP_LOG_INFO("Client disconnected");
                 } else {
-                    HTTP_LOG_ERROR("Request parse error: {}", error.message());
                 }
                 co_await client.close();
                 break;
@@ -241,16 +209,10 @@ Task<void> chunkedTestServer() {
         }
 
         g_request_count++;
-        HTTP_LOG_INFO("Request #{} received: {} {}",
-                g_request_count.load(),
-                static_cast<int>(request.header().method()),
-                request.header().uri());
 
         const std::string& requestBody = request.bodyStr();
 
         if (!requestBody.empty()) {
-            HTTP_LOG_INFO("Decoded request body: {} bytes", requestBody.size());
-            HTTP_LOG_INFO("Request body: {}", requestBody);
 
             HttpResponseHeader respHeader;
             respHeader.version() = HttpVersion::HttpVersion_1_1;
@@ -261,7 +223,6 @@ Task<void> chunkedTestServer() {
 
             auto headerResult = co_await writer.sendHeader(std::move(respHeader));
             if (!headerResult) {
-                HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
                 co_await client.close();
                 continue;
             }
@@ -269,7 +230,6 @@ Task<void> chunkedTestServer() {
             std::string chunk1 = "Decoded body bytes: " + std::to_string(requestBody.size()) + "\n";
             auto chunk1Result = co_await writer.sendChunk(chunk1, false);
             if (!chunk1Result) {
-                HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
                 co_await client.close();
                 continue;
             }
@@ -277,14 +237,12 @@ Task<void> chunkedTestServer() {
             std::string chunk2 = "Echo: ";
             auto chunk2Result = co_await writer.sendChunk(chunk2, false);
             if (!chunk2Result) {
-                HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
                 co_await client.close();
                 continue;
             }
 
             auto chunk3Result = co_await writer.sendChunk(requestBody, false);
             if (!chunk3Result) {
-                HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
                 co_await client.close();
                 continue;
             }
@@ -292,15 +250,12 @@ Task<void> chunkedTestServer() {
             std::string emptyChunk;
             auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
             if (!lastChunkResult) {
-                HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
                 co_await client.close();
                 continue;
             }
 
-            HTTP_LOG_INFO("Chunked response sent successfully");
         } else {
             // 非chunked请求
-            HTTP_LOG_INFO("Non-chunked request");
 
             // 发送简单响应
             auto response = Http1_1ResponseBuilder()
@@ -312,14 +267,11 @@ Task<void> chunkedTestServer() {
 
             auto sendResult = co_await writer.sendResponse(response);
             if (!sendResult) {
-                HTTP_LOG_ERROR("Failed to send response: {}", sendResult.error().message());
             } else {
-                HTTP_LOG_INFO("Response sent: complete");
             }
         }
 
         co_await client.close();
-        HTTP_LOG_INFO("Connection closed\n");
     }
 
     co_await listener.close();
@@ -327,18 +279,13 @@ Task<void> chunkedTestServer() {
 }
 
 int main() {
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("HTTP Chunked Encoding Test - Server");
-    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
-    HTTP_LOG_INFO("Scheduler started");
 
     auto* scheduler = rt.getNextIOScheduler();
     if (!scheduler) {
-        HTTP_LOG_ERROR("Failed to get IO scheduler");
         rt.stop();
         return 1;
     }
@@ -346,7 +293,6 @@ int main() {
     // 启动服务器
     scheduleTask(scheduler, chunkedTestServer());
 
-    HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 
     // 保持运行
     while (true) {
@@ -355,7 +301,6 @@ int main() {
 
     rt.stop();
 #else
-    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

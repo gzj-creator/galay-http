@@ -1,7 +1,6 @@
 #ifndef GALAY_HTTP_SESSION_H
 #define GALAY_HTTP_SESSION_H
 
-#include "http_log.h"
 #include "http_reader.h"
 #include "http_writer.h"
 #include "galay-http/protoc/http/http_request.h"
@@ -16,7 +15,7 @@
 #include <string>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #endif
 

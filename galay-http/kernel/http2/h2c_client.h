@@ -7,7 +7,6 @@
 #include "galay-http/kernel/iov_utils.h"
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/utils/req_bld.h"
 #include "galay-kernel/async/tcp_socket.h"
 #include "galay-kernel/common/buffer.h"
@@ -93,7 +92,6 @@ public:
         m_host = host;
         m_port = port;
         m_authority = m_host + ":" + std::to_string(m_port);
-        HTTP_LOG_INFO("[connect] [h2c] [{}:{}]", host, port);
         m_socket = std::make_unique<TcpSocket>(IPType::IPV4);
         m_ring_buffer = std::make_unique<RingBuffer>(m_ring_buffer_size);
         auto r = m_socket->option().handleNonBlock();
@@ -148,7 +146,6 @@ struct H2cUpgradeMachine {
         prepareUpgradeRequest(path);
         preparePrefaceAndSettings();
         prepareAck();
-        HTTP_LOG_INFO("[h2c] [upgrade] [begin] [path={}]", path);
     }
 
     MachineAction<result_type> advance() {
@@ -401,7 +398,6 @@ private:
             setProtocolError("invalid Upgrade value: " + upgrade_value);
             return true;
         }
-        HTTP_LOG_INFO("[h2c] [upgrade] [101-ok]");
         return true;
     }
 
@@ -436,7 +432,6 @@ private:
             return true;
         }
         m_ring_buffer->consume(frame_size);
-        HTTP_LOG_INFO("[h2c] [upgrade] [settings-recv-ok]");
         return true;
     }
 
@@ -625,8 +620,6 @@ inline bool H2cUpgradeAwaitable::finalizeTransport(H2cClient& client, Scheduler*
     client.m_ring_buffer.reset();
     client.m_upgraded = true;
     client.m_upgrade_result = true;
-    HTTP_LOG_INFO("[h2c] [upgrade] [conn-ready]");
-    HTTP_LOG_INFO("[h2c] [upgrade] [done]");
     return true;
 }
 
@@ -686,7 +679,6 @@ inline H2cUpgradeAwaitable H2cClient::upgrade(const std::string& path) {
 
 inline Http2Stream::ptr H2cClient::get(const std::string& path) {
     if (!m_conn || !m_conn->streamManager()) {
-        HTTP_LOG_ERROR("[h2c] [get] [not-ready]");
         return nullptr;
     }
     auto* mgr = m_conn->streamManager();
@@ -705,7 +697,6 @@ inline Http2Stream::ptr H2cClient::post(const std::string& path,
                                          const std::string& body,
                                          const std::string& content_type) {
     if (!m_conn || !m_conn->streamManager()) {
-        HTTP_LOG_ERROR("[h2c] [post] [not-ready]");
         return nullptr;
     }
     auto* mgr = m_conn->streamManager();
@@ -725,8 +716,6 @@ inline Http2Stream::ptr H2cClient::post(const std::string& path,
 inline Task<std::expected<bool, Http2Error>> H2cClient::shutdown() {
     m_shutdown_result = true;
 
-    HTTP_LOG_INFO("[h2c] [shutdown] [begin] [has-conn={}] [upgraded={}]",
-                  m_conn != nullptr, m_upgraded);
 
     if (m_conn && m_conn->streamManager()) {
         co_await m_conn->streamManager()->shutdown(Http2ErrorCode::NoError);
@@ -748,7 +737,6 @@ inline Task<std::expected<bool, Http2Error>> H2cClient::shutdown() {
     }
 
     m_shutdown_result = true;
-    HTTP_LOG_INFO("[h2c] [shutdown] [done]");
     co_return m_shutdown_result;
 }
 

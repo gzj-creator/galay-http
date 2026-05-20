@@ -53,6 +53,9 @@
 #if __has_include(<filesystem>)
 #include <filesystem>
 #endif
+#if __has_include(<format>)
+#include <format>
+#endif
 #if __has_include(<fstream>)
 #include <fstream>
 #endif
@@ -101,21 +104,6 @@
 #if __has_include(<set>)
 #include <set>
 #endif
-#if __has_include(<spdlog/async.h>)
-#include <spdlog/async.h>
-#endif
-#if __has_include(<spdlog/async_logger.h>)
-#include <spdlog/async_logger.h>
-#endif
-#if __has_include(<spdlog/sinks/basic_file_sink.h>)
-#include <spdlog/sinks/basic_file_sink.h>
-#endif
-#if __has_include(<spdlog/sinks/stdout_color_sinks.h>)
-#include <spdlog/sinks/stdout_color_sinks.h>
-#endif
-#if __has_include(<spdlog/spdlog.h>)
-#include <spdlog/spdlog.h>
-#endif
 #if __has_include(<sstream>)
 #include <sstream>
 #endif
@@ -158,11 +146,11 @@
 #if __has_include("galay-http/kernel/http/http_client.h")
 #include "galay-http/kernel/http/http_client.h"
 #endif
+#if __has_include("galay-http/common/http_log.h")
+#include "galay-http/common/http_log.h"
+#endif
 #if __has_include("galay-http/kernel/http/http_conn.h")
 #include "galay-http/kernel/http/http_conn.h"
-#endif
-#if __has_include("galay-http/kernel/http/http_log.h")
-#include "galay-http/kernel/http/http_log.h"
 #endif
 #if __has_include("galay-http/kernel/http/http_reader.h")
 #include "galay-http/kernel/http/http_reader.h"
@@ -274,9 +262,6 @@
 #endif
 #if __has_include("galay-http/utils/rsp_bld.h")
 #include "galay-http/utils/rsp_bld.h"
-#endif
-#if __has_include("galay-http/utils/http_logger.h")
-#include "galay-http/utils/http_logger.h"
 #endif
 #if __has_include("galay-http/utils/http_utils.h")
 #include "galay-http/utils/http_utils.h"

@@ -6,7 +6,6 @@
 #include "ws_conn.h"
 #include "ws_upgrade.h"
 #include "galay-http/kernel/iov_utils.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/protoc/http/http_header.h"
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
@@ -24,7 +23,7 @@
 #include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #include "galay-ssl/ssl/ssl_context.h"
 #endif
@@ -213,7 +212,6 @@ struct WsClientUpgradeState {
             std::move(*m_socket),
             std::move(*m_ring_buffer),
             false);
-        HTTP_LOG_INFO("[{}] [conn] [ready]", logScheme());
         m_result = true;
         return true;
     }
@@ -272,7 +270,6 @@ private:
             .header("Sec-WebSocket-Key", m_ws_key)
             .build();
         m_send_buffer = request.toString();
-        HTTP_LOG_INFO("[{}] [upgrade] [send]", logScheme());
     }
 
     bool validateUpgradeResponse() {
@@ -292,7 +289,6 @@ private:
             return setUpgradeFailed("Invalid Sec-WebSocket-Accept value");
         }
 
-        HTTP_LOG_INFO("[{}] [upgrade] [ok]", logScheme());
         return true;
     }
 
@@ -580,8 +576,6 @@ public:
             }
         }
 
-        HTTP_LOG_INFO("[connect] [ws] [{}:{}{}]",
-                      m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<SocketType>(IPType::IPV4);
 
@@ -734,10 +728,8 @@ public:
         m_url = parsed_url.value();
 
         if (!m_url.is_secure) {
-            HTTP_LOG_WARN("[wss] [upgrade] [forced]");
         }
 
-        HTTP_LOG_INFO("[connect] [wss] [{}:{}{}]", m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
 
@@ -748,7 +740,6 @@ public:
 
         auto sni_result = m_socket->setHostname(m_url.host);
         if (!sni_result) {
-            HTTP_LOG_WARN("[sni] [fail] [{}]", sni_result.error().message());
         }
 
         Host server_host(IPType::IPV4, m_url.host, m_url.port);
@@ -778,7 +769,6 @@ private:
         if (!m_wss_config.ca_path.empty()) {
             auto result = m_ssl_ctx.loadCACertificate(m_wss_config.ca_path);
             if (!result) {
-                HTTP_LOG_WARN("[ssl] [ca] [load-fail] [{}]", m_wss_config.ca_path);
             }
         }
 

@@ -14,7 +14,6 @@
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
 #include "galay-http/utils/rsp_bld.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/kernel/websocket/writer_cfg.h"
 #include <iostream>
 #include <atomic>
@@ -38,7 +37,6 @@ void signalHandler(int) {
  */
 Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     g_connection_count++;
-    HTTP_LOG_INFO("WebSocket connection #{} established", g_connection_count.load());
 
     auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
@@ -46,7 +44,6 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     // 发送欢迎消息
     auto send_result = co_await writer.sendText("Welcome to WebSocket Test Server!");
     if (!send_result) {
-        HTTP_LOG_ERROR("Failed to send welcome message: {}", send_result.error().message());
         co_return;
     }
 
@@ -63,11 +60,9 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
             if (!result.has_value()) {
                 WsError error = result.error();
                 if (error.code() == kWsConnectionClosed) {
-                    HTTP_LOG_INFO("WebSocket connection closed by peer");
                     co_await ws_conn.close();
                     co_return;
                 }
-                HTTP_LOG_ERROR("Failed to read message: {}", error.message());
                 co_await ws_conn.close();
                 co_return;
             }
@@ -86,51 +81,41 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
 
         // 处理不同类型的消息
         if (opcode == WsOpcode::Ping) {
-            HTTP_LOG_INFO("Received Ping, sending Pong");
             auto pong_result = co_await writer.sendPong(message);
             if (!pong_result) {
-                HTTP_LOG_ERROR("Failed to send Pong: {}", pong_result.error().message());
                 co_await ws_conn.close();
                 co_return;
             }
         }
         else if (opcode == WsOpcode::Pong) {
-            HTTP_LOG_INFO("Received Pong");
         }
         else if (opcode == WsOpcode::Close) {
-            HTTP_LOG_INFO("Received Close frame");
             auto close_result = co_await writer.sendClose();
             if (!close_result) {
-                HTTP_LOG_WARN("Failed to send Close frame: {}", close_result.error().message());
             }
             break;
         }
         else if (opcode == WsOpcode::Text) {
-            HTTP_LOG_INFO("Message #{}: {}", g_message_count.load(), message);
 
             // Echo back
             std::string echo_msg = "Echo: " + message;
             auto echo_result = co_await writer.sendText(echo_msg);
             if (!echo_result) {
-                HTTP_LOG_ERROR("Failed to send echo: {}", echo_result.error().message());
                 co_await ws_conn.close();
                 co_return;
             }
         }
         else if (opcode == WsOpcode::Binary) {
-            HTTP_LOG_INFO("Binary message #{}, size: {}", g_message_count.load(), message.size());
 
             // Echo back binary
             auto echo_result = co_await writer.sendBinary(message);
             if (!echo_result) {
-                HTTP_LOG_ERROR("Failed to send binary echo: {}", echo_result.error().message());
                 co_await ws_conn.close();
                 co_return;
             }
         }
     }
 
-    HTTP_LOG_INFO("Closing WebSocket connection");
     co_await ws_conn.close();
     co_return;
 }
@@ -144,19 +129,16 @@ Task<void> handleHttpRequest(HttpConn conn) {
 
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
-        HTTP_LOG_ERROR("Failed to read HTTP request: {}", read_result.error().message());
         co_await conn.close();
         co_return;
     }
 
-    HTTP_LOG_INFO("Received {} {}", httpMethodToString(request.header().method()), request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
     if (request.header().uri() == "/ws" || request.header().uri() == "/") {
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            HTTP_LOG_ERROR("WebSocket upgrade failed: {}", upgrade_result.error_message);
 
             auto writer = conn.getWriter();
             co_await writer.sendResponse(upgrade_result.response);
@@ -164,14 +146,12 @@ Task<void> handleHttpRequest(HttpConn conn) {
             co_return;
         }
 
-        HTTP_LOG_INFO("WebSocket upgrade successful");
 
         // 发送升级响应
         auto writer = conn.getWriter();
         auto send_result = co_await writer.sendResponse(upgrade_result.response);
 
         if (!send_result) {
-            HTTP_LOG_ERROR("Failed to send upgrade response: {}", send_result.error().message());
             co_await conn.close();
             co_return;
         }
@@ -224,7 +204,6 @@ int main(int argc, char* argv[]) {
             .computeSchedulerCount(0)
             .build());
 
-        HTTP_LOG_INFO("WebSocket test server starting on {}:{}", "0.0.0.0", port);
 
         server.start(handleHttpRequest);
 

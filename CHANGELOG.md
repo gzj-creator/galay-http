@@ -1,9 +1,26 @@
 # CHANGELOG
 
 维护说明：
-- 未打 tag 的改动先写入 `
+- 未打 tag 的改动先写入 `## [Unreleased]`，准备发版时再整理到新的版本节。
+- 版本标题使用 `## [vX.Y.Z] - YYYY-MM-DD`，最新版本放在 `Unreleased` 之后。
+- 内容按 `Added` / `Changed` / `Fixed` / `Docs` / `Chore` 等小节归纳，记录对用户和维护者有意义的主线变更。
 
 ## [Unreleased]
+
+## [v3.1.0] - 2026-05-20
+
+### Added
+- 新增 `galay-http/common/http_log.h` 与 `galay::http::log::set/get`，HTTP 库日志改为独立 `BaseLogger` 槽位。
+- 将 HTTP、HTTPS、WebSocket、HTTP/2、静态文件、代理和 TLS 路径的关键失败/状态事件迁移到新的 `HTTP_LOG_*` 埋点宏。
+- 为 HTTP 协议基础类型和工具补充中文 Doxygen 注释。
+
+### Changed
+- 移除旧 `spdlog` 日志包装和 `GALAY_HTTP_DISABLE_FRAMEWORK_LOG` 编译期开关，未设置 `galay::http::log` 时默认不写日志且不格式化消息。
+- 将 `galay-kernel` 依赖基线提升到 `5.0.0`，并将 TLS 路径切换到 `galay-ssl >= 2.1.0` 当前公开头。
+- 将 CMake project 版本和 `GALAY_VERSION` 同步提升到 `3.1.0`。
+
+### Docs
+- 更新 README 与 docs 中的依赖、公开头和日志启用方式，说明 HTTP 日志只由 `galay::http::log::set()` 控制。
 
 ## [v3.0.2] - 2026-05-18
 

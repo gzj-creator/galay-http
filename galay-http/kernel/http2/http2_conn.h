@@ -8,7 +8,6 @@
 #include "galay-http/protoc/http2/http2_hpack.h"
 #include "galay-http/protoc/http2/http2_error.h"
 #include "galay-http/kernel/iov_utils.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/kernel/http/http_conn.h"
 #include "galay-kernel/common/buffer.h"
 #include "galay-kernel/common/error.h"
@@ -25,7 +24,7 @@
 #include <string_view>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #endif
 
@@ -885,13 +884,11 @@ struct Http2WriteState {
     }
 
     void setSendError(const IOError& io_error) {
-        HTTP_LOG_ERROR("[writeFrame] [send-fail] [{}]", io_error.message());
         m_result = std::unexpected(Http2ErrorCode::InternalError);
     }
 
 #ifdef GALAY_HTTP_SSL_ENABLED
     void setSslSendError(const galay::ssl::SslError& error) {
-        HTTP_LOG_ERROR("[writeFrame] [ssl-send-fail] [{}]", error.message());
         m_result = std::unexpected(Http2ErrorCode::InternalError);
     }
 #endif

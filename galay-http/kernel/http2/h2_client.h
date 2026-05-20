@@ -3,15 +3,15 @@
 
 #include "http2_conn.h"
 #include "http2_stream.h"
+#include "galay-http/common/http_log.h"
 #include "galay-http/kernel/iov_utils.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/protoc/http2/http2_base.h"
 #include "galay-http/protoc/http2/http2_frame.h"
 #include "galay-kernel/kernel/awaitable.h"
 #include "galay-kernel/kernel/task.h"
 #include "galay-kernel/kernel/timeout.hpp"
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #include "galay-ssl/ssl/ssl_context.h"
 #endif
@@ -302,7 +302,9 @@ struct H2ClientConnectMachine {
 
     void onConnect(std::expected<void, IOError> result) {
         if (!result) {
-            HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", result.error().message());
+            HTTP_LOG_ERROR("[h2] [connect-fail]",
+                           "error={}",
+                           result.error().message());
             fail();
             return;
         }
@@ -358,14 +360,18 @@ private:
 
     void handleHandshakeResult(std::expected<void, galay::ssl::SslError> result) {
         if (!result) {
-            HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", result.error().message());
+            HTTP_LOG_ERROR("[h2] [handshake-fail]",
+                           "error={}",
+                           result.error().message());
             fail();
             return;
         }
 
         m_client->m_alpn_protocol = m_client->m_socket->getALPNProtocol();
         if (m_client->m_alpn_protocol != "h2") {
-            HTTP_LOG_ERROR("[h2] [alpn-fail] [got={}] [expect=h2]", m_client->m_alpn_protocol);
+            HTTP_LOG_ERROR("[h2] [alpn-fail]",
+                           "got={} expect=h2",
+                           m_client->m_alpn_protocol);
             fail();
             return;
         }
@@ -377,13 +383,15 @@ private:
 
     void handlePrefaceSendResult(std::expected<size_t, galay::ssl::SslError> result) {
         if (!result) {
-            HTTP_LOG_ERROR("[h2] [preface-send-fail] [{}]", result.error().message());
+            HTTP_LOG_ERROR("[h2] [preface-send-fail]",
+                           "error={}",
+                           result.error().message());
             fail();
             return;
         }
 
         if (result.value() != m_preface.size()) {
-            HTTP_LOG_ERROR("[h2] [preface-send-fail] [short-write]");
+            HTTP_LOG_ERROR("[h2] [preface-send-fail]", "short-write");
             fail();
             return;
         }
@@ -414,7 +422,7 @@ private:
 
     void fail(const char* phase = nullptr, const char* detail = nullptr) {
         if (phase != nullptr && detail != nullptr) {
-            HTTP_LOG_ERROR("[h2] [{}] [{}]", phase, detail);
+            HTTP_LOG_ERROR("[h2]", "phase={} detail={}", phase, detail);
         }
         m_client->m_connected = false;
         m_client->m_connect_result = std::unexpected(Http2ErrorCode::ConnectError);
@@ -480,7 +488,7 @@ private:
         client.m_conn->markSettingsSent();
         client.m_connected = true;
         client.m_connect_result = true;
-        HTTP_LOG_INFO("[connect] [h2] [{}:{}]", client.m_host, client.m_port);
+        HTTP_LOG_INFO("[connect] [h2]", "host={} port={}", client.m_host, client.m_port);
         return true;
     }
 
@@ -504,7 +512,9 @@ public:
 
         auto nonblock_result = m_client->m_socket->option().handleNonBlock();
         if (!nonblock_result) {
-            HTTP_LOG_ERROR("[h2] [connect] [nonblock-fail] [{}]", nonblock_result.error().message());
+            HTTP_LOG_ERROR("[h2] [connect] [nonblock-fail]",
+                           "error={}",
+                           nonblock_result.error().message());
             discardTransport(*m_client);
             m_ready = true;
             return;
@@ -512,7 +522,9 @@ public:
 
         auto sni_result = m_client->m_socket->setHostname(m_client->m_host);
         if (!sni_result) {
-            HTTP_LOG_ERROR("[h2] [sni-fail] [{}]", sni_result.error().message());
+            HTTP_LOG_ERROR("[h2] [sni-fail]",
+                           "error={}",
+                           sni_result.error().message());
             discardTransport(*m_client);
             m_ready = true;
             return;
@@ -799,12 +811,12 @@ private:
     }
 
     void setSslSendError(const galay::ssl::SslError& error) {
-        HTTP_LOG_ERROR("[h2] [send-fail] [{}]", error.message());
+        HTTP_LOG_ERROR("[h2] [send-fail]", "error={}", error.message());
         m_error = Http2ErrorCode::InternalError;
     }
 
     void setSslRecvError(const galay::ssl::SslError& error) {
-        HTTP_LOG_ERROR("[h2] [recv-fail] [{}]", error.message());
+        HTTP_LOG_ERROR("[h2] [recv-fail]", "error={}", error.message());
         if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
             m_error = Http2ErrorCode::ConnectError;
             return;
@@ -1044,7 +1056,6 @@ inline H2Client::ConnectAwaitable H2Client::connect(const std::string& host, uin
         m_conn->markSettingsSent();
         m_connected = true;
         m_connect_result = true;
-        HTTP_LOG_INFO("[connect] [h2] [{}:{}]", m_host, m_port);
         return true;
     };
 
@@ -1061,20 +1072,23 @@ inline H2Client::ConnectAwaitable H2Client::connect(const std::string& host, uin
 
     co_await detail::CaptureSchedulerAwaitable(&m_scheduler);
     if (m_scheduler == nullptr) {
+        HTTP_LOG_ERROR("[h2] [connect]", "scheduler missing");
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
 
     auto nonblock_result = m_socket->option().handleNonBlock();
     if (!nonblock_result) {
-        HTTP_LOG_ERROR("[h2] [connect] [nonblock-fail] [{}]", nonblock_result.error().message());
+        HTTP_LOG_ERROR("[h2] [connect] [nonblock-fail]",
+                       "error={}",
+                       nonblock_result.error().message());
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
 
     auto sni_result = m_socket->setHostname(m_host);
     if (!sni_result) {
-        HTTP_LOG_ERROR("[h2] [sni-fail] [{}]", sni_result.error().message());
+        HTTP_LOG_ERROR("[h2] [sni-fail]", "error={}", sni_result.error().message());
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
@@ -1082,21 +1096,25 @@ inline H2Client::ConnectAwaitable H2Client::connect(const std::string& host, uin
     Host server_host(IPType::IPV4, m_host, m_port);
     auto connect_result = co_await m_socket->connect(server_host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("[h2] [connect-fail] [{}]", connect_result.error().message());
+        HTTP_LOG_ERROR("[h2] [connect-fail]",
+                       "error={}",
+                       connect_result.error().message());
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
 
     auto handshake_result = co_await m_socket->handshake();
     if (!handshake_result) {
-        HTTP_LOG_ERROR("[h2] [handshake-fail] [{}]", handshake_result.error().message());
+        HTTP_LOG_ERROR("[h2] [handshake-fail]",
+                       "error={}",
+                       handshake_result.error().message());
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
 
     m_alpn_protocol = m_socket->getALPNProtocol();
     if (m_alpn_protocol != "h2") {
-        HTTP_LOG_ERROR("[h2] [alpn-fail] [got={}] [expect=h2]", m_alpn_protocol);
+        HTTP_LOG_ERROR("[h2] [alpn-fail]", "got={} expect=h2", m_alpn_protocol);
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
@@ -1117,12 +1135,14 @@ inline H2Client::ConnectAwaitable H2Client::connect(const std::string& host, uin
     while (offset < preface.size()) {
         auto send_result = co_await m_socket->send(preface.data() + offset, preface.size() - offset);
         if (!send_result) {
-            HTTP_LOG_ERROR("[h2] [preface-send-fail] [{}]", send_result.error().message());
+            HTTP_LOG_ERROR("[h2] [preface-send-fail]",
+                           "error={}",
+                           send_result.error().message());
             discard_transport();
             co_return std::unexpected(Http2ErrorCode::ConnectError);
         }
         if (send_result.value() == 0) {
-            HTTP_LOG_ERROR("[h2] [preface-send-fail] [short-write]");
+            HTTP_LOG_ERROR("[h2] [preface-send-fail]", "short-write");
             discard_transport();
             co_return std::unexpected(Http2ErrorCode::ConnectError);
         }
@@ -1133,6 +1153,7 @@ inline H2Client::ConnectAwaitable H2Client::connect(const std::string& host, uin
         discard_transport();
         co_return std::unexpected(Http2ErrorCode::ConnectError);
     }
+    HTTP_LOG_INFO("[connect] [h2]", "host={} port={}", m_host, m_port);
 
     co_return std::expected<bool, Http2ErrorCode>(true);
 }
@@ -1151,7 +1172,7 @@ inline bool H2Client::ensureActiveStreamManager() {
     }
 
     if (m_scheduler == nullptr) {
-        HTTP_LOG_ERROR("[h2] [stream-manager] [missing-scheduler]");
+        HTTP_LOG_ERROR("[h2] [stream-manager]", "scheduler missing");
         return false;
     }
 
@@ -1161,7 +1182,7 @@ inline bool H2Client::ensureActiveStreamManager() {
 
     auto* manager = m_conn->streamManager();
     if (manager == nullptr) {
-        HTTP_LOG_ERROR("[h2] [stream-manager] [init-fail]");
+        HTTP_LOG_ERROR("[h2] [stream-manager]", "init failed");
         return false;
     }
 
@@ -1173,7 +1194,7 @@ inline bool H2Client::ensureActiveStreamManager() {
 
 inline Http2Stream::ptr H2Client::get(const std::string& path) {
     if (!ensureActiveStreamManager()) {
-        HTTP_LOG_ERROR("[h2] [get] [not-ready]");
+        HTTP_LOG_ERROR("[h2] [get]", "client not ready");
         return nullptr;
     }
 
@@ -1193,7 +1214,7 @@ inline Http2Stream::ptr H2Client::post(const std::string& path,
                                        const std::string& body,
                                        const std::string& content_type) {
     if (!ensureActiveStreamManager()) {
-        HTTP_LOG_ERROR("[h2] [post] [not-ready]");
+        HTTP_LOG_ERROR("[h2] [post]", "client not ready");
         return nullptr;
     }
 

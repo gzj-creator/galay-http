@@ -12,7 +12,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/utils/http_logger.h"
 #include <iostream>
 #include <csignal>
 
@@ -43,7 +42,6 @@ Task<void> handleStream(Http2Stream::ptr stream) {
     }
     auto& req = stream->request();
 
-    HTTP_LOG_INFO("[h2c] [req] [{}] [{}] [stream={}]", req.method, req.path, stream->streamId());
 
     // 构建响应（echo body）
     co_await stream->replyHeader(
@@ -58,7 +56,6 @@ Task<void> handleStream(Http2Stream::ptr stream) {
 }
 
 int main(int argc, char* argv[]) {
-    galay::http::HttpLogger::console();  // DEBUG 日志输出到终端
 
     int port = 8080;
     if (argc > 1) {

@@ -6,7 +6,6 @@
 
 #include <iostream>
 #include <chrono>
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/kernel/websocket/ws_client.h"
 #include "galay-http/protoc/websocket/ws_frame.h"
 #include "galay-kernel/kernel/runtime.h"
@@ -32,35 +31,28 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
         // 2. TCP 连接
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
-            HTTP_LOG_ERROR("[connect] [fail] [{}]", connect_result.error().message());
             co_return false;
         }
-        HTTP_LOG_INFO("[connect] [ok]");
 
         // 3. SSL 握手
         auto handshake_result = co_await client.handshake();
         if (!handshake_result) {
-            HTTP_LOG_ERROR("[ssl] [handshake-fail] [{}]", handshake_result.error().message());
             co_await client.close();
             co_return false;
         }
-        HTTP_LOG_INFO("[ssl] [handshake-ok]");
 
         // 4. 获取 Session 并升级 WebSocket
         auto session = client.getSession(WsWriterSetting::byClient());
         auto upgrader = session.upgrade();
         auto upgrade_result = co_await upgrader().timeout(kOpTimeout);
         if (!upgrade_result) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error().message());
             co_await client.close();
             co_return false;
         }
         if (!upgrade_result.value()) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [incomplete]");
             co_await client.close();
             co_return false;
         }
-        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
         // 5. 接收欢迎消息
         std::string welcome_msg;
@@ -68,7 +60,6 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
         while (true) {
             auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode).timeout(kOpTimeout);
             if (!recv_result) {
-                HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", recv_result.error().message());
                 co_await client.close();
                 co_return false;
             }
@@ -76,7 +67,6 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
                 break;
             }
         }
-        HTTP_LOG_INFO("[ws] [recv] [msg={}]", welcome_msg);
         std::cout << "Received welcome message: " << welcome_msg << "\n";
 
         // 6. 发送和接收消息
@@ -87,7 +77,6 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
             while (true) {
                 auto send_result = co_await session.sendText(msg);
                 if (!send_result) {
-                    HTTP_LOG_ERROR("[ws] [send-fail] [{}]", send_result.error().message());
                     co_await client.close();
                     co_return false;
                 }
@@ -95,7 +84,6 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
                     break;
                 }
             }
-            HTTP_LOG_INFO("[ws] [send] [msg={}]", msg);
 
             // 接收回显
             std::string echo_msg;
@@ -103,7 +91,6 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
             while (true) {
                 auto recv_result = co_await session.getMessage(echo_msg, echo_opcode).timeout(kOpTimeout);
                 if (!recv_result) {
-                    HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", recv_result.error().message());
                     co_await client.close();
                     co_return false;
                 }
@@ -111,16 +98,13 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
                     break;
                 }
             }
-            HTTP_LOG_INFO("[ws] [recv] [msg={}]", echo_msg);
             std::cout << "Received echo: " << echo_msg << "\n";
         }
 
         // 7. 发送关闭帧
-        HTTP_LOG_INFO("[ws] [close] [send]");
         while (true) {
             auto close_result = co_await session.sendClose(WsCloseCode::Normal);
             if (!close_result) {
-                HTTP_LOG_ERROR("[ws] [close-fail] [{}]", close_result.error().message());
                 break;
             }
             if (close_result.value()) {
@@ -129,12 +113,10 @@ Task<bool> wssClientCoroutine(const std::string& url, int message_count) {
         }
 
         co_await client.close();
-        HTTP_LOG_INFO("[ws] [conn] [closed]");
         std::cout << "WSS client finished\n";
         co_return true;
 
     } catch (const std::exception& e) {
-        HTTP_LOG_ERROR("[exception] [{}]", e.what());
         co_return false;
     }
 }

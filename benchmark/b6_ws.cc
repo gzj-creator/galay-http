@@ -18,7 +18,6 @@
 #include "galay-http/kernel/websocket/ws_conn.h"
 #include "galay-http/utils/req_bld.h"
 #include "galay-kernel/kernel/runtime.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/kernel/websocket/ws_client.h"
 #include "galay-http/kernel/websocket/writer_cfg.h"
 
@@ -95,7 +94,6 @@ Task<void> benchmarkWebSocketClient(
 
     auto connect_result = co_await client.connect("ws://127.0.0.1:8080/ws");
     if (!connect_result) {
-        HTTP_LOG_ERROR("[client] [{}] [connect-fail] [{}]", client_id, connect_result.error().message());
         g_failed_connections.fetch_add(1);
         co_return;
     }
@@ -104,15 +102,12 @@ Task<void> benchmarkWebSocketClient(
     auto upgrader = session.upgrade();
     auto res = co_await upgrader();
     if(!res) {
-        HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", res.error().message());
         co_return;
     }
     if(!res.value()) {
-        HTTP_LOG_ERROR("[ws] [upgrade] [incomplete]");
         co_return;
     }
 
-    HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
     g_successful_connections.fetch_add(1);
 
@@ -124,7 +119,6 @@ Task<void> benchmarkWebSocketClient(
     while(true) {
         auto welcome_result = co_await ws_reader.getMessage(welcome_msg, welcome_opcode);
         if(!welcome_result) {
-            HTTP_LOG_ERROR("[ws] [welcome] [recv-fail] [{}]", welcome_result.error().message());
             co_return;
         }
         if(welcome_result.value()) {
@@ -151,7 +145,6 @@ Task<void> benchmarkWebSocketClient(
         while(true) {
             auto send_result = co_await ws_writer.sendFrame(send_frame);
             if (!send_result) {
-                HTTP_LOG_ERROR("[client] [{}] [send-fail] [{}]", client_id, send_result.error().message());
                 co_return;
             }
             if(send_result.value()) {
@@ -166,7 +159,6 @@ Task<void> benchmarkWebSocketClient(
             auto echo_result = co_await ws_reader.getMessage(echo_msg, echo_opcode);
             if (!echo_result.has_value()) {
                 // 连接错误，退出
-                HTTP_LOG_ERROR("[client] [{}] [echo] [error] [{}]", client_id, echo_result.error().message());
                 co_return;
             }
             if (echo_result.value()) {
@@ -249,9 +241,7 @@ int main(int argc, char* argv[]) {
     // 设置 GALAY_HTTP_BENCH_LOG=1 可开启文件日志。
     const char* bench_log = std::getenv("GALAY_HTTP_BENCH_LOG");
     if (bench_log != nullptr && std::string_view(bench_log) == "1") {
-        galay::http::HttpLogger::file("B4-WebsocketClient.log");
     } else {
-        galay::http::HttpLogger::disable();
     }
 
     // 解析命令行参数

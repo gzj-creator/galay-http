@@ -9,7 +9,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <atomic>
 #include <csignal>
@@ -42,8 +41,6 @@ Task<void> handleStream(Http2Stream::ptr stream) {
         }
     }
 
-    HTTP_LOG_INFO("Request #{} on stream {}",
-                  g_request_count.load(), stream->streamId());
 
     // 构造响应
     std::string resp_body = "Hello from H2c Test Server!\n";
@@ -55,7 +52,6 @@ Task<void> handleStream(Http2Stream::ptr stream) {
         false);
     co_await stream->replyData(resp_body, true);
 
-    HTTP_LOG_INFO("Response sent for stream {}", stream->streamId());
     co_return;
 }
 
@@ -87,7 +83,6 @@ int main(int argc, char* argv[]) {
             .enablePush(false)
             .build());
 
-        HTTP_LOG_INFO("H2c test server starting on {}:{}", "0.0.0.0", port);
 
         server.start(handleStream);
 

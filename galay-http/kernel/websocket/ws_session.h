@@ -6,7 +6,6 @@
 #include "ws_upgrade.h"
 #include "ws_url.h"
 #include "galay-http/protoc/http/http_response.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/utils/req_bld.h"
 #include "galay-kernel/common/buffer.h"
 #include "galay-kernel/async/tcp_socket.h"
@@ -21,7 +20,7 @@
 #include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #endif
 
@@ -188,7 +187,6 @@ public:
                 return ParseStatus::kCompleted;
             }
 
-            HTTP_LOG_INFO("[ws] [upgrade] [ok]");
             session.m_upgraded = true;
             ops.complete(true);
             return ParseStatus::kCompleted;
@@ -207,7 +205,6 @@ public:
                 .build();
 
             m_send_buffer = request.toString();
-            HTTP_LOG_INFO("[ws] [upgrade] [send]");
         }
 
         WsSessionUpgraderImpl<SocketType>* m_upgrader;
@@ -467,7 +464,6 @@ public:
             }
 
             session.m_upgraded = true;
-            HTTP_LOG_INFO("[ws] [upgrade] [ok]");
             m_result = true;
             return true;
         }
@@ -511,7 +507,6 @@ public:
                 .build();
 
             m_send_buffer = request.toString();
-            HTTP_LOG_INFO("[ws] [upgrade] [send]");
         }
 
         WsSessionUpgraderImpl<SocketType>* m_upgrader;

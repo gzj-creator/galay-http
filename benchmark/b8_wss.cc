@@ -11,7 +11,6 @@
 #include <thread>
 #include <csignal>
 #include "benchmark/wss_stats.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/kernel/websocket/ws_client.h"
 #include "galay-kernel/kernel/runtime.h"
 
@@ -74,7 +73,6 @@ Task<void> benchmarkWssClient(
         // 2. TCP 连接
         auto connect_result = co_await client.connect(url).timeout(kOpTimeout);
         if (!connect_result) {
-            HTTP_LOG_ERROR("[client-{}] [connect-fail] [{}]", client_id, connect_result.error().message());
             local_stats.failed_connections = 1;
             co_return;
         }
@@ -82,7 +80,6 @@ Task<void> benchmarkWssClient(
         // 3. SSL 握手
         auto handshake_result = co_await client.handshake();
         if (!handshake_result) {
-            HTTP_LOG_ERROR("[client-{}] [ssl-handshake-fail] [{}]", client_id, handshake_result.error().message());
             local_stats.failed_connections = 1;
             co_await client.close();
             co_return;
@@ -93,13 +90,11 @@ Task<void> benchmarkWssClient(
         auto upgrader = session.upgrade();
         auto upgrade_result = co_await upgrader().timeout(kOpTimeout);
         if (!upgrade_result) {
-            HTTP_LOG_ERROR("[client-{}] [ws-upgrade-fail] [{}]", client_id, upgrade_result.error().message());
             local_stats.failed_connections = 1;
             co_await client.close();
             co_return;
         }
         if (!upgrade_result.value()) {
-            HTTP_LOG_ERROR("[client-{}] [ws-upgrade-incomplete]", client_id);
             local_stats.failed_connections = 1;
             co_await client.close();
             co_return;
@@ -113,7 +108,6 @@ Task<void> benchmarkWssClient(
         while (true) {
             auto recv_result = co_await session.getMessage(welcome_msg, welcome_opcode).timeout(kOpTimeout);
             if (!recv_result) {
-                HTTP_LOG_ERROR("[client-{}] [welcome-recv-fail] [{}]", client_id, recv_result.error().message());
                 co_await client.close();
                 co_return;
             }
@@ -133,7 +127,6 @@ Task<void> benchmarkWssClient(
             // 发送消息
             auto send_result = co_await session.sendText(message_payload);
             if (!send_result) {
-                HTTP_LOG_ERROR("[client-{}] [send-fail] [{}]", client_id, send_result.error().message());
                 goto cleanup;
             }
             local_stats.noteMessageSent(message_payload.size());
@@ -143,7 +136,6 @@ Task<void> benchmarkWssClient(
             while (true) {
                 auto recv_result = co_await session.getMessage(echo_msg, echo_opcode);
                 if (!recv_result) {
-                    HTTP_LOG_ERROR("[client-{}] [recv-fail] [{}]", client_id, recv_result.error().message());
                     goto cleanup;
                 }
                 if (recv_result.value()) {
@@ -162,13 +154,11 @@ cleanup:
         // 7. 发送关闭帧
         auto result = co_await session.sendClose(WsCloseCode::Normal);
         if (!result) {
-            HTTP_LOG_WARN("[close] [fail] [{}]", result.error().message());
         }
 
         co_await client.close();
 
     } catch (const std::exception& e) {
-        HTTP_LOG_ERROR("[client-{}] [exception] [{}]", client_id, e.what());
     }
 
     co_return;
@@ -229,7 +219,6 @@ void signalHandler(int) {
 
 int main(int argc, char* argv[]) {
     // 设置日志为文件模式
-    galay::http::HttpLogger::file("B12-WssClient.log");
 
     // 解析命令行参数
     std::string url = "wss://127.0.0.1:8443/ws";

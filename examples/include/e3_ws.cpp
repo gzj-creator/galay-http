@@ -12,7 +12,6 @@
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
 #include "galay-http/utils/rsp_bld.h"
-#include "galay-http/kernel/http/http_log.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/kqueue_scheduler.h"
@@ -41,7 +40,6 @@ using namespace std::chrono_literals;
  * @param ws_conn WebSocket 连接（通过引用传递）
  */
 Task<void> handleWebSocketConnection(WsConn& ws_conn) {
-    HTTP_LOG_INFO("[ws] [conn] [open]");
 
 
      // 升级到 WebSocket 连接
@@ -54,16 +52,12 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
     // 发送欢迎消息
-    HTTP_LOG_INFO("[ws] [welcome] [send]");
     auto send_result = co_await writer.sendText("Welcome to WebSocket server!");
     if (!send_result) {
-        HTTP_LOG_ERROR("[ws] [welcome] [send-fail] [{}]", send_result.error().message());
         co_return;
     }
-    HTTP_LOG_INFO("[ws] [welcome] [sent]");
 
     // 消息循环
-    HTTP_LOG_INFO("[ws] [loop] [start]");
     while (true) {
         std::string message;
         WsOpcode opcode;
@@ -74,10 +68,8 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
         if (!result.has_value()) {
             WsError error = result.error();
             if (error.code() == kWsConnectionClosed) {
-                HTTP_LOG_INFO("[ws] [conn] [closed]");
                 break;
             }
-            HTTP_LOG_ERROR("[ws] [recv-fail] [{}]", error.message());
             break;
         }
 
@@ -89,48 +81,36 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
         // 根据 opcode 判断消息类型并处理
         if (opcode == WsOpcode::Ping) {
             // 收到 Ping，发送 Pong 响应
-            HTTP_LOG_INFO("[ws] [ping] [recv] [pong] [send]");
             auto pong_result = co_await writer.sendPong(message);
             if (!pong_result) {
-                HTTP_LOG_ERROR("[ws] [pong] [send-fail] [{}]", pong_result.error().message());
                 break;
             }
-            HTTP_LOG_INFO("[ws] [pong] [sent]");
         }
         else if (opcode == WsOpcode::Pong) {
             // 收到 Pong 响应
-            HTTP_LOG_INFO("[ws] [pong] [recv]");
         }
         else if (opcode == WsOpcode::Close) {
             // 收到关闭请求
-            HTTP_LOG_INFO("[ws] [close] [recv]");
             auto close_result = co_await writer.sendClose();
             if (!close_result) {
-                HTTP_LOG_ERROR("[ws] [close] [send-fail] [{}]", close_result.error().message());
             }
             break;
         }
         else if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
             // 处理数据消息
-            HTTP_LOG_INFO("[ws] [recv] [type={}] [msg={}]",
-                    opcode == WsOpcode::Text ? "text" : "binary",
-                    message.substr(0, std::min(message.size(), size_t(100))));
 
             // 回显消息
             std::string echo_msg = "Echo: " + message;
             auto echo_result = co_await writer.sendText(echo_msg);
             if (!echo_result) {
-                HTTP_LOG_ERROR("[ws] [echo] [send-fail] [{}]", echo_result.error().message());
                 break;
             }
         }
     }
 
     // 关闭连接
-    HTTP_LOG_INFO("[ws] [conn] [close]");
     auto close_result = co_await ws_conn.close();
     if (!close_result) {
-        HTTP_LOG_ERROR("[ws] [conn] [close-fail] [{}]", close_result.error().message());
     }
     co_return;
 }
@@ -146,15 +126,12 @@ Task<void> handleHttpRequest(HttpConn conn) {
 
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
-        HTTP_LOG_ERROR("[http] [req] [read-fail] [{}]", read_result.error().message());
         auto close_result = co_await conn.close();
         if (!close_result) {
-            HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
         }
         co_return;
     }
 
-    HTTP_LOG_INFO("[http] [req] [{}] [{}]", httpMethodToString(request.header().method()), request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
     if (request.header().uri() == "/ws") {
@@ -162,32 +139,26 @@ Task<void> handleHttpRequest(HttpConn conn) {
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [fail] [{}]", upgrade_result.error_message);
 
             // 发送错误响应
             auto writer = conn.getWriter();
             auto result = co_await writer.sendResponse(upgrade_result.response);
             if (!result) {
-                HTTP_LOG_ERROR("[upgrade] [send-fail] [{}]", result.error().message());
             }
             auto close_result = co_await conn.close();
             if (!close_result) {
-                HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
             }
             co_return;
         }
 
-        HTTP_LOG_INFO("[ws] [upgrade] [ok]");
 
         // 发送 101 Switching Protocols 响应
         auto writer = conn.getWriter();
         auto send_result = co_await writer.sendResponse(upgrade_result.response);
 
         if (!send_result) {
-            HTTP_LOG_ERROR("[ws] [upgrade] [send-fail] [{}]", send_result.error().message());
             auto close_result = co_await conn.close();
             if (!close_result) {
-                HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
             }
             co_return;
         }
@@ -246,11 +217,9 @@ ws.onclose = () => {
     auto writer = conn.getWriter();
     auto result = co_await writer.sendResponse(response);
     if (!result) {
-        HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
     }
     auto close_result = co_await conn.close();
     if (!close_result) {
-        HTTP_LOG_ERROR("[http] [conn] [close-fail] [{}]", close_result.error().message());
     }
     co_return;
 }
@@ -258,7 +227,6 @@ ws.onclose = () => {
 // ==================== 主函数 ====================
 
 int main() {
-    HTTP_LOG_INFO("[example] [ws] [server]");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     // 配置服务器
@@ -272,24 +240,17 @@ int main() {
         .build());
 
     // 启动服务器
-    HTTP_LOG_INFO("[listen] [ws] [{}:{}]", "0.0.0.0", 8080);
-    HTTP_LOG_INFO("[endpoint] [ws] [ws://localhost:8080/ws]");
-    HTTP_LOG_INFO("[endpoint] [http] [http://localhost:8080/]");
-    HTTP_LOG_INFO("[ctrl] [stop]");
 
     // 启动服务器并传入处理器
     server.start(handleHttpRequest);
 
     // 保持服务器运行
-    HTTP_LOG_INFO("[server] [running]");
     while (server.isRunning()) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    HTTP_LOG_INFO("[server] [stopped]");
     return 0;
 #else
-    HTTP_LOG_ERROR("[scheduler] [missing] [define] [-DUSE_KQUEUE|-DUSE_EPOLL|-DUSE_IOURING]");
     return 1;
 #endif
 }

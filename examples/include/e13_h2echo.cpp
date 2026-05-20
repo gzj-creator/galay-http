@@ -4,7 +4,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <csignal>
 #include <thread>
@@ -41,7 +40,6 @@ Task<void> handleStream(Http2Stream::ptr stream) {
         co_return;
     }
 
-    HTTP_LOG_INFO("[h2] [req] [{}] [{}] [stream={}]", req.method, req.path, stream->streamId());
 
     std::string body = req.body.empty() ? "Echo: (empty)" : ("Echo: " + req.coalescedBody());
     co_await stream->replyHeader(

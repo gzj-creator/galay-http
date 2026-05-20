@@ -79,13 +79,13 @@
   - `galay-http/kernel/http2/http2_stream.h`
   - `galay-http/kernel/http2/stream_mgr.h`
 - 工具与模块：
+  - `galay-http/common/http_log.h`
   - `galay-http/utils/req_bld.h`
   - `galay-http/utils/rsp_bld.h`
-  - `galay-http/utils/http_logger.h`
   - `galay-http/utils/http_utils.h`
 - 安装支撑头：
   - `galay-http/kernel/iov_utils.h`
-  - `galay-http/kernel/http/http_log.h`
+  - `galay-http/common/http_log.h`
   - `galay-http/protoc/http/parse_utils.h`
   - `galay-http/protoc/http/http_request.inl`
   - `galay-http/protoc/http/http_response.inl`

@@ -1,6 +1,5 @@
 #include "galay-http/kernel/http2/http2_server.h"
 #include "galay-http/kernel/http2/h2c_client.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-kernel/kernel/runtime.h"
 #include <atomic>
 #include <chrono>
@@ -102,7 +101,6 @@ Task<void> runClient(uint16_t port) {
 }
 
 int main() {
-    galay::http::HttpLogger::disable();
 
     const uint16_t port = static_cast<uint16_t>(20000 + (::getpid() % 10000));
 

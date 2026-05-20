@@ -13,7 +13,6 @@
 #include "galay-http/protoc/http/http_response.h"
 #include "galay-kernel/async/tcp_socket.h"
 #include "galay-kernel/common/buffer.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-kernel/kernel/runtime.h"
 
 #ifdef USE_KQUEUE
@@ -45,15 +44,12 @@ Task<void> sendChunkedRequest() {
         g_test_done = true;
     };
 
-    HTTP_LOG_INFO("=== HTTP Chunked Client Test ===");
-    HTTP_LOG_INFO("Connecting to server...");
 
     TcpSocket client;
 
     // 设置非阻塞
     auto optResult = client.option().handleNonBlock();
     if (!optResult) {
-        HTTP_LOG_ERROR("Failed to set non-block: {}", optResult.error().message());
         fail();
         co_return;
     }
@@ -62,12 +58,10 @@ Task<void> sendChunkedRequest() {
     Host serverHost(IPType::IPV4, "127.0.0.1", 9999);
     auto connectResult = co_await client.connect(serverHost);
     if (!connectResult) {
-        HTTP_LOG_ERROR("Failed to connect: {}", connectResult.error().message());
         fail();
         co_return;
     }
 
-    HTTP_LOG_INFO("Connected to server");
 
     // 创建RingBuffer和HttpReader/Writer
     RingBuffer ringBuffer(8192);
@@ -86,75 +80,55 @@ Task<void> sendChunkedRequest() {
     reqHeader.headerPairs().addHeaderPair("User-Agent", "galay-http-chunked-client/1.0");
 
     // 发送请求头
-    HTTP_LOG_INFO("Sending request header...");
     auto headerResult = co_await writer.sendHeader(std::move(reqHeader));
     if (!headerResult) {
-        HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
         co_await client.close();
         fail();
         co_return;
     }
-    HTTP_LOG_INFO("Request header sent: {} bytes", headerResult.value());
 
     // 发送多个chunk
-    HTTP_LOG_INFO("Sending chunk 1...");
     std::string chunk1 = "Hello ";
     auto chunk1Result = co_await writer.sendChunk(chunk1, false);
     if (!chunk1Result) {
-        HTTP_LOG_ERROR("Failed to send chunk1: {}", chunk1Result.error().message());
         co_await client.close();
         fail();
         co_return;
     }
-    HTTP_LOG_INFO("Chunk 1 sent: {} bytes", chunk1Result.value());
 
-    HTTP_LOG_INFO("Sending chunk 2...");
     std::string chunk2 = "from ";
     auto chunk2Result = co_await writer.sendChunk(chunk2, false);
     if (!chunk2Result) {
-        HTTP_LOG_ERROR("Failed to send chunk2: {}", chunk2Result.error().message());
         co_await client.close();
         fail();
         co_return;
     }
-    HTTP_LOG_INFO("Chunk 2 sent: {} bytes", chunk2Result.value());
 
-    HTTP_LOG_INFO("Sending chunk 3...");
     std::string chunk3 = "chunked ";
     auto chunk3Result = co_await writer.sendChunk(chunk3, false);
     if (!chunk3Result) {
-        HTTP_LOG_ERROR("Failed to send chunk3: {}", chunk3Result.error().message());
         co_await client.close();
         fail();
         co_return;
     }
-    HTTP_LOG_INFO("Chunk 3 sent: {} bytes", chunk3Result.value());
 
-    HTTP_LOG_INFO("Sending chunk 4...");
     std::string chunk4 = "client!";
     auto chunk4Result = co_await writer.sendChunk(chunk4, false);
     if (!chunk4Result) {
-        HTTP_LOG_ERROR("Failed to send chunk4: {}", chunk4Result.error().message());
         co_await client.close();
         fail();
         co_return;
     }
-    HTTP_LOG_INFO("Chunk 4 sent: {} bytes", chunk4Result.value());
 
     // 发送最后一个chunk
-    HTTP_LOG_INFO("Sending last chunk...");
     std::string emptyChunk;
     auto lastChunkResult = co_await writer.sendChunk(emptyChunk, true);
     if (!lastChunkResult) {
-        HTTP_LOG_ERROR("Failed to send last chunk: {}", lastChunkResult.error().message());
         co_await client.close();
         fail();
         co_return;
     }
-    HTTP_LOG_INFO("Last chunk sent: {} bytes", lastChunkResult.value());
 
-    HTTP_LOG_INFO("\nAll chunks sent successfully!");
-    HTTP_LOG_INFO("Waiting for response...\n");
 
     // 读取响应头
     HttpResponse response;
@@ -166,9 +140,7 @@ Task<void> sendChunkedRequest() {
         if (!result) {
             auto& error = result.error();
             if (error.code() == kConnectionClose) {
-                HTTP_LOG_INFO("Server closed connection");
             } else {
-                HTTP_LOG_ERROR("Response parse error: {}", error.message());
             }
             co_await client.close();
             fail();
@@ -178,41 +150,30 @@ Task<void> sendChunkedRequest() {
         responseHeaderComplete = result.value();
     }
 
-    HTTP_LOG_INFO("Response received: {} {}",
-            static_cast<int>(response.header().code()),
-            httpStatusCodeToString(response.header().code()));
 
     // `getResponse()` 会把 chunked 响应聚合成完整 body 再返回。
     const std::string responseBody = response.getBodyStr();
-    HTTP_LOG_INFO("Response body: {}", responseBody);
 
     const std::string expected = "Decoded body bytes: 26\nEcho: Hello from chunked client!";
     if (responseBody != expected) {
-        HTTP_LOG_ERROR("Unexpected response body: {}", responseBody);
         co_await client.close();
         fail();
         co_return;
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("\nConnection closed");
     g_test_passed = true;
     g_test_done = true;
 }
 
 int main() {
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("HTTP Chunked Encoding Test - Client");
-    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
-    HTTP_LOG_INFO("Scheduler started\n");
 
     auto* scheduler = rt.getNextIOScheduler();
     if (!scheduler) {
-        HTTP_LOG_ERROR("Failed to get IO scheduler");
         rt.stop();
         return 1;
     }
@@ -227,15 +188,12 @@ int main() {
     }
 
     if (!g_test_done.load()) {
-        HTTP_LOG_ERROR("Timed out waiting for chunked response");
         g_test_passed = false;
         g_test_done = true;
     }
 
     rt.stop();
-    HTTP_LOG_INFO("\nTest completed");
 #else
-    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

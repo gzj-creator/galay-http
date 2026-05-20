@@ -2,7 +2,7 @@
 #define GALAY_HTTP_CLIENT_H
 
 #include "http_session.h"
-#include "http_log.h"
+#include "galay-http/common/http_log.h"
 #include "galay-kernel/async/tcp_socket.h"
 #include "galay-http/protoc/http/http_header.h"
 #include <string>
@@ -35,7 +35,6 @@ struct HttpUrl {
         std::smatch matches;
 
         if (!std::regex_match(url, matches, url_regex)) {
-            HTTP_LOG_ERROR("[url] [invalid] [{}]", url);
             return std::nullopt;
         }
 
@@ -48,7 +47,6 @@ struct HttpUrl {
             try {
                 result.port = std::stoi(matches[3].str());
             } catch (...) {
-                HTTP_LOG_ERROR("[url] [port-invalid] [{}]", url);
                 return std::nullopt;
             }
         } else {
@@ -155,7 +153,6 @@ public:
             }
         }
 
-        HTTP_LOG_INFO("[connect] [http] [{}:{}{}]", m_url.host, m_url.port, m_url.path);
 
         m_socket = std::make_unique<SocketType>(IPType::IPV4);
 
@@ -303,10 +300,9 @@ public:
         m_url = parsed_url.value();
 
         if (!m_url.is_secure) {
-            HTTP_LOG_WARN("[https] [upgrade] [forced]");
+            HTTP_LOG_WARN("[connect] [scheme]", "non-secure URL used with HttpsClient");
         }
 
-        HTTP_LOG_INFO("[connect] [https] [{}:{}{}]", m_url.host, m_url.port, m_url.path);
 
         // 正确的 SslSocket 构造方式
         m_socket = std::make_unique<galay::ssl::SslSocket>(&m_ssl_ctx);
@@ -319,7 +315,7 @@ public:
         // 设置 SNI (Server Name Indication)
         auto sni_result = m_socket->setHostname(m_url.host);
         if (!sni_result) {
-            HTTP_LOG_WARN("[sni] [fail] [{}]", sni_result.error().message());
+            HTTP_LOG_WARN("[connect] [sni] [fail]", "host={}", m_url.host);
         }
 
         Host server_host(IPType::IPV4, m_url.host, m_url.port);
@@ -356,7 +352,7 @@ private:
         if (!m_https_config.ca_path.empty()) {
             auto result = m_ssl_ctx.loadCACertificate(m_https_config.ca_path);
             if (!result) {
-                HTTP_LOG_WARN("[ssl] [ca] [load-fail] [{}]", m_https_config.ca_path);
+                HTTP_LOG_ERROR("[ssl] [ca] [fail]", "path={}", m_https_config.ca_path);
             }
         }
 

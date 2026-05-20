@@ -13,7 +13,6 @@
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
 #include "galay-http/utils/rsp_bld.h"
-#include "galay-http/kernel/http/http_log.h"
 
 #ifdef USE_KQUEUE
 #include "galay-kernel/kernel/kqueue_scheduler.h"
@@ -70,7 +69,6 @@ Task<void> sendRawPayload(HttpConn& conn, std::string payload) {
     while (sent < payload.size()) {
         auto result = co_await socket.send(payload.data() + sent, payload.size() - sent);
         if (!result) {
-            HTTP_LOG_ERROR("Failed to send raw payload: {}", result.error().message());
             co_return;
         }
         sent += result.value();
@@ -96,9 +94,7 @@ Task<void> handleRequest(HttpConn conn) {
             if (!result) {
                 auto& error = result.error();
                 if (error.code() == kConnectionClose) {
-                    HTTP_LOG_INFO("Client disconnected");
                 } else {
-                    HTTP_LOG_ERROR("Request parse error: {}", error.message());
                 }
                 co_await conn.close();
                 co_return;
@@ -109,10 +105,6 @@ Task<void> handleRequest(HttpConn conn) {
 
         int req_no = g_request_count.fetch_add(1) + 1;
 
-        HTTP_LOG_INFO("Request #{} received: {} {}",
-                req_no,
-                static_cast<int>(request.header().method()),
-                request.header().uri());
 
         // 根据不同的路径返回不同的内容
         HttpStatusCode code = HttpStatusCode::OK_200;
@@ -122,7 +114,6 @@ Task<void> handleRequest(HttpConn conn) {
         const auto method = request.header().method();
 
         if (uri == "/disconnect") {
-            HTTP_LOG_INFO("Disconnect endpoint requested, closing socket immediately");
             co_await conn.close();
             co_return;
         } else if (uri == "/partial") {
@@ -139,7 +130,6 @@ Task<void> handleRequest(HttpConn conn) {
             continue;
         } else if (uri.starts_with("/delay/")) {
             const int delay_seconds = parseDelaySeconds(uri);
-            HTTP_LOG_INFO("Delay endpoint requested: {}s", delay_seconds);
             std::this_thread::sleep_for(std::chrono::seconds(delay_seconds));
             content_type = "text/plain; charset=utf-8";
             body = "Delayed " + std::to_string(delay_seconds) + " second(s)";
@@ -273,10 +263,8 @@ Task<void> handleRequest(HttpConn conn) {
 
         auto sendResult = co_await writer.sendResponse(response);
         if (!sendResult) {
-            HTTP_LOG_ERROR("Failed to send response: {}", sendResult.error().message());
             keep_alive = false;
         } else {
-            HTTP_LOG_INFO("Response sent: complete");
         }
 
         if (!keep_alive) {
@@ -289,9 +277,6 @@ Task<void> handleRequest(HttpConn conn) {
 }
 
 int main() {
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("HTTP Server Test");
-    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     // 配置并启动服务器
@@ -302,17 +287,6 @@ int main() {
         .build());
 
     g_server_running = true;
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("HTTP Server is running on http://127.0.0.1:8080");
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("Available endpoints:");
-    HTTP_LOG_INFO("  - http://127.0.0.1:8080/");
-    HTTP_LOG_INFO("  - http://127.0.0.1:8080/hello");
-    HTTP_LOG_INFO("  - http://127.0.0.1:8080/test");
-    HTTP_LOG_INFO("  - http://127.0.0.1:8080/api/info");
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("Press Ctrl+C to stop the server");
-    HTTP_LOG_INFO("========================================\n");
 
     // 运行服务器（阻塞）
     server.start(handleRequest);
@@ -321,9 +295,7 @@ int main() {
     }
 
     server.stop();
-    HTTP_LOG_INFO("Server stopped");
 #else
-    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

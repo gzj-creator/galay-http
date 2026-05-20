@@ -15,7 +15,6 @@
 #include "galay-http/kernel/http/http_conn.h"
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
-#include "galay-http/kernel/http/http_log.h"
 
 using namespace galay::http;
 namespace fs = std::filesystem;

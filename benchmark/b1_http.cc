@@ -17,7 +17,6 @@
 #include "galay-http/kernel/http/http_server.h"
 #include "galay-http/kernel/http/http_conn.h"
 #include "galay-http/protoc/http/http_request.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <csignal>
 #include <string_view>
@@ -57,7 +56,6 @@ Task<void> handleHttpRequest(HttpConn conn) {
 
         auto result = co_await writer.sendView(kPlainTextOkResponse);
         if (!result) {
-            HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
             co_return;
         }
     }
@@ -67,7 +65,6 @@ Task<void> handleHttpRequest(HttpConn conn) {
 
 int main(int argc, char* argv[]) {
     // 禁用日志以获得最佳性能
-    galay::http::HttpLogger::disable();
 
     uint16_t port = 8080;
     int io_threads = 4;
@@ -102,7 +99,6 @@ int main(int argc, char* argv[]) {
             .computeSchedulerCount(0)
             .build());
 
-        HTTP_LOG_INFO("[server] [listen] [http] [{}:{}]", "0.0.0.0", port);
 
         server.start(handleHttpRequest);
 

@@ -10,7 +10,6 @@
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/protoc/http/http_response.h"
 #include "galay-http/utils/rsp_bld.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-http/kernel/websocket/writer_cfg.h"
 #include <iostream>
 #include <atomic>
@@ -40,16 +39,12 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
 
     auto reader = ws_conn.getReader();
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
-    HTTP_LOG_INFO("[ws] [conn-{}] [start]", conn_id);
 
     // 发送欢迎消息
-    HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sending]", conn_id);
     auto res = co_await writer.sendText("Welcome to WebSocket Benchmark Server!");
     if(!res) {
-        HTTP_LOG_ERROR("[ws] [conn-{}] [welcome] [send-fail] [{}]", conn_id, res.error().message());
         co_return;
     }
-    HTTP_LOG_INFO("[ws] [conn-{}] [welcome] [sent]", conn_id);
 
     // 消息循环
     std::string message;
@@ -57,52 +52,39 @@ Task<void> handleWebSocketConnection(WsConn& ws_conn) {
     while (true) {
         message.clear();
 
-        HTTP_LOG_INFO("[ws] [conn-{}] [waiting-message]", conn_id);
         auto result = co_await ws_conn.echoOnce(message, opcode);
 
         if (!result) {
             // 连接错误
-            HTTP_LOG_ERROR("[ws] [conn-{}] [read-error] [{}]", conn_id, result.error().message());
             break;
         }
 
         if (!result.value()) {
             // 消息未完成，继续读取
-            HTTP_LOG_INFO("[ws] [conn-{}] [message-incomplete]", conn_id);
             continue;
         }
 
         // 处理不同类型的消息
         if (opcode == WsOpcode::Text || opcode == WsOpcode::Binary) {
-            HTTP_LOG_INFO("[ws] [conn-{}] [recv] [opcode={}] [size={}]",
-                         conn_id, static_cast<int>(opcode), message.size());
-            HTTP_LOG_INFO("[ws] [conn-{}] [echo-inline] [done]", conn_id);
 
         } else if (opcode == WsOpcode::Ping) {
             // 响应 Ping
-            HTTP_LOG_INFO("[ws] [conn-{}] [ping] [responding]", conn_id);
             auto pong_res = co_await writer.sendPong(message);
             if (!pong_res) {
-                HTTP_LOG_ERROR("[ws] [conn-{}] [pong] [send-fail] [{}]", conn_id, pong_res.error().message());
                 goto cleanup;
             }
-            HTTP_LOG_INFO("[ws] [conn-{}] [pong] [sent]", conn_id);
 
         } else if (opcode == WsOpcode::Close) {
             // 客户端关闭连接
-            HTTP_LOG_INFO("[ws] [conn-{}] [close-requested]", conn_id);
             auto close_res = co_await writer.sendClose();
             if (!close_res) {
-                HTTP_LOG_ERROR("[ws] [conn-{}] [close] [send-fail] [{}]", conn_id, close_res.error().message());
             } else {
-                HTTP_LOG_INFO("[ws] [conn-{}] [close] [sent]", conn_id);
             }
             break;
         }
     }
 
 cleanup:
-    HTTP_LOG_INFO("[ws] [conn-{}] [cleanup]", conn_id);
     co_await ws_conn.close();
     co_return;
 }
@@ -114,57 +96,44 @@ Task<void> handleHttpRequest(HttpConn conn) {
     static std::atomic<int> req_id{0};
     int current_req_id = req_id.fetch_add(1);
 
-    HTTP_LOG_INFO("[http] [req-{}] [start]", current_req_id);
 
     auto reader = conn.getReader();
     HttpRequest request;
 
-    HTTP_LOG_INFO("[http] [req-{}] [reading-request]", current_req_id);
     auto read_result = co_await reader.getRequest(request);
     if (!read_result) {
-        HTTP_LOG_ERROR("[http] [req-{}] [read-fail] [{}]", current_req_id, read_result.error().message());
         co_await conn.close();
         co_return;
     }
 
-    HTTP_LOG_INFO("[http] [req-{}] [read-ok] [uri={}]", current_req_id, request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
     if (request.header().uri() == "/ws" || request.header().uri() == "/") {
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [handling]", current_req_id);
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [fail]", current_req_id);
             auto writer = conn.getWriter();
             auto result = co_await writer.sendResponse(upgrade_result.response);
             if (!result) {
-                HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
             }
             co_await conn.close();
             co_return;
         }
 
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [sending-response]", current_req_id);
         // 发送升级响应
         auto writer = conn.getWriter();
         auto send_result = co_await writer.sendResponse(upgrade_result.response);
 
         if (!send_result) {
-            HTTP_LOG_ERROR("[http] [req-{}] [ws-upgrade] [send-fail] [{}]", current_req_id, send_result.error().message());
             co_await conn.close();
             co_return;
         }
 
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [response-sent] [converting-to-ws]", current_req_id);
         WsConn ws_conn = WsConn::from(std::move(conn), true);
 
-        HTTP_LOG_INFO("[http] [req-{}] [ws-upgrade] [entering-ws-handler]", current_req_id);
         co_await handleWebSocketConnection(ws_conn);
-        HTTP_LOG_INFO("[http] [req-{}] [ws-handler] [done]", current_req_id);
     } else {
         // 非 WebSocket 请求，返回 404
-        HTTP_LOG_INFO("[http] [req-{}] [not-ws] [404]", current_req_id);
         auto response = Http1_1ResponseBuilder()
             .status(HttpStatusCode::NotFound_404)
             .body("Not Found")
@@ -173,7 +142,6 @@ Task<void> handleHttpRequest(HttpConn conn) {
         auto writer = conn.getWriter();
         auto result = co_await writer.sendResponse(response);
         if (!result) {
-            HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
         }
         co_await conn.close();
     }
@@ -186,9 +154,7 @@ int main(int argc, char* argv[]) {
     // 设置 GALAY_HTTP_BENCH_LOG=1 可开启文件日志。
     const char* bench_log = std::getenv("GALAY_HTTP_BENCH_LOG");
     if (bench_log != nullptr && std::string_view(bench_log) == "1") {
-        galay::http::HttpLogger::file("B5-Websocket.log");
     } else {
-        galay::http::HttpLogger::disable();
     }
 
     uint16_t port = 8080;
@@ -222,7 +188,6 @@ int main(int argc, char* argv[]) {
             .computeSchedulerCount(0)
             .build());
 
-        HTTP_LOG_INFO("[server] [listen] [ws] [{}:{}]", "0.0.0.0", port);
 
         server.start(handleHttpRequest);
 

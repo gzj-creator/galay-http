@@ -6,7 +6,6 @@
 #include <iostream>
 #include "galay-http/kernel/http/http_client.h"
 #include "galay-kernel/kernel/runtime.h"
-#include "galay-http/kernel/http/http_log.h"
 
 using namespace galay::http;
 using namespace galay::kernel;
@@ -17,7 +16,6 @@ using namespace galay::async;
  */
 Task<void> testConnectionFailure(IOScheduler* scheduler)
 {
-    HTTP_LOG_INFO("=== Test 1: Connection Failure ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -27,12 +25,9 @@ Task<void> testConnectionFailure(IOScheduler* scheduler)
     auto connect_result = co_await socket.connect(host);
 
     if (!connect_result) {
-        HTTP_LOG_INFO("✓ Connection failed as expected: {}", connect_result.error().message());
     } else {
-        HTTP_LOG_ERROR("✗ Connection should have failed");
     }
 
-    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -41,7 +36,6 @@ Task<void> testConnectionFailure(IOScheduler* scheduler)
  */
 Task<void> testServerCloseConnection(IOScheduler* scheduler)
 {
-    HTTP_LOG_INFO("=== Test 2: Server Close Connection ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -49,7 +43,6 @@ Task<void> testServerCloseConnection(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("Failed to connect: {}", connect_result.error().message());
         co_return;
     }
 
@@ -62,23 +55,19 @@ Task<void> testServerCloseConnection(IOScheduler* scheduler)
         auto result = co_await session.get("/");
 
         if (!result) {
-            HTTP_LOG_INFO("✓ Got error after {} loops: {}", loop_count, result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
-            HTTP_LOG_INFO("✓ Request completed after {} loops", loop_count);
             break;
         }
 
         if (loop_count > 100) {
-            HTTP_LOG_ERROR("✗ Too many loops, something is wrong");
             break;
         }
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -87,7 +76,6 @@ Task<void> testServerCloseConnection(IOScheduler* scheduler)
  */
 Task<void> testMultipleRequests(IOScheduler* scheduler)
 {
-    HTTP_LOG_INFO("=== Test 3: Multiple Sequential Requests ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -95,7 +83,6 @@ Task<void> testMultipleRequests(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -103,7 +90,6 @@ Task<void> testMultipleRequests(IOScheduler* scheduler)
     auto session = client.getSession();
     // 发送3个连续请求
     for (int i = 0; i < 3; i++) {
-        HTTP_LOG_INFO("Request #{}", i + 1);
 
         int loop_count = 0;
         while (true) {
@@ -111,20 +97,16 @@ Task<void> testMultipleRequests(IOScheduler* scheduler)
             auto result = co_await session.get("/api/info");
 
             if (!result) {
-                HTTP_LOG_ERROR("✗ Request #{} failed: {}", i + 1, result.error().message());
                 co_await client.close();
                 co_return;
             }
 
             if (result.value().has_value()) {
                 HttpResponse response = std::move(result.value().value());
-                HTTP_LOG_INFO("✓ Request #{} completed after {} loops, status: {}",
-                       i + 1, loop_count, static_cast<int>(response.header().code()));
                 break;
             }
 
             if (loop_count > 100) {
-                HTTP_LOG_ERROR("✗ Request #{} too many loops", i + 1);
                 co_await client.close();
                 co_return;
             }
@@ -132,7 +114,6 @@ Task<void> testMultipleRequests(IOScheduler* scheduler)
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -141,7 +122,6 @@ Task<void> testMultipleRequests(IOScheduler* scheduler)
  */
 Task<void> testLargeRequestBody(IOScheduler* scheduler)
 {
-    HTTP_LOG_INFO("=== Test 4: Large Request Body ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -149,7 +129,6 @@ Task<void> testLargeRequestBody(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -165,25 +144,20 @@ Task<void> testLargeRequestBody(IOScheduler* scheduler)
         auto result = co_await session.post("/api/data", large_body, "text/plain");
 
         if (!result) {
-            HTTP_LOG_INFO("Request failed (expected for large body): {}", result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
             HttpResponse response = std::move(result.value().value());
-            HTTP_LOG_INFO("✓ Large request completed after {} loops, status: {}",
-                   loop_count, static_cast<int>(response.header().code()));
             break;
         }
 
         if (loop_count > 100) {
-            HTTP_LOG_ERROR("✗ Too many loops");
             break;
         }
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -192,7 +166,6 @@ Task<void> testLargeRequestBody(IOScheduler* scheduler)
  */
 Task<void> test404NotFound(IOScheduler* scheduler)
 {
-    HTTP_LOG_INFO("=== Test 5: 404 Not Found ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -200,7 +173,6 @@ Task<void> test404NotFound(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -212,7 +184,6 @@ Task<void> test404NotFound(IOScheduler* scheduler)
         auto result = co_await session.get("/nonexistent");
 
         if (!result) {
-            HTTP_LOG_ERROR("✗ Request failed: {}", result.error().message());
             break;
         }
 
@@ -220,21 +191,17 @@ Task<void> test404NotFound(IOScheduler* scheduler)
             HttpResponse response = std::move(result.value().value());
             auto status_code = static_cast<int>(response.header().code());
             if (status_code == 404) {
-                HTTP_LOG_INFO("✓ Got 404 as expected after {} loops", loop_count);
             } else {
-                HTTP_LOG_ERROR("✗ Expected 404 but got {}", status_code);
             }
             break;
         }
 
         if (loop_count > 100) {
-            HTTP_LOG_ERROR("✗ Too many loops");
             break;
         }
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("");
     co_return;
 }
 
@@ -243,7 +210,6 @@ Task<void> test404NotFound(IOScheduler* scheduler)
  */
 Task<void> testEmptyResponse(IOScheduler* scheduler)
 {
-    HTTP_LOG_INFO("=== Test 6: Empty Response Body ===");
 
     TcpSocket socket(IPType::IPV4);
     socket.option().handleNonBlock();
@@ -251,7 +217,6 @@ Task<void> testEmptyResponse(IOScheduler* scheduler)
     Host host(IPType::IPV4, "127.0.0.1", 8080);
     auto connect_result = co_await socket.connect(host);
     if (!connect_result) {
-        HTTP_LOG_ERROR("Failed to connect");
         co_return;
     }
 
@@ -263,33 +228,25 @@ Task<void> testEmptyResponse(IOScheduler* scheduler)
         auto result = co_await session.del("/api/resource");
 
         if (!result) {
-            HTTP_LOG_INFO("Request failed: {}", result.error().message());
             break;
         }
 
         if (result.value().has_value()) {
             HttpResponse response = std::move(result.value().value());
-            HTTP_LOG_INFO("✓ DELETE request completed after {} loops, body size: {}",
-                   loop_count, response.getBodyStr().size());
             break;
         }
 
         if (loop_count > 100) {
-            HTTP_LOG_ERROR("✗ Too many loops");
             break;
         }
     }
 
     co_await client.close();
-    HTTP_LOG_INFO("");
     co_return;
 }
 
 int main()
 {
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("HttpClientAwaitable Edge Cases Test");
-    HTTP_LOG_INFO("========================================\n");
 
     try {
         Runtime runtime;
@@ -297,7 +254,6 @@ int main()
 
         auto* scheduler = runtime.getNextIOScheduler();
         if (!scheduler) {
-            HTTP_LOG_ERROR("No IO scheduler available");
             return 1;
         }
 
@@ -322,12 +278,8 @@ int main()
 
         runtime.stop();
 
-        HTTP_LOG_INFO("========================================");
-        HTTP_LOG_INFO("All Edge Cases Tests Completed");
-        HTTP_LOG_INFO("========================================");
 
     } catch (const std::exception& e) {
-        HTTP_LOG_ERROR("Test error: {}", e.what());
         return 1;
     }
 

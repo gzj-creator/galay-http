@@ -14,7 +14,6 @@
 #include "galay-http/kernel/websocket/writer_cfg.h"
 #include "galay-http/protoc/http/http_request.h"
 #include "galay-http/utils/rsp_bld.h"
-#include "galay-http/kernel/http/http_log.h"
 
 #ifdef GALAY_HTTP_SSL_ENABLED
 
@@ -29,23 +28,19 @@ void signalHandler(int) {
 }
 
 Task<void> handleWssConnection(WssConn& ws_conn) {
-    HTTP_LOG_DEBUG("[wss] [conn] [open]");
 
     auto writer = ws_conn.getWriter(WsWriterSetting::byServer());
 
     auto welcome_result = co_await writer.sendText("Welcome to WSS Benchmark Server!");
     if (!welcome_result) {
-        HTTP_LOG_ERROR("[wss] [welcome] [send-fail] [{}]", welcome_result.error().message());
         co_return;
     }
 
     auto echo_result = co_await ws_conn.echoLoopConsume();
     if (!echo_result) {
-        HTTP_LOG_DEBUG("[wss] [echo-fail] [{}]", echo_result.error().message());
     }
 
     co_await ws_conn.close();
-    HTTP_LOG_DEBUG("[wss] [conn] [closed]");
     co_return;
 }
 
@@ -53,7 +48,6 @@ Task<void> handleWssConnection(WssConn& ws_conn) {
  * @brief HTTPS 请求处理器（处理 WSS 升级）
  */
 Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
-    HTTP_LOG_DEBUG("[https] [handler] [start]");
     auto reader = conn.getReader();
     HttpRequest request;
 
@@ -61,14 +55,12 @@ Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     while (true) {
         auto r = co_await reader.getRequest(request);
         if (!r) {
-            HTTP_LOG_ERROR("[https] [req] [read-fail] [{}]", r.error().message());
             co_await conn.close();
             co_return;
         }
         if (r.value()) break;
     }
 
-    HTTP_LOG_DEBUG("[https] [req] [{}] [{}]", httpMethodToString(request.header().method()), request.header().uri());
 
     // 检查是否是 WebSocket 升级请求
     std::string uri = request.header().uri();
@@ -76,23 +68,19 @@ Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
         auto upgrade_result = WsUpgrade::handleUpgrade(request);
 
         if (!upgrade_result.success) {
-            HTTP_LOG_ERROR("[wss] [upgrade] [fail] [{}]", upgrade_result.error_message);
             auto writer = conn.getWriter();
             auto result = co_await writer.sendResponse(upgrade_result.response);
             if (!result) {
-                HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
             }
             co_await conn.close();
             co_return;
         }
 
-        HTTP_LOG_DEBUG("[wss] [upgrade] [ok]");
 
         // 发送 101 Switching Protocols
         auto writer = conn.getWriter();
         auto r = co_await writer.sendResponse(upgrade_result.response);
         if (!r) {
-            HTTP_LOG_ERROR("[wss] [upgrade] [send-fail] [{}]", r.error().message());
             co_await conn.close();
             co_return;
         }
@@ -111,7 +99,6 @@ Task<void> httpsHandler(HttpConnImpl<galay::ssl::SslSocket> conn) {
     auto writer = conn.getWriter();
     auto result = co_await writer.sendResponse(response);
     if (!result) {
-        HTTP_LOG_ERROR("[send] [fail] [{}]", result.error().message());
     }
     co_await conn.close();
     co_return;
@@ -123,9 +110,7 @@ int main(int argc, char* argv[]) {
         debug_log = std::atoi(env) != 0;
     }
     if (debug_log) {
-        galay::http::HttpLogger::console();
     } else {
-        galay::http::HttpLogger::disable();
     }
 
     int port = 8443;

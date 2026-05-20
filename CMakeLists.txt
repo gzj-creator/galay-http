@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 3.0.2 LANGUAGES CXX)
+project(galay-http VERSION 3.1.0 LANGUAGES CXX)
 
 # Keep tests opt-in even though CTest defaults BUILD_TESTING to ON.
 set(GALAY_HTTP_BUILD_TESTING_USER_DEFINED FALSE)
@@ -43,9 +43,6 @@ option(BUILD_EXAMPLES "Build example programs" ON)
 option(GALAY_HTTP_GCC13_COROUTINE_COMPAT
        "Enable GCC 13 coroutine ICE build workaround flags"
        ON)
-option(GALAY_HTTP_DISABLE_FRAMEWORK_LOG
-       "Compile out framework logs (WS/HTTP/HTTPS/WSS/H2C/H2)"
-       OFF)
 
 set(GALAY_HTTP_COROUTINE_WORKAROUND_ENABLED FALSE)
 set(GALAY_HTTP_COROUTINE_WORKAROUND_FLAGS "")
@@ -76,7 +73,7 @@ endif()
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 
 # 先锁定 galay-kernel，避免 galay-ssl 的 find_dependency() 抢先注入旧的导入目标。
-find_package(galay-kernel 4.0.0 REQUIRED CONFIG)
+find_package(galay-kernel 5.0.0 REQUIRED CONFIG)
 
 if(NOT TARGET galay-kernel::galay-kernel)
     message(FATAL_ERROR "galay-kernel::galay-kernel target not found. Please check galay-kernel installation and CMake config.")
@@ -130,18 +127,6 @@ if(BUILD_MODULE_EXAMPLES AND GALAY_HTTP_MODULES_SUPPORTED AND GALAY_HTTP_MODULES
 endif()
 
 include_directories(${PROJECT_SOURCE_DIR})
-
-# 日志编译期开关
-if(GALAY_HTTP_DISABLE_FRAMEWORK_LOG)
-    message(STATUS "[Global] Framework logs are compiled out (GALAY_HTTP_DISABLE_FRAMEWORK_LOG=ON)")
-    add_compile_definitions(
-        GALAY_HTTP_DISABLE_ALL_LOG
-        SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_OFF
-    )
-else()
-    # 启用 spdlog 源代码位置捕获（用于显示文件名和行号）
-    add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
-endif()
 
 # ========== 全局调试日志控制 ==========
 # 根据构建类型设置 ENABLE_DEBUG 宏，影响所有子项目

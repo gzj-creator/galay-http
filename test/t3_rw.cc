@@ -12,7 +12,6 @@
 #include "galay-http/utils/rsp_bld.h"
 #include "galay-kernel/async/tcp_socket.h"
 #include "galay-kernel/common/buffer.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-kernel/kernel/runtime.h"
 
 #ifdef USE_KQUEUE
@@ -38,21 +37,17 @@ std::atomic<int> g_request_count{0};
 
 // Echo服务器
 Task<void> echoServer() {
-    HTTP_LOG_INFO("=== HTTP Reader/Writer Test Server ===");
-    HTTP_LOG_INFO("Starting server...");
 
     TcpSocket listener;
 
     // 设置选项
     auto optResult = listener.option().handleReuseAddr();
     if (!optResult) {
-        HTTP_LOG_ERROR("Failed to set reuse addr: {}", optResult.error().message());
         co_return;
     }
 
     optResult = listener.option().handleNonBlock();
     if (!optResult) {
-        HTTP_LOG_ERROR("Failed to set non-block: {}", optResult.error().message());
         co_return;
     }
 
@@ -60,30 +55,24 @@ Task<void> echoServer() {
     Host bindHost(IPType::IPV4, "127.0.0.1", 9999);
     auto bindResult = listener.bind(bindHost);
     if (!bindResult) {
-        HTTP_LOG_ERROR("Failed to bind: {}", bindResult.error().message());
         co_return;
     }
 
     // 监听
     auto listenResult = listener.listen(128);
     if (!listenResult) {
-        HTTP_LOG_ERROR("Failed to listen: {}", listenResult.error().message());
         co_return;
     }
 
-    HTTP_LOG_INFO("Server listening on 127.0.0.1:9999");
-    HTTP_LOG_INFO("Waiting for client connections...");
 
     while (true) {
         // 接受连接
         Host clientHost;
         auto acceptResult = co_await listener.accept(&clientHost);
         if (!acceptResult) {
-            HTTP_LOG_ERROR("Failed to accept: {}", acceptResult.error().message());
             continue;
         }
 
-        HTTP_LOG_INFO("Client connected from {}:{}", clientHost.ip(), clientHost.port());
 
         // 创建客户端socket
         TcpSocket client(acceptResult.value());
@@ -107,9 +96,7 @@ Task<void> echoServer() {
             if (!result) {
                 auto& error = result.error();
                 if (error.code() == kConnectionClose) {
-                    HTTP_LOG_INFO("Client disconnected");
                 } else {
-                    HTTP_LOG_ERROR("Request parse error: {}", error.message());
                 }
                 break;
             }
@@ -119,10 +106,6 @@ Task<void> echoServer() {
 
         if (requestComplete) {
             g_request_count++;
-            HTTP_LOG_INFO("Request #{} received: {} {}",
-                    g_request_count.load(),
-                    static_cast<int>(request.header().method()),
-                    request.header().uri());
 
             // 测试不同的发送方式
             int testCase = g_request_count.load() % 3;
@@ -140,9 +123,7 @@ Task<void> echoServer() {
 
                 auto sendResult = co_await writer.sendResponse(response);
                 if (!sendResult) {
-                    HTTP_LOG_ERROR("Failed to send response: {}", sendResult.error().message());
                 } else {
-                    HTTP_LOG_INFO("Response sent (sendResponse): complete");
                 }
             } else if (testCase == 1) {
                 // 方式2: 使用 sendHeader + send(string) 分离发送
@@ -159,14 +140,11 @@ Task<void> echoServer() {
                 // 发送头部
                 auto headerResult = co_await writer.sendHeader(std::move(respHeader));
                 if (!headerResult) {
-                    HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
                 } else {
                     // 发送body
                     auto bodyResult = co_await writer.send(std::move(body));
                     if (bodyResult) {
-                        HTTP_LOG_INFO("Response sent (sendHeader+send): complete");
                     } else {
-                        HTTP_LOG_ERROR("Failed to send body: {}", bodyResult.error().message());
                     }
                 }
             } else {
@@ -186,21 +164,17 @@ Task<void> echoServer() {
                 // 发送头部（原始数据）
                 auto headerResult = co_await writer.send(headerStr.data(), headerStr.size());
                 if (!headerResult) {
-                    HTTP_LOG_ERROR("Failed to send header: {}", headerResult.error().message());
                 } else {
                     // 发送body（原始数据）
                     auto bodyResult = co_await writer.send(body.data(), body.size());
                     if (bodyResult) {
-                        HTTP_LOG_INFO("Response sent (send raw): complete");
                     } else {
-                        HTTP_LOG_ERROR("Failed to send body: {}", bodyResult.error().message());
                     }
                 }
             }
         }
 
         co_await client.close();
-        HTTP_LOG_INFO("Connection closed\n");
     }
 
     co_await listener.close();
@@ -208,18 +182,13 @@ Task<void> echoServer() {
 }
 
 int main() {
-    HTTP_LOG_INFO("========================================");
-    HTTP_LOG_INFO("HTTP Reader/Writer Test - Server");
-    HTTP_LOG_INFO("========================================\n");
 
 #if defined(USE_KQUEUE) || defined(USE_EPOLL) || defined(USE_IOURING)
     Runtime rt = RuntimeBuilder().ioSchedulerCount(1).computeSchedulerCount(0).build();
     rt.start();
-    HTTP_LOG_INFO("Scheduler started");
 
     auto* scheduler = rt.getNextIOScheduler();
     if (!scheduler) {
-        HTTP_LOG_ERROR("Failed to get IO scheduler");
         rt.stop();
         return 1;
     }
@@ -227,7 +196,6 @@ int main() {
     // 启动服务器
     scheduleTask(scheduler, echoServer());
 
-    HTTP_LOG_INFO("Server is ready. Press Ctrl+C to stop.\n");
 
     // 保持运行
     while (true) {
@@ -236,7 +204,6 @@ int main() {
 
     rt.stop();
 #else
-    HTTP_LOG_WARN("This test requires kqueue (macOS), epoll or io_uring (Linux)");
     return 1;
 #endif
 

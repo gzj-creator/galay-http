@@ -1,7 +1,6 @@
 #ifndef GALAY_WS_URL_H
 #define GALAY_WS_URL_H
 
-#include "galay-http/kernel/http/http_log.h"
 #include <galay-utils/algorithm/base64.hpp>
 #include <optional>
 #include <random>
@@ -23,7 +22,6 @@ struct WsUrl {
         std::smatch matches;
 
         if (!std::regex_match(url, matches, url_regex)) {
-            HTTP_LOG_ERROR("[url] [invalid] [{}]", url);
             return std::nullopt;
         }
 
@@ -36,7 +34,6 @@ struct WsUrl {
             try {
                 result.port = std::stoi(matches[3].str());
             } catch (...) {
-                HTTP_LOG_ERROR("[url] [port-invalid] [{}]", url);
                 return std::nullopt;
             }
         } else {

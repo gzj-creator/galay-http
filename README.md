@@ -51,9 +51,8 @@
 
 - CMake `>= 3.22`
 - `C++23` 编译器
-- `spdlog`
-- `galay-kernel >= 3.4.5`（`CONFIG` package）
-- 启用 TLS 时额外需要 `galay-ssl` 与 OpenSSL
+- `galay-kernel >= 5.0.0`（`CONFIG` package）
+- 启用 TLS 时额外需要 `galay-ssl >= 2.1.0` 与 OpenSSL
 
 依赖解析优先级：
 
@@ -67,14 +66,13 @@
 - `BUILD_EXAMPLES=ON`
 - `BUILD_MODULE_EXAMPLES=ON`
 - `GALAY_HTTP_ENABLE_SSL=OFF`
-- `GALAY_HTTP_DISABLE_FRAMEWORK_LOG=OFF`
 
 ## 公开头边界
 
 当前安装边界由 `galay-http/CMakeLists.txt` 中的显式清单维护，而不是按目录整树复制：
 
 - 稳定 direct-include 入口：`http_server.h`、`http_client.h`、`ws_client.h`、`ws_session.h`、`h2c_client.h`、`h2_client.h`、`http2_server.h` 以及它们对应的协议类型 / builder / stream 头
-- 安装支撑头：`iov_utils.h`、`http_log.h`、`parse_utils.h`、`.inl` 等为了模板、内联实现或模块预导入仍随安装包分发，但不应默认视为主工作流入口
+- 安装支撑头：`iov_utils.h`、`common/http_log.h`、`parse_utils.h`、`.inl` 等为了模板、内联实现或模块预导入仍随安装包分发，但不应默认视为主工作流入口
 
 完整清单见 [02-API参考](docs/02-API参考.md)。
 

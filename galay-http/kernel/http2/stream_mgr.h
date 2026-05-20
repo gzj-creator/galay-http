@@ -6,7 +6,6 @@
 #include "galay-http/protoc/http2/http2_base.h"
 #include "galay-http/protoc/http2/http2_frame.h"
 #include "galay-http/kernel/iov_utils.h"
-#include "galay-http/kernel/http/http_log.h"
 #include "galay-kernel/concurrency/async_waiter.h"
 #include "galay-kernel/concurrency/mpsc_channel.h"
 #include "galay-kernel/common/sleep.hpp"
@@ -720,12 +719,8 @@ private:
             if (!send_result || send_result.value() == 0) {
                 if (m_conn.isClosing() || m_conn.isPeerClosed() ||
                     m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
-                    HTTP_LOG_DEBUG("[stream-mgr] [ssl-owner] [send-fail] [closing]");
                 } else if (send_result) {
-                    HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-zero]");
                 } else {
-                    HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [send-fail] [{}]",
-                                   send_result.error().message());
                 }
                 notifyWaiters(waiters);
                 m_conn.forEachStream([](uint32_t, Http2Stream::ptr& stream) {
@@ -793,9 +788,6 @@ private:
 
                     if (!frame_views_result) {
                         if (m_conn.isClosing() || m_conn.isPeerClosed()) {
-                            HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
-                                          m_conn.isPeerClosed() ? "peer-closed" : "closing",
-                                          m_conn.lastReadError());
                             break;
                         }
                         if (frame_views_result.error() == Http2ErrorCode::NoError) {
@@ -803,18 +795,10 @@ private:
                         }
                         if (frame_views_result.error() == Http2ErrorCode::ProtocolError &&
                             (m_conn.isPeerClosed() || m_conn.isClosing())) {
-                            HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
-                                          m_conn.isPeerClosed() ? "peer-closed" : "closing",
-                                          m_conn.lastReadError());
                             break;
                         }
                         if (m_conn.lastReadError().empty()) {
-                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
-                                          http2ErrorCodeToString(frame_views_result.error()));
                         } else {
-                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
-                                          http2ErrorCodeToString(frame_views_result.error()),
-                                          m_conn.lastReadError());
                         }
                         enqueueGoaway(frame_views_result.error());
                         break;
@@ -826,10 +810,6 @@ private:
                         const uint32_t stream_id = frame_view.streamId();
                         m_last_frame_recv_at = std::chrono::steady_clock::now();
 
-                        HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv-raw] [type={}] [stream={}] [flags=0x{:02x}]",
-                                      http2FrameTypeToString(frame_view.header.type),
-                                      stream_id,
-                                      frame_view.header.flags);
 
                         if (m_conn.isExpectingContinuation()) {
                             if (!frame_view.isContinuation() ||
@@ -886,9 +866,6 @@ private:
 
             if (!frames_result) {
                 if (m_conn.isClosing() || m_conn.isPeerClosed()) {
-                    HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
-                                  m_conn.isPeerClosed() ? "peer-closed" : "closing",
-                                  m_conn.lastReadError());
                     break;
                 }
                 if (frames_result.error() == Http2ErrorCode::NoError) {
@@ -896,18 +873,10 @@ private:
                 }
                 if (frames_result.error() == Http2ErrorCode::ProtocolError &&
                     (m_conn.isPeerClosed() || m_conn.isClosing())) {
-                    HTTP_LOG_INFO("[stream-mgr] [reader] [exit] [{}] [{}]",
-                                  m_conn.isPeerClosed() ? "peer-closed" : "closing",
-                                  m_conn.lastReadError());
                     break;
                 }
                 if (m_conn.lastReadError().empty()) {
-                    HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
-                                  http2ErrorCodeToString(frames_result.error()));
                 } else {
-                    HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
-                                  http2ErrorCodeToString(frames_result.error()),
-                                  m_conn.lastReadError());
                 }
                 enqueueGoaway(frames_result.error());
                 break;
@@ -919,8 +888,6 @@ private:
                 uint32_t stream_id = frame->streamId();
                 m_last_frame_recv_at = std::chrono::steady_clock::now();
 
-                HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
-                              http2FrameTypeToString(frame->type()), stream_id, frame->header().flags);
 
                 // CONTINUATION 状态检查
                 if (m_conn.isExpectingContinuation()) {
@@ -1005,9 +972,6 @@ private:
                         std::numeric_limits<size_t>::max());
                     if (!frame_views_result) {
                         if (m_conn.isClosing() || m_conn.isPeerClosed()) {
-                            HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [{}] [{}]",
-                                          m_conn.isPeerClosed() ? "peer-closed" : "closing",
-                                          m_conn.lastReadError());
                             exit_loop = true;
                             break;
                         }
@@ -1015,12 +979,7 @@ private:
                             break;
                         }
                         if (m_conn.lastReadError().empty()) {
-                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
-                                           http2ErrorCodeToString(frame_views_result.error()));
                         } else {
-                            HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
-                                           http2ErrorCodeToString(frame_views_result.error()),
-                                           m_conn.lastReadError());
                         }
                         enqueueGoaway(frame_views_result.error());
                         exit_loop = true;
@@ -1035,10 +994,6 @@ private:
                         const uint32_t stream_id = frame_view.streamId();
                         m_last_frame_recv_at = std::chrono::steady_clock::now();
 
-                        HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv-raw] [type={}] [stream={}] [flags=0x{:02x}]",
-                                       http2FrameTypeToString(frame_view.header.type),
-                                       stream_id,
-                                       frame_view.header.flags);
 
                         if (m_conn.isExpectingContinuation()) {
                             if (!frame_view.isContinuation() ||
@@ -1089,9 +1044,6 @@ private:
                     frame_scratch);
                 if (!frames_result) {
                     if (m_conn.isClosing() || m_conn.isPeerClosed()) {
-                        HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [{}] [{}]",
-                                      m_conn.isPeerClosed() ? "peer-closed" : "closing",
-                                      m_conn.lastReadError());
                         exit_loop = true;
                         break;
                     }
@@ -1099,12 +1051,7 @@ private:
                         break;
                     }
                     if (m_conn.lastReadError().empty()) {
-                        HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}]",
-                                       http2ErrorCodeToString(frames_result.error()));
                     } else {
-                        HTTP_LOG_ERROR("[stream-mgr] [frame] [read-fail] [{}] [{}]",
-                                       http2ErrorCodeToString(frames_result.error()),
-                                       m_conn.lastReadError());
                     }
                     enqueueGoaway(frames_result.error());
                     exit_loop = true;
@@ -1119,10 +1066,6 @@ private:
                     uint32_t stream_id = frame->streamId();
                     m_last_frame_recv_at = std::chrono::steady_clock::now();
 
-                    HTTP_LOG_DEBUG("[stream-mgr] [frame] [recv] [type={}] [stream={}] [flags=0x{:02x}]",
-                                   http2FrameTypeToString(frame->type()),
-                                   stream_id,
-                                   frame->header().flags);
 
                     if (m_conn.isExpectingContinuation()) {
                         if (!frame->isContinuation() || stream_id != m_conn.continuationStreamId()) {
@@ -1196,8 +1139,6 @@ private:
                     continue;
                 }
                 if (hot_batch_result.error().code() != kTimeout) {
-                    HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [channel-fail] [{}]",
-                                   hot_batch_result.error().message());
                     break;
                 }
                 if (!m_send_channel.empty()) {
@@ -1211,7 +1152,6 @@ private:
             const struct iovec* first_write_iov = IoVecWindow::firstNonEmpty(write_iovecs);
             if (first_write_iov == nullptr) {
                 m_conn.setLastReadError("RingBuffer is full");
-                HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-window-full]");
                 enqueueGoaway(Http2ErrorCode::ProtocolError);
                 break;
             }
@@ -1230,7 +1170,6 @@ private:
             }
             if (recv_length == 0) {
                 m_conn.setLastReadError("RingBuffer is full");
-                HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-window-full]");
                 enqueueGoaway(Http2ErrorCode::ProtocolError);
                 break;
             }
@@ -1253,20 +1192,14 @@ private:
                 }
                 if (error.code() == galay::ssl::SslErrorCode::kPeerClosed) {
                     m_conn.markPeerClosed(error.message());
-                    HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [peer-closed] [{}]",
-                                  m_conn.lastReadError());
                     break;
                 }
 #endif
                 if (m_conn.isClosing()) {
                     m_conn.setLastReadError(error.message());
-                    HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [closing] [{}]",
-                                  m_conn.lastReadError());
                     break;
                 }
                 m_conn.setLastReadError(error.message());
-                HTTP_LOG_ERROR("[stream-mgr] [ssl-owner] [recv-fail] [{}]",
-                               m_conn.lastReadError());
                 enqueueGoaway(Http2ErrorCode::ProtocolError);
                 break;
             }
@@ -1274,8 +1207,6 @@ private:
             const size_t bytes_read = recv_result->size();
             if (bytes_read == 0) {
                 m_conn.markPeerClosed();
-                HTTP_LOG_INFO("[stream-mgr] [ssl-owner] [exit] [peer-closed] [{}]",
-                              m_conn.lastReadError());
                 break;
             }
 
@@ -1328,7 +1259,6 @@ private:
             auto now = std::chrono::steady_clock::now();
 
             if (shouldEnforceSettingsAckTimeout(now)) {
-                HTTP_LOG_WARN("[stream-mgr] [settings-timeout] [ack-missing]");
                 enqueueGoaway(Http2ErrorCode::SettingsTimeout, "SETTINGS ACK timeout");
                 m_conn.initiateClose();
                 break;
@@ -1356,7 +1286,6 @@ private:
                 }
             } else if (m_conn.runtimeConfig().ping_timeout.count() > 0 &&
                        now - m_last_ping_sent_at > m_conn.runtimeConfig().ping_timeout) {
-                HTTP_LOG_WARN("[stream-mgr] [ping-timeout] [ack-missing]");
                 enqueueGoaway(Http2ErrorCode::ProtocolError, "PING ACK timeout");
                 m_conn.initiateClose();
                 break;
@@ -1383,7 +1312,6 @@ private:
         while (true) {
             auto item_result = co_await m_send_channel.recv();
             if (!item_result) {
-                HTTP_LOG_ERROR("[stream-mgr] [writer] [recv-fail]");
                 break;
             }
 
@@ -1396,7 +1324,6 @@ private:
             auto collect_item = [&](Http2OutgoingFrame&& item) {
                 if (item.isEmpty()) {
                     // 收到关闭信号，先发送已有数据再退出
-                    HTTP_LOG_DEBUG("[stream-mgr] [writer] [shutdown]");
                     has_shutdown = true;
                     return;
                 }
@@ -1450,9 +1377,7 @@ private:
                         if (!result) {
                             if (m_conn.isClosing() || m_conn.isPeerClosed() ||
                                 m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
-                                HTTP_LOG_DEBUG("[stream-mgr] [writer] [writev-fail] [closing]");
                             } else {
-                                HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-fail]");
                             }
                             for (auto& waiter : waiters) {
                                 if (waiter) {
@@ -1463,7 +1388,6 @@ private:
                         }
                         const size_t written = result.value();
                         if (written == 0) {
-                            HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-zero]");
                             for (auto& waiter : waiters) {
                                 if (waiter) {
                                     waiter->notify();
@@ -1473,7 +1397,6 @@ private:
                         }
 
                         if (write_state.advance(written) != written) {
-                            HTTP_LOG_ERROR("[stream-mgr] [writer] [writev-advance-mismatch]");
                             for (auto& waiter : waiters) {
                                 if (waiter) {
                                     waiter->notify();
@@ -1496,9 +1419,7 @@ private:
                             if (!result || result.value() == 0) {
                                 if (m_conn.isClosing() || m_conn.isPeerClosed() ||
                                     m_conn.isGoawaySent() || m_conn.isGoawayReceived()) {
-                                    HTTP_LOG_DEBUG("[stream-mgr] [writer] [send-fail] [closing]");
                                 } else {
-                                    HTTP_LOG_ERROR("[stream-mgr] [writer] [send-fail]");
                                 }
                                 for (auto& waiter : waiters) {
                                     if (waiter) {
@@ -1537,7 +1458,6 @@ private:
                 auto* settings = frame->asSettings();
                 if (settings->isAck()) {
                     m_conn.markSettingsAckReceived();
-                    HTTP_LOG_DEBUG("[stream-mgr] [settings] [ack]");
                 } else {
                     auto err = m_conn.peerSettings().applySettings(*settings);
                     if (err != Http2ErrorCode::NoError) {
@@ -1549,7 +1469,6 @@ private:
                     Http2SettingsFrame ack;
                     ack.setAck(true);
                     enqueueSendFrame(std::move(ack));
-                    HTTP_LOG_DEBUG("[stream-mgr] [settings] [ack-enqueued]");
                 }
                 break;
             }
@@ -1577,10 +1496,6 @@ private:
                 m_reject_new_streams = true;
                 m_conn.markGoawayReceived(
                     goaway->lastStreamId(), goaway->errorCode(), goaway->debugData());
-                HTTP_LOG_INFO("[stream-mgr] [goaway] [recv] [last={}] [err={}] [debug={}]",
-                             goaway->lastStreamId(),
-                             http2ErrorCodeToString(goaway->errorCode()),
-                             goaway->debugData());
 
                 if (m_conn.isClient()) {
                     const uint32_t last = goaway->lastStreamId();
@@ -1664,7 +1579,6 @@ private:
         }
 
         if (m_conn.isClient()) {
-            HTTP_LOG_WARN("[stream-mgr] [client] [headers] [unknown-stream={}]", stream_id);
             enqueueGoawayAction(Http2ErrorCode::ProtocolError);
             return nullptr;
         }
@@ -1990,8 +1904,6 @@ private:
         }
 
         stream->onRstStreamReceived();
-        HTTP_LOG_DEBUG("[stream-mgr] [stream] [rst] [id={}] [err={}]",
-                      stream_id, http2ErrorCodeToString(frame->asRstStream()->errorCode()));
         markStreamActive(stream, Http2StreamEvent::Reset);
         pushStreamFrameIfNeeded(stream, std::move(frame));
         stream->markRequestCompleted();
@@ -2080,7 +1992,6 @@ private:
             return;
         }
 
-        HTTP_LOG_WARN("[stream-mgr] [frame] [unknown] [type={}]", static_cast<int>(frame->type()));
     }
 
     /**

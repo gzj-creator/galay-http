@@ -96,7 +96,6 @@ Task<void> runClient(const std::string& host, uint16_t port) {
 }
 
 int main(int argc, char* argv[]) {
-    galay::http::HttpLogger::console();  // DEBUG 日志输出到终端
     std::string host = "localhost";
     uint16_t port = 8080;
 

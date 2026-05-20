@@ -7,9 +7,6 @@ option(GALAY_HTTP_ENABLE_SSL "Enable SSL/TLS support (requires galay-ssl)" OFF)
 
 # 如果启用 SSL，查找 galay-ssl 库
 if(GALAY_HTTP_ENABLE_SSL)
-    # 先找到 spdlog（galay-ssl 依赖）
-    find_package(spdlog REQUIRED)
-
     find_package(galay-ssl REQUIRED CONFIG)
 
     if(NOT TARGET galay-ssl::galay-ssl)

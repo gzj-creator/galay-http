@@ -5,7 +5,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <csignal>
 #include <atomic>
@@ -125,9 +124,7 @@ int main(int argc, char* argv[]) {
 
     // 默认禁用日志以获得最佳性能，debug_log=1 时开启
     if (debug_log > 0) {
-        galay::http::HttpLogger::console();
     } else {
-        galay::http::HttpLogger::disable();
     }
     g_debug_log = (debug_log > 0);
 

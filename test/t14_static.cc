@@ -9,7 +9,6 @@
 #include <fstream>
 #include "galay-http/kernel/http/http_router.h"
 #include "galay-http/kernel/http/static_cfg.h"
-#include "galay-http/kernel/http/http_log.h"
 
 using namespace galay::http;
 namespace fs = std::filesystem;

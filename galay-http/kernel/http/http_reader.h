@@ -2,7 +2,6 @@
 #define GALAY_HTTP_READER_H
 
 #include "reader_cfg.h"
-#include "http_log.h"
 #include "galay-http/kernel/iov_utils.h"
 #include "galay-http/protoc/http/http_chunk.h"
 #include "galay-http/protoc/http/http_error.h"
@@ -20,7 +19,7 @@
 #include <vector>
 
 #ifdef GALAY_HTTP_SSL_ENABLED
-#include "galay-ssl/async/ssl_awaitable_core.h"
+#include "galay-ssl/async/ssl_await.h"
 #include "galay-ssl/async/ssl_socket.h"
 #endif
 
@@ -202,10 +201,6 @@ struct HttpRequestReadState {
 
         auto& header = m_request->header();
         const std::string host = header.headerPairs().getValue("host");
-        HTTP_LOG_INFO("[{}] [{}] [{}]",
-                      httpMethodToString(header.method()),
-                      header.uri(),
-                      host.empty() ? "-" : host);
         return true;
     }
 
@@ -236,11 +231,9 @@ struct HttpRequestReadState {
 
     void setRecvError(const IOError& io_error) {
         if (IOError::contains(io_error.code(), kDisconnectError)) {
-            HTTP_LOG_DEBUG("[conn] [closed]");
             m_http_error = HttpError(kConnectionClose);
             return;
         }
-        HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 
@@ -347,11 +340,9 @@ struct HttpResponseReadState {
 
     void setRecvError(const IOError& io_error) {
         if (IOError::contains(io_error.code(), kDisconnectError)) {
-            HTTP_LOG_DEBUG("[conn] [closed]");
             m_http_error = HttpError(kConnectionClose);
             return;
         }
-        HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 
@@ -413,7 +404,6 @@ struct HttpChunkReadState {
             if (error.code() == kIncomplete) {
                 return false;
             }
-            HTTP_LOG_DEBUG("[chunk] [parse-fail] [{}]", error.message());
             setParseError(HttpError(error.code(), error.message()));
             return true;
         }
@@ -451,11 +441,9 @@ struct HttpChunkReadState {
 
     void setRecvError(const IOError& io_error) {
         if (IOError::contains(io_error.code(), kDisconnectError)) {
-            HTTP_LOG_DEBUG("[conn] [closed]");
             m_http_error = HttpError(kConnectionClose);
             return;
         }
-        HTTP_LOG_DEBUG("[recv] [fail] [{}]", io_error.message());
         m_http_error = HttpError(kRecvError, io_error.message());
     }
 

@@ -13,7 +13,6 @@
  */
 
 #include "galay-http/kernel/http2/http2_server.h"
-#include "galay-http/kernel/http/http_log.h"
 #include <iostream>
 #include <csignal>
 #include <atomic>
@@ -129,9 +128,7 @@ int main(int argc, char* argv[]) {
     if (argc > 4) debug_log = std::atoi(argv[4]);
 
     if (debug_log > 0) {
-        galay::http::HttpLogger::console();
     } else {
-        galay::http::HttpLogger::disable();
     }
     g_debug_log = (debug_log > 0);
 
