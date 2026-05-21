@@ -1,3 +1,13 @@
+/**
+ * @file h2_client.h
+ * @brief HTTP/2 客户端，支持多路复用流和 HPACK 头部压缩
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 H2Client 模板类，支持 HTTP/2 协议的客户端功能，
+ *          包括 SETTINGS 握手、流管理和请求发送。
+ */
+
 #ifndef GALAY_H2_CLIENT_H
 #define GALAY_H2_CLIENT_H
 

@@ -1,3 +1,14 @@
+/**
+ * @file http_etag.h
+ * @brief HTTP ETag 生成与匹配
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP ETag 的生成、比较和匹配功能，
+ * 支持强 ETag 和弱 ETag 两种模式。
+ * 用于 HTTP 条件请求（If-None-Match、If-Match、If-Range）的处理。
+ */
+
 #ifndef GALAY_HTTP_ETAG_H
 #define GALAY_HTTP_ETAG_H
 
@@ -34,8 +45,8 @@ public:
      */
     enum class Type
     {
-        STRONG,  // 强 ETag - 基于 inode + mtime + size
-        WEAK     // 弱 ETag - 仅基于 mtime + size
+        STRONG,  ///< 强 ETag - 基于 inode + mtime + size
+        WEAK     ///< 弱 ETag - 仅基于 mtime + size
     };
 
     /**

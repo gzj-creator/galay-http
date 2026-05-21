@@ -1,3 +1,13 @@
+/**
+ * @file http_chunk.h
+ * @brief HTTP 分块传输编码（Chunked Transfer Encoding）处理
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP Chunked 编码的解析与生成功能，支持从 iovec
+ *          离散缓冲区中增量解析 chunk 数据。
+ */
+
 #ifndef GALAY_HTTP_CHUNK_H
 #define GALAY_HTTP_CHUNK_H
 

@@ -1,3 +1,13 @@
+/**
+ * @file ws_conn.h
+ * @brief WebSocket 连接，封装底层资源和回显功能
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 WsConnImpl 模板类，封装 WebSocket 连接的底层 Socket 和 RingBuffer，
+ *          支持读取器/写入器获取和零拷贝回显操作。
+ */
+
 #ifndef GALAY_WS_CONN_H
 #define GALAY_WS_CONN_H
 
@@ -959,13 +969,16 @@ template<typename SocketType>
 class WsConnImpl
 {
 public:
+    /**
+     * @brief 回显操作统计计数器
+     */
     struct EchoCounters {
-        size_t composite_awaitables_started = 0;
-        size_t composite_hits = 0;
-        size_t composite_fallbacks = 0;
-        size_t composite_advance_calls = 0;
-        size_t ssl_direct_message_hits = 0;
-        size_t zero_copy_hits = 0;
+        size_t composite_awaitables_started = 0;  ///< 回显协程启动次数
+        size_t composite_hits = 0;                 ///< Text/Binary 帧命中次数
+        size_t composite_fallbacks = 0;            ///< 非 Text/Binary 帧回退次数
+        size_t composite_advance_calls = 0;        ///< 状态机推进调用次数
+        size_t ssl_direct_message_hits = 0;        ///< SSL 直接消息命中次数
+        size_t zero_copy_hits = 0;                 ///< 零拷贝命中次数
     };
 
     /**
@@ -1046,6 +1059,14 @@ public:
         return WsWriterImpl<SocketType>(setting, m_socket);
     }
 
+    /**
+     * @brief 执行一次回显操作（读取并原样发送回消息）
+     * @param message 消息内容引用
+     * @param opcode 消息操作码引用
+     * @param reader_setting 读取器配置
+     * @param writer_setting 写入器配置
+     * @return 可 co_await 的异步操作，成功返回 true，失败返回 WsError
+     */
     auto echoOnce(std::string& message,
                   WsOpcode& opcode,
                   const WsReaderSetting& reader_setting = WsReaderSetting(),

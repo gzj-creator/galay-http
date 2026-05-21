@@ -1,3 +1,13 @@
+/**
+ * @file h2_core.h
+ * @brief HTTP/2 连接核心状态管理
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP/2 连接级别的核心状态管理，包括定时器配置、
+ *          连接生命周期控制和协议状态转换。
+ */
+
 #ifndef GALAY_HTTP2_CONNECTION_CORE_H
 #define GALAY_HTTP2_CONNECTION_CORE_H
 
@@ -15,25 +25,34 @@ namespace galay::http2
 class Http2ConnectionCore
 {
 public:
+    /**
+     * @brief 定时器配置
+     */
     struct TimerConfig {
-        std::chrono::milliseconds settings_ack_timeout{10000};
-        std::chrono::milliseconds ping_interval{30000};
-        std::chrono::milliseconds ping_timeout{10000};
-        std::chrono::milliseconds graceful_shutdown_timeout{5000};
+        std::chrono::milliseconds settings_ack_timeout{10000};   ///< SETTINGS ACK 超时时间
+        std::chrono::milliseconds ping_interval{30000};          ///< PING 发送间隔
+        std::chrono::milliseconds ping_timeout{10000};           ///< PING ACK 超时时间
+        std::chrono::milliseconds graceful_shutdown_timeout{5000}; ///< 优雅关闭超时时间
     };
 
+    /**
+     * @brief 定时器事件类型
+     */
     enum class TimerEvent {
-        None,
-        SendPing,
-        SettingsAckTimeout,
-        PingAckTimeout,
-        GracefulShutdownTimeout
+        None,                       ///< 无事件
+        SendPing,                   ///< 发送 PING
+        SettingsAckTimeout,         ///< SETTINGS ACK 超时
+        PingAckTimeout,             ///< PING ACK 超时
+        GracefulShutdownTimeout     ///< 优雅关闭超时
     };
 
+    /**
+     * @brief 连接状态
+     */
     enum class State {
-        Idle,
-        Running,
-        Stopped
+        Idle,       ///< 空闲
+        Running,    ///< 运行中
+        Stopped     ///< 已停止
     };
 
     Http2ConnectionCore() = default;

@@ -1,3 +1,14 @@
+/**
+ * @file http2_stream.h
+ * @brief HTTP/2 流管理，封装请求/响应、帧收发和流状态
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP/2 流的完整抽象，包括 Http2Request、Http2Response、
+ *          Http2Stream 和 Http2StreamPool。管理流级别的帧收发、
+ *          DATA 帧分片和流状态转换。
+ */
+
 #ifndef GALAY_HTTP2_STREAM_H
 #define GALAY_HTTP2_STREAM_H
 

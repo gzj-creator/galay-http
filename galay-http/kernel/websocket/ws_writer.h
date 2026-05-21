@@ -1,3 +1,14 @@
+/**
+ * @file ws_writer.h
+ * @brief WebSocket 写入器，基于异步状态机将 WebSocket 帧写入 Socket
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 WsWriterImpl 模板类，支持将文本、二进制和控制帧
+ *          异步写入 TcpSocket 或 SslSocket。TCP 模式使用 writev 零拷贝，
+ *          SSL 模式使用 send。内部实现快速路径优化常用帧的发送。
+ */
+
 #ifndef GALAY_WS_WRITER_H
 #define GALAY_WS_WRITER_H
 
@@ -193,19 +204,31 @@ auto buildSendAwaitable(SocketType& socket, WsWriterImpl<SocketType>& writer) {
 
 } // namespace detail
 
+/**
+ * @brief WebSocket 写入器模板类
+ * @tparam SocketType Socket 类型（TcpSocket 或 SslSocket）
+ * @details 将 WebSocket 帧（文本、二进制、控制帧）异步写入 Socket。
+ *          TCP 模式使用 writev 零拷贝，SSL 模式使用 send。
+ *          内部实现快速路径优化常用帧的序列化。
+ */
 template<typename SocketType>
 class WsWriterImpl
 {
 public:
     struct OperationCounters {
-        size_t send_awaitables_started = 0;
+        size_t send_awaitables_started = 0; ///< 发送操作启动次数
     };
 
     struct FastPathCounters {
-        size_t hits = 0;
-        size_t fallbacks = 0;
+        size_t hits = 0;     ///< 快速路径命中次数
+        size_t fallbacks = 0; ///< 回退路径次数
     };
 
+    /**
+     * @brief 构造函数
+     * @param setting 写入器配置
+     * @param socket Socket 引用
+     */
     WsWriterImpl(const WsWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(&socket)

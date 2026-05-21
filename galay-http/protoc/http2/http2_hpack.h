@@ -1,3 +1,13 @@
+/**
+ * @file http2_hpack.h
+ * @brief HTTP/2 HPACK 头部压缩编解码
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 实现 RFC 7541 HPACK 头部压缩算法，包括静态表、动态表、
+ *          霍夫曼编解码，以及头部构建器（Http2Headers）。
+ */
+
 #ifndef GALAY_HTTP2_HPACK_H
 #define GALAY_HTTP2_HPACK_H
 

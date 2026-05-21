@@ -1,3 +1,13 @@
+/**
+ * @file iov_utils.h
+ * @brief iovec 工具集，提供零拷贝 IO 辅助类和函数
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 BorrowedIovecs、IoVecWindow、IoVecBytes、IoVecCursor 等工具类，
+ *          用于高效管理 iovec 数组、RingBuffer 读写窗口和分散/聚集 IO 操作。
+ */
+
 #ifndef GALAY_IOVEC_UTILS_H
 #define GALAY_IOVEC_UTILS_H
 
@@ -12,6 +22,12 @@
 
 namespace galay::kernel {
 
+/**
+ * @brief 固定容量的 iovec 借用数组
+ * @tparam N 最大 iovec 数量（默认 2）
+ * @details 从 RingBuffer 借用读/写 iovec，避免动态内存分配。
+ *          用于 readv/writev 的分散/聚集 IO 操作。
+ */
 template<size_t N = 2>
 class BorrowedIovecs {
 public:
@@ -88,10 +104,17 @@ public:
     }
 
 private:
-    std::array<struct iovec, N> m_iovecs{};
-    size_t m_count = 0;
+    std::array<struct iovec, N> m_iovecs{}; ///< 内部 iovec 存储
+    size_t m_count = 0;                     ///< 有效 iovec 数量
 };
 
+/**
+ * @brief 紧凑化 iovec 数组，移除长度为 0 的项
+ * @tparam N 数组容量
+ * @param iovecs iovec 数组
+ * @param count 输入的 iovec 数量
+ * @return 紧凑化后的 iovec 数量
+ */
 template<size_t N>
 size_t compactIovecs(std::array<struct iovec, N>& iovecs, size_t count) noexcept {
     const size_t bounded = std::min(count, N);
@@ -108,6 +131,14 @@ size_t compactIovecs(std::array<struct iovec, N>& iovecs, size_t count) noexcept
     return write_index;
 }
 
+/**
+ * @brief 将源 iovec 数组复制到固定大小的输出数组
+ * @tparam N 输出数组容量
+ * @param source 源 iovec 数组指针
+ * @param source_count 源 iovec 数量
+ * @param out 输出数组
+ * @return 实际复制的 iovec 数量
+ */
 template<size_t N>
 size_t copyBoundedIovecs(const struct iovec* source,
                          size_t source_count,
@@ -123,6 +154,13 @@ size_t copyBoundedIovecs(const struct iovec* source,
     return bounded;
 }
 
+/**
+ * @brief 从 RingBuffer 借用读 iovec
+ * @tparam N 最大 iovec 数量
+ * @tparam RingBuffer RingBuffer 类型
+ * @param ring_buffer RingBuffer 引用
+ * @return 借用的 iovec 数组
+ */
 template<size_t N = 2, typename RingBuffer>
 BorrowedIovecs<N> borrowReadIovecs(const RingBuffer& ring_buffer) {
     BorrowedIovecs<N> out;
@@ -130,6 +168,13 @@ BorrowedIovecs<N> borrowReadIovecs(const RingBuffer& ring_buffer) {
     return out;
 }
 
+/**
+ * @brief 从 RingBuffer 借用写 iovec
+ * @tparam N 最大 iovec 数量
+ * @tparam RingBuffer RingBuffer 类型
+ * @param ring_buffer RingBuffer 引用
+ * @return 借用的 iovec 数组
+ */
 template<size_t N = 2, typename RingBuffer>
 BorrowedIovecs<N> borrowWriteIovecs(const RingBuffer& ring_buffer) {
     BorrowedIovecs<N> out;
@@ -137,6 +182,11 @@ BorrowedIovecs<N> borrowWriteIovecs(const RingBuffer& ring_buffer) {
     return out;
 }
 
+/**
+ * @brief iovec 窗口工具类
+ * @details 提供 iovec 数组的过滤、绑定和查找操作，
+ *          用于构建零拷贝的读写窗口。
+ */
 class IoVecWindow {
 public:
     static size_t buildWindow(const struct iovec* source,
@@ -241,6 +291,10 @@ public:
     }
 };
 
+/**
+ * @brief iovec 字节操作工具类
+ * @details 提供 iovec 数组的字节统计和前缀复制操作
+ */
 class IoVecBytes {
 public:
     static size_t sum(const struct iovec* source, size_t source_count) noexcept {
@@ -301,6 +355,11 @@ public:
     }
 };
 
+/**
+ * @brief iovec 游标，用于跟踪 writev 的发送进度
+ * @details 管理 iovec 数组的发送状态，支持按字节推进游标，
+ *          实现 writev 的部分写入后继续发送。
+ */
 class IoVecCursor {
 public:
     IoVecCursor() = default;

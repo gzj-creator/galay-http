@@ -1,3 +1,13 @@
+/**
+ * @file ws_frame.h
+ * @brief WebSocket 帧构建器与解析器
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 WebSocket 帧的 Builder 模式构建器（WsFrameBuilder）、
+ *          帧解析与编码器（WsFrameParser），支持 iovec 零拷贝解析和掩码处理。
+ */
+
 #ifndef GALAY_WEBSOCKET_FRAME_H
 #define GALAY_WEBSOCKET_FRAME_H
 

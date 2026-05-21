@@ -1,3 +1,13 @@
+/**
+ * @file http2_error.h
+ * @brief HTTP/2 协议错误类型定义
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 定义 HTTP/2 协议层面的错误类、运行时错误分类以及 GOAWAY 错误结构，
+ *          用于区分连接级致命错误与流级可恢复错误。
+ */
+
 #ifndef GALAY_HTTP2_ERROR_H
 #define GALAY_HTTP2_ERROR_H
 
@@ -10,35 +20,48 @@ namespace galay::http2
 
 /**
  * @brief HTTP/2 错误类
+ * @details 封装 HTTP/2 错误码与描述信息，提供静态工厂方法快速创建常见错误
  */
 class Http2Error
 {
 public:
     Http2Error() = default;
 
+    /**
+     * @brief 构造 Http2Error
+     * @param code 错误码
+     * @param message 附加描述信息
+     */
     Http2Error(Http2ErrorCode code, std::string message = "")
         : m_code(code), m_message(std::move(message)) {}
 
-    Http2ErrorCode code() const { return m_code; }
-    const std::string& message() const { return m_message; }
+    Http2ErrorCode code() const { return m_code; } ///< 获取错误码
+    const std::string& message() const { return m_message; } ///< 获取错误描述
 
+    /**
+     * @brief 判断是否存在错误
+     * @return 非无错误时返回 true
+     */
     bool isError() const { return m_code != Http2ErrorCode::NoError; }
 
+    /**
+     * @brief 转换为可读字符串
+     * @return 格式为 "错误码名称: 附加信息"
+     */
     std::string toString() const {
         return http2ErrorCodeToString(m_code) + (m_message.empty() ? "" : ": " + m_message);
     }
 
-    // 静态工厂方法
-    static Http2Error noError() { return Http2Error(Http2ErrorCode::NoError); }
-    static Http2Error protocolError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::ProtocolError, msg); }
-    static Http2Error internalError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::InternalError, msg); }
-    static Http2Error flowControlError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::FlowControlError, msg); }
-    static Http2Error frameSizeError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::FrameSizeError, msg); }
-    static Http2Error compressionError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::CompressionError, msg); }
+    static Http2Error noError() { return Http2Error(Http2ErrorCode::NoError); } ///< 创建无错误对象
+    static Http2Error protocolError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::ProtocolError, msg); } ///< 创建协议错误
+    static Http2Error internalError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::InternalError, msg); } ///< 创建内部错误
+    static Http2Error flowControlError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::FlowControlError, msg); } ///< 创建流量控制错误
+    static Http2Error frameSizeError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::FrameSizeError, msg); } ///< 创建帧大小错误
+    static Http2Error compressionError(const std::string& msg = "") { return Http2Error(Http2ErrorCode::CompressionError, msg); } ///< 创建压缩错误
 
 private:
-    Http2ErrorCode m_code = Http2ErrorCode::NoError;
-    std::string m_message;
+    Http2ErrorCode m_code = Http2ErrorCode::NoError; ///< 错误码
+    std::string m_message; ///< 附加描述信息
 };
 
 /**
@@ -47,15 +70,20 @@ private:
  */
 enum class Http2RuntimeError
 {
-    ProtocolViolation,
-    FlowControlViolation,
-    StreamClosed,
-    StreamReset,
-    Timeout,
-    PeerClosed,
-    IoError
+    ProtocolViolation,      ///< 协议违规
+    FlowControlViolation,   ///< 流量控制违规
+    StreamClosed,           ///< 流已关闭
+    StreamReset,            ///< 流被重置
+    Timeout,                ///< 超时
+    PeerClosed,             ///< 对端关闭连接
+    IoError                 ///< I/O 错误
 };
 
+/**
+ * @brief 将运行时错误分类转换为字符串
+ * @param error 运行时错误枚举
+ * @return 错误名称字符串
+ */
 inline std::string http2RuntimeErrorToString(Http2RuntimeError error) {
     switch (error) {
         case Http2RuntimeError::ProtocolViolation:    return "protocol-violation";
@@ -69,6 +97,11 @@ inline std::string http2RuntimeErrorToString(Http2RuntimeError error) {
     return "unknown";
 }
 
+/**
+ * @brief 判断运行时错误是否为连接级致命错误
+ * @param error 运行时错误枚举
+ * @return 致命错误返回 true（ProtocolViolation/FlowControlViolation）
+ */
 inline bool http2IsConnectionFatal(Http2RuntimeError error) {
     switch (error) {
         case Http2RuntimeError::ProtocolViolation:
@@ -90,11 +123,11 @@ inline bool http2IsConnectionFatal(Http2RuntimeError error) {
  */
 struct Http2GoAwayError
 {
-    uint32_t stream_id = 0;
-    uint32_t last_stream_id = 0;
-    Http2ErrorCode error_code = Http2ErrorCode::NoError;
-    bool retryable = false;
-    std::string debug;
+    uint32_t stream_id = 0;                                ///< 当前流 ID
+    uint32_t last_stream_id = 0;                           ///< GOAWAY 中最后处理的流 ID
+    Http2ErrorCode error_code = Http2ErrorCode::NoError;   ///< GOAWAY 错误码
+    bool retryable = false;                                ///< 是否可安全重试
+    std::string debug;                                     ///< 调试信息
 
     std::string toString() const {
         return "GOAWAY stream_id=" + std::to_string(stream_id) +

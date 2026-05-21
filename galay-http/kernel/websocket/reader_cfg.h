@@ -11,9 +11,9 @@ namespace galay::websocket
  */
 struct WsReaderSetting
 {
-    size_t max_frame_size;       // 单个帧的最大大小（默认 10MB）
-    size_t max_message_size;     // 完整消息的最大大小（默认 100MB）
-    bool auto_fragment;          // 是否自动处理分片消息（默认 true）
+    size_t max_frame_size;       ///< 单个帧的最大大小（默认 10MB）
+    size_t max_message_size;     ///< 完整消息的最大大小（默认 100MB）
+    bool auto_fragment;          ///< 是否自动处理分片消息（默认 true）
 
     WsReaderSetting()
         : max_frame_size(10 * 1024 * 1024)      // 10MB

@@ -1,3 +1,13 @@
+/**
+ * @file ws_client.h
+ * @brief WebSocket 客户端，支持 ws:// 和 wss:// 连接与升级
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 WsClientImpl 和 WssClient 模板类，支持 WebSocket 连接的
+ *          建立、TLS 握手和协议升级。内部使用状态机驱动升级流程。
+ */
+
 #ifndef GALAY_WS_CLIENT_H
 #define GALAY_WS_CLIENT_H
 
@@ -41,9 +51,12 @@ class WsClientImpl;
 template<typename SocketType>
 class WsUpgraderImpl;
 
+/**
+ * @brief WebSocket 客户端配置
+ */
 struct WsClientConfig
 {
-    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
+    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide; ///< HTTP 头部归一化策略
 };
 
 /**
@@ -667,12 +680,15 @@ using WsClient = WsClientImpl<TcpSocket>;
 inline WsClient WsClientBuilder::build() const { return WsClient(m_config); }
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+/**
+ * @brief WSS 客户端配置
+ */
 struct WssClientConfig
 {
-    std::string ca_path;
-    bool verify_peer = false;
-    int verify_depth = 4;
-    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide;
+    std::string ca_path;            ///< CA 证书路径
+    bool verify_peer = false;       ///< 是否校验服务端证书
+    int verify_depth = 4;           ///< 证书链校验深度
+    HeaderPair::Mode header_mode = HeaderPair::Mode::ClientSide; ///< HTTP 头部归一化策略
 };
 
 class WssClient;

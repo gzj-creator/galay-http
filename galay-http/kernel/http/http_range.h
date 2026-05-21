@@ -1,3 +1,14 @@
+/**
+ * @file http_range.h
+ * @brief HTTP Range 请求解析与处理
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP Range 请求头的解析功能，支持单范围、多范围、
+ * 后缀范围和前缀范围四种格式。可生成 Content-Range 响应头，
+ * 并配合 ETag 实现 If-Range 条件请求。
+ */
+
 #ifndef GALAY_HTTP_RANGE_H
 #define GALAY_HTTP_RANGE_H
 

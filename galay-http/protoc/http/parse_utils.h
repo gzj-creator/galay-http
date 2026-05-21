@@ -1,3 +1,13 @@
+/**
+ * @file parse_utils.h
+ * @brief HTTP 协议解析辅助工具函数
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供大小写转换、Header 值 token 匹配、数值解析、
+ *          iovec 切片等底层解析工具，供内部模块使用。
+ */
+
 #ifndef GALAY_HTTP_PARSE_UTILS_H
 #define GALAY_HTTP_PARSE_UTILS_H
 
@@ -15,6 +25,11 @@
 namespace galay::http::detail
 {
 
+/**
+ * @brief 将 ASCII 大写字母转换为小写
+ * @param ch 输入字符
+ * @return 转换后的字符
+ */
 inline char toLowerAsciiChar(char ch)
 {
     if (ch >= 'A' && ch <= 'Z') {
@@ -23,6 +38,11 @@ inline char toLowerAsciiChar(char ch)
     return ch;
 }
 
+/**
+ * @brief 将 ASCII 小写字母转换为大写
+ * @param ch 输入字符
+ * @return 转换后的字符
+ */
 inline char toUpperAsciiChar(char ch)
 {
     if (ch >= 'a' && ch <= 'z') {
@@ -31,6 +51,12 @@ inline char toUpperAsciiChar(char ch)
     return ch;
 }
 
+/**
+ * @brief 忽略大小写比较两个 ASCII 字符串
+ * @param lhs 左操作数
+ * @param rhs 右操作数
+ * @return 相等返回 true
+ */
 inline bool equalsIgnoreCaseAscii(std::string_view lhs, std::string_view rhs)
 {
     if (lhs.size() != rhs.size()) {
@@ -45,6 +71,12 @@ inline bool equalsIgnoreCaseAscii(std::string_view lhs, std::string_view rhs)
     return true;
 }
 
+/**
+ * @brief 检查 Header 值中是否包含指定 token（逗号分隔，忽略大小写）
+ * @param value Header 值字符串
+ * @param token 要查找的 token
+ * @return 包含返回 true
+ */
 inline bool headerValueContainsToken(std::string_view value, std::string_view token)
 {
     if (value.empty() || token.empty()) {
@@ -76,11 +108,22 @@ inline bool headerValueContainsToken(std::string_view value, std::string_view to
     return false;
 }
 
+/**
+ * @brief 宽松模式获取 Header 值指针
+ * @param headers HeaderPair 对象
+ * @param key 头部键名
+ * @return 值指针，不存在时返回 nullptr
+ */
 inline const std::string* getHeaderValuePtrLoose(const HeaderPair& headers, const std::string& key)
 {
     return headers.getValuePtr(key);
 }
 
+/**
+ * @brief 严格解析字符串为 size_t（不允许多余字符）
+ * @param input 输入字符串
+ * @return 解析成功返回值，失败返回 std::nullopt
+ */
 inline std::optional<size_t> parseSizeTStrict(std::string_view input)
 {
     size_t begin = 0;
@@ -106,6 +149,12 @@ inline std::optional<size_t> parseSizeTStrict(std::string_view input)
     return value;
 }
 
+/**
+ * @brief 跳过前 N 个字节，切片 iovec 数组
+ * @param iovecs 原始 iovec 数组
+ * @param skip_bytes 要跳过的字节数
+ * @return 切片后的 iovec 数组
+ */
 inline std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t skip_bytes)
 {
     std::vector<iovec> sliced;
@@ -129,6 +178,12 @@ inline std::vector<iovec> sliceIovecs(const std::vector<iovec>& iovecs, size_t s
     return sliced;
 }
 
+/**
+ * @brief 宽松模式移除 Header（尝试多种大小写变体）
+ * @param headers HeaderPair 对象
+ * @param key 头部键名
+ * @details 依次尝试原始键名、全小写、全大写、首字母大写等形式进行移除
+ */
 inline void removeHeaderPairLoose(HeaderPair& headers, const std::string& key)
 {
     headers.removeHeaderPair(key);

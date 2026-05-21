@@ -1,3 +1,13 @@
+/**
+ * @file stream_mgr.h
+ * @brief HTTP/2 流管理器，管理多路复用流的生命周期
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 Http2StreamManagerImpl 模板类，管理 HTTP/2 连接上的所有流，
+ *          包括流的创建、销毁、优先级调度和流 ID 分配。
+ */
+
 #ifndef GALAY_HTTP2_STREAM_MANAGER_H
 #define GALAY_HTTP2_STREAM_MANAGER_H
 

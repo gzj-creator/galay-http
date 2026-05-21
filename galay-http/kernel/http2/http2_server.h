@@ -1,3 +1,14 @@
+/**
+ * @file http2_server.h
+ * @brief HTTP/2 服务器，支持 h2c 升级和 TLS ALPN 协商
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 H2cServer 和 H2Server 模板类，支持两种 HTTP/2 服务模式：
+ *          1. h2c 模式：通过 HTTP/1.1 Upgrade 升级到 HTTP/2
+ *          2. TLS 模式：通过 ALPN 协议协商直接使用 HTTP/2
+ */
+
 #ifndef GALAY_HTTP2_SERVER_H
 #define GALAY_HTTP2_SERVER_H
 

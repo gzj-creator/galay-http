@@ -1,3 +1,13 @@
+/**
+ * @file ws_session.h
+ * @brief WebSocket 会话，整合连接、升级和通信功能
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 WsSessionImpl 模板类，整合 WebSocket 连接的升级握手、
+ *          消息读写和便捷方法。内部使用状态机驱动 TCP 和 SSL 两种升级流程。
+ */
+
 #ifndef GALAY_WS_SESSION_H
 #define GALAY_WS_SESSION_H
 

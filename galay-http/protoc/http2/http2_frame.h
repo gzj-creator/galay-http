@@ -1,3 +1,14 @@
+/**
+ * @file http2_frame.h
+ * @brief HTTP/2 帧定义、构建器、解析器与编解码器
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 定义 HTTP/2 所有帧类型（DATA/HEADERS/PRIORITY/RST_STREAM/SETTINGS/
+ *          PUSH_PROMISE/PING/GOAWAY/WINDOW_UPDATE/CONTINUATION），
+ *          提供帧构建器、解析器及编解码统一入口。
+ */
+
 #ifndef GALAY_HTTP2_FRAME_H
 #define GALAY_HTTP2_FRAME_H
 

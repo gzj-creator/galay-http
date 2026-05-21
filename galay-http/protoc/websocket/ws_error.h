@@ -1,3 +1,13 @@
+/**
+ * @file ws_error.h
+ * @brief WebSocket 协议错误码与错误类定义
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 定义 WebSocket 协议层面所有可能的错误码，以及用于携带错误信息
+ *          并可转换为关闭状态码的 WsError 类。
+ */
+
 #ifndef GALAY_WEBSOCKET_ERROR_H
 #define GALAY_WEBSOCKET_ERROR_H
 
@@ -12,25 +22,25 @@ namespace galay::websocket
  */
 enum WsErrorCode
 {
-    kWsNoError = 0,              // 无错误
-    kWsIncomplete,               // 数据不完整
-    kWsInvalidFrame,             // 无效的帧
-    kWsInvalidOpcode,            // 无效的操作码
-    kWsInvalidPayloadLength,     // 无效的payload长度
-    kWsControlFrameTooLarge,     // 控制帧过大（>125字节）
-    kWsControlFrameFragmented,   // 控制帧不能分片
-    kWsInvalidUtf8,              // 无效的UTF-8编码
-    kWsProtocolError,            // 协议错误
-    kWsConnectionClosed,         // 连接已关闭
-    kWsMessageTooLarge,          // 消息过大
-    kWsInvalidCloseCode,         // 无效的关闭码
-    kWsReservedBitsSet,          // 保留位被设置
-    kWsMaskRequired,             // 需要掩码（客户端->服务器）
-    kWsMaskNotAllowed,           // 不允许掩码（服务器->客户端）
-    kWsConnectionError,          // 连接错误
-    kWsSendError,                // 发送错误
-    kWsUpgradeFailed,            // 升级失败
-    kWsUnknownError              // 未知错误
+    kWsNoError = 0,              ///< 无错误
+    kWsIncomplete,               ///< 数据不完整
+    kWsInvalidFrame,             ///< 无效的帧
+    kWsInvalidOpcode,            ///< 无效的操作码
+    kWsInvalidPayloadLength,     ///< 无效的 payload 长度
+    kWsControlFrameTooLarge,     ///< 控制帧过大（>125字节）
+    kWsControlFrameFragmented,   ///< 控制帧不能分片
+    kWsInvalidUtf8,              ///< 无效的 UTF-8 编码
+    kWsProtocolError,            ///< 协议错误
+    kWsConnectionClosed,         ///< 连接已关闭
+    kWsMessageTooLarge,          ///< 消息过大
+    kWsInvalidCloseCode,         ///< 无效的关闭码
+    kWsReservedBitsSet,          ///< 保留位被设置
+    kWsMaskRequired,             ///< 需要掩码（客户端->服务器）
+    kWsMaskNotAllowed,           ///< 不允许掩码（服务器->客户端）
+    kWsConnectionError,          ///< 连接错误
+    kWsSendError,                ///< 发送错误
+    kWsUpgradeFailed,            ///< 升级失败
+    kWsUnknownError              ///< 未知错误
 };
 
 /**
@@ -39,14 +49,23 @@ enum WsErrorCode
 class WsError
 {
 public:
+    /**
+     * @brief 构造 WsError
+     * @param code 错误码
+     * @param extra_msg 附加错误描述
+     */
     WsError(WsErrorCode code, const std::string& extra_msg = "")
         : m_code(code)
         , m_extra_msg(extra_msg)
     {
     }
 
-    WsErrorCode code() const { return m_code; }
+    WsErrorCode code() const { return m_code; } ///< 获取错误码
 
+    /**
+     * @brief 获取错误描述信息
+     * @return 包含标准描述与附加信息的字符串
+     */
     std::string message() const
     {
         std::string msg = getErrorMessage(m_code);
@@ -57,7 +76,8 @@ public:
     }
 
     /**
-     * @brief 转换为WebSocket关闭状态码
+     * @brief 转换为 WebSocket 关闭状态码
+     * @return 对应的 WsCloseCode 枚举值
      */
     WsCloseCode toCloseCode() const
     {
@@ -134,8 +154,8 @@ private:
     }
 
 private:
-    WsErrorCode m_code;
-    std::string m_extra_msg;
+    WsErrorCode m_code;      ///< 错误码
+    std::string m_extra_msg; ///< 附加错误描述
 };
 
 } // namespace galay::websocket

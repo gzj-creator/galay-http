@@ -1,3 +1,13 @@
+/**
+ * @file http_client.h
+ * @brief HTTP/HTTPS 客户端
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP 与 HTTPS 客户端的模板实现，支持 URL 解析、
+ *          TCP/TLS 连接、Session 创建与 Socket 所有权转移（协议升级）。
+ */
+
 #ifndef GALAY_HTTP_CLIENT_H
 #define GALAY_HTTP_CLIENT_H
 
@@ -24,12 +34,17 @@ using namespace galay::kernel;
  * @brief HTTP URL 解析结果
  */
 struct HttpUrl {
-    std::string scheme;
-    std::string host;
-    int port;
-    std::string path;
-    bool is_secure;
+    std::string scheme;    ///< 协议（http/https）
+    std::string host;      ///< 主机名
+    int port;              ///< 端口号
+    std::string path;      ///< 路径
+    bool is_secure;        ///< 是否为安全连接（HTTPS）
 
+    /**
+     * @brief 从 URL 字符串解析各组成部分
+     * @param url 完整的 URL 字符串
+     * @return 解析成功返回 HttpUrl，失败返回 std::nullopt
+     */
     static std::optional<HttpUrl> parse(const std::string& url) {
         std::regex url_regex(R"(^(http|https)://([^:/]+)(?::(\d+))?(/.*)?$)", std::regex::icase);
         std::smatch matches;

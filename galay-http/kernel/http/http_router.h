@@ -1,3 +1,14 @@
+/**
+ * @file http_router.h
+ * @brief HTTP 路由器，支持精确匹配和 Trie 树模糊匹配
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供基于 HTTP 方法和路径的路由功能，使用混合策略：
+ *          精确匹配（unordered_map，O(1)）和模糊匹配（Trie 树，O(k)）。
+ *          支持路径参数、通配符、静态文件挂载和反向代理。
+ */
+
 #ifndef GALAY_HTTP_ROUTER_H
 #define GALAY_HTTP_ROUTER_H
 
@@ -38,8 +49,8 @@ using HttpRouteHandler = std::function<Task<void>(HttpConn&, HttpRequest)>;
  */
 enum class ProxyMode
 {
-    Http,
-    Raw
+    Http, ///< HTTP 语义转发（可改写头部、支持连接池）
+    Raw   ///< 原始字节流回包透传（更适合流式响应）
 };
 
 /**
@@ -47,8 +58,8 @@ enum class ProxyMode
  */
 struct RouteMatch
 {
-    HttpRouteHandler* handler = nullptr;
-    std::map<std::string, std::string> params;  // 路径参数，例如 /user/:id 中的 id
+    HttpRouteHandler* handler = nullptr; ///< 匹配到的处理器指针
+    std::map<std::string, std::string> params;  ///< 路径参数，例如 /user/:id 中的 id
 };
 
 /**
@@ -56,12 +67,12 @@ struct RouteMatch
  */
 struct RouteTrieNode
 {
-    std::unordered_map<std::string, std::unique_ptr<RouteTrieNode>> children;  // 子节点
-    HttpRouteHandler handler;                                                   // 处理函数
-    bool isEnd = false;                                                         // 是否为路径终点
-    bool isParam = false;                                                       // 是否为参数节点（:id）
-    bool isWildcard = false;                                                    // 是否为通配符节点（*）
-    std::vector<std::string> paramNames;                                        // 该路由的参数名序列（仅isEnd节点）
+    std::unordered_map<std::string, std::unique_ptr<RouteTrieNode>> children;  ///< 子节点
+    HttpRouteHandler handler;                                                   ///< 处理函数
+    bool isEnd = false;                                                         ///< 是否为路径终点
+    bool isParam = false;                                                       ///< 是否为参数节点（:id）
+    bool isWildcard = false;                                                    ///< 是否为通配符节点（*）
+    std::vector<std::string> paramNames;                                        ///< 该路由的参数名序列（仅isEnd节点）
 };
 
 /**

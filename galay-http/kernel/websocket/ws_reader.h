@@ -1,3 +1,14 @@
+/**
+ * @file ws_reader.h
+ * @brief WebSocket 读取器，基于异步状态机从 Socket 读取并解析 WebSocket 帧
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 WsReaderImpl 模板类，支持从 TcpSocket 或 SslSocket 读取
+ *          WebSocket 帧和消息。内部使用快速路径优化单帧消息的解析。
+ *          支持 UTF-8 校验、掩码解掩和分片消息重组。
+ */
+
 #ifndef GALAY_WS_READER_H
 #define GALAY_WS_READER_H
 
@@ -38,15 +49,23 @@ struct is_ssl_socket<galay::ssl::SslSocket> : std::true_type {};
 template<typename T>
 inline constexpr bool is_ssl_socket_v = is_ssl_socket<T>::value;
 
+/**
+ * @brief 控制帧回调函数类型
+ * @param opcode 帧操作码
+ * @param payload 帧负载
+ */
 using ControlFrameCallback = std::function<void(WsOpcode opcode, const std::string& payload)>;
 
 namespace detail {
 
+/**
+ * @brief WebSocket 消息快速路径状态
+ */
 enum class WsMessageFastPathStatus {
-    kFallback,
-    kNeedMore,
-    kContinue,
-    kReturn,
+    kFallback,  ///< 回退到常规解析路径
+    kNeedMore,  ///< 需要更多数据
+    kContinue,  ///< 继续解析下一个帧
+    kReturn,    ///< 解析完成，返回结果
 };
 
 struct WsFastPathFramePrefix {
@@ -931,14 +950,28 @@ auto buildReadOperation(SocketType& socket, std::shared_ptr<StateT> state) {
 
 } // namespace detail
 
+/**
+ * @brief WebSocket 读取器模板类
+ * @tparam SocketType Socket 类型（TcpSocket 或 SslSocket）
+ * @details 从 Socket 异步读取 WebSocket 帧和消息，
+ *          支持快速路径优化、UTF-8 校验、掩码解掩和分片消息重组。
+ */
 template<typename SocketType>
 class WsReaderImpl {
 public:
     struct OperationCounters {
-        size_t frame_awaitables_started = 0;
-        size_t message_awaitables_started = 0;
+        size_t frame_awaitables_started = 0;    ///< 帧读取操作启动次数
+        size_t message_awaitables_started = 0;  ///< 消息读取操作启动次数
     };
 
+    /**
+     * @brief 构造函数
+     * @param ring_buffer 环形缓冲区引用
+     * @param setting 读取器配置
+     * @param socket Socket 引用
+     * @param is_server 是否为服务器端
+     * @param use_mask 是否使用掩码
+     */
     WsReaderImpl(RingBuffer& ring_buffer,
                  const WsReaderSetting& setting,
                  SocketType& socket,
@@ -950,6 +983,11 @@ public:
         , m_is_server(is_server)
         , m_use_mask(use_mask) {}
 
+    /**
+     * @brief 异步读取一个 WebSocket 帧
+     * @param frame 待填充的帧对象
+     * @return 可 co_await 的异步操作
+     */
     auto getFrame(WsFrame& frame) {
         ++m_operation_counters.frame_awaitables_started;
         return detail::buildReadOperation(
@@ -957,6 +995,12 @@ public:
             std::make_shared<detail::WsFrameReadState>(*m_ring_buffer, m_setting, frame, m_is_server));
     }
 
+    /**
+     * @brief 异步读取一个完整的 WebSocket 消息（自动重组分片）
+     * @param message 输出消息内容
+     * @param opcode 输出消息操作码
+     * @return 可 co_await 的异步操作
+     */
     auto getMessage(std::string& message, WsOpcode& opcode) {
         ++m_operation_counters.message_awaitables_started;
         return detail::buildReadOperation(

@@ -1,3 +1,13 @@
+/**
+ * @file http_conn.h
+ * @brief HTTP 连接封装
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 封装 HTTP/HTTPS 连接的底层 Socket 与 RingBuffer 资源，
+ *          提供 Reader/Writer 工厂方法，支持向 WebSocket/HTTP2 协议升级。
+ */
+
 #ifndef GALAY_HTTP_CONN_H
 #define GALAY_HTTP_CONN_H
 

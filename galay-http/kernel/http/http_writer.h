@@ -1,3 +1,14 @@
+/**
+ * @file http_writer.h
+ * @brief HTTP 写入器，基于异步状态机将 HTTP 消息写入 Socket
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HttpWriterImpl 模板类，支持将 HTTP 响应、请求和 chunked 数据
+ * 写入 TcpSocket 或 SslSocket。内部使用 iovec 零拷贝技术，
+ * 结合异步状态机实现高效的非阻塞写入。
+ */
+
 #ifndef GALAY_HTTP_WRITER_H
 #define GALAY_HTTP_WRITER_H
 
@@ -32,15 +43,24 @@ using namespace galay::async;
 template<typename SocketType>
 class HttpWriterImpl;
 
+/**
+ * @brief TCP Socket 类型判断特征
+ */
 template<typename T>
 struct is_tcp_socket : std::false_type {};
 
 template<>
 struct is_tcp_socket<TcpSocket> : std::true_type {};
 
+/**
+ * @brief 判断 T 是否为 TCP Socket 的内联常量
+ */
 template<typename T>
 inline constexpr bool is_tcp_socket_v = is_tcp_socket<T>::value;
 
+/**
+ * @brief SSL Socket 类型判断特征（用于 writer）
+ */
 template<typename T>
 struct is_http_writer_ssl_socket : std::false_type {};
 
@@ -49,11 +69,19 @@ template<>
 struct is_http_writer_ssl_socket<galay::ssl::SslSocket> : std::true_type {};
 #endif
 
+/**
+ * @brief 判断 T 是否为 SSL Socket 的内联常量（用于 writer）
+ */
 template<typename T>
 inline constexpr bool is_http_writer_ssl_socket_v = is_http_writer_ssl_socket<T>::value;
 
 namespace detail {
 
+/**
+ * @brief HTTP TCP 写入状态机
+ * @tparam SocketType Socket 类型
+ * @tparam UseWritev 是否使用 writev（true）或 send（false）
+ */
 template<typename SocketType, bool UseWritev>
 struct HttpTcpWriteMachine {
     using result_type = std::expected<bool, HttpError>;
@@ -130,6 +158,10 @@ private:
 };
 
 #ifdef GALAY_HTTP_SSL_ENABLED
+/**
+ * @brief HTTP SSL 发送状态机
+ * @tparam SocketType Socket 类型
+ */
 template<typename SocketType>
 struct HttpSslSendMachine {
     using result_type = std::expected<bool, HttpError>;
@@ -182,6 +214,14 @@ private:
 };
 #endif
 
+/**
+ * @brief 构建异步发送操作
+ * @tparam SocketType Socket 类型
+ * @tparam UseWritev 是否使用 writev
+ * @param socket Socket 引用
+ * @param writer 写入器引用
+ * @return 可 co_await 的异步操作对象
+ */
 template<typename SocketType, bool UseWritev>
 auto buildSendAwaitable(SocketType& socket, HttpWriterImpl<SocketType>& writer) {
     using ResultType = std::expected<bool, HttpError>;
@@ -205,14 +245,25 @@ auto buildSendAwaitable(SocketType& socket, HttpWriterImpl<SocketType>& writer) 
 
 } // namespace detail
 
+/**
+ * @brief HTTP 写入器模板类
+ * @tparam SocketType Socket 类型（TcpSocket 或 SslSocket）
+ * @details 将 HTTP 响应、请求和 chunked 数据异步写入 Socket。
+ *          TCP 模式使用 writev 零拷贝，SSL 模式使用 send。
+ */
 template<typename SocketType>
 class HttpWriterImpl
 {
 public:
     struct FastPathCounters {
-        size_t ssl_coalesced_layout_hits = 0;
+        size_t ssl_coalesced_layout_hits = 0; ///< SSL 合并布局命中次数
     };
 
+    /**
+     * @brief 构造函数
+     * @param setting 写入器配置
+     * @param socket Socket 引用
+     */
     HttpWriterImpl(const HttpWriterSetting& setting, SocketType& socket)
         : m_setting(setting)
         , m_socket(&socket)
@@ -220,6 +271,11 @@ public:
     {
     }
 
+    /**
+     * @brief 异步发送 HTTP 响应
+     * @param response HTTP 响应对象
+     * @return 可 co_await 的异步操作，成功返回 true，失败返回 HttpError
+     */
     auto sendResponse(HttpResponse& response) {
         if (m_remaining_bytes == 0) {
             logResponseStatus(response.header().code());
@@ -252,6 +308,11 @@ public:
         }
     }
 
+    /**
+     * @brief 异步发送 HTTP 请求
+     * @param request HTTP 请求对象
+     * @return 可 co_await 的异步操作
+     */
     auto sendRequest(HttpRequest& request) {
         if (m_remaining_bytes == 0) {
             if constexpr (is_tcp_socket_v<SocketType>) {
@@ -282,6 +343,11 @@ public:
         }
     }
 
+    /**
+     * @brief 异步发送 HTTP 响应头
+     * @param header HTTP 响应头
+     * @return 可 co_await 的异步操作
+     */
     auto sendHeader(HttpResponseHeader&& header) {
         if (m_remaining_bytes == 0) {
             logResponseStatus(header.code());
@@ -292,6 +358,11 @@ public:
         return makeSendAwaitable();
     }
 
+    /**
+     * @brief 异步发送 HTTP 请求头
+     * @param header HTTP 请求头
+     * @return 可 co_await 的异步操作
+     */
     auto sendHeader(HttpRequestHeader&& header) {
         if (m_remaining_bytes == 0) {
             m_buffer = header.toString();
@@ -301,6 +372,11 @@ public:
         return makeSendAwaitable();
     }
 
+    /**
+     * @brief 异步发送原始数据（移动语义）
+     * @param data 待发送数据
+     * @return 可 co_await 的异步操作
+     */
     auto send(std::string&& data) {
         if (m_remaining_bytes == 0) {
             clearExternalBuffer();
@@ -311,6 +387,12 @@ public:
         return makeSendAwaitable();
     }
 
+    /**
+     * @brief 异步发送原始数据（指针+长度）
+     * @param buffer 数据指针
+     * @param length 数据长度
+     * @return 可 co_await 的异步操作
+     */
     auto send(const char* buffer, size_t length) {
         if (m_remaining_bytes == 0) {
             clearExternalBuffer();
@@ -341,6 +423,12 @@ public:
         return makeSendAwaitable();
     }
 
+    /**
+     * @brief 异步发送 chunked 编码数据块
+     * @param data 数据内容
+     * @param is_last 是否为最后一个 chunk
+     * @return 可 co_await 的异步操作
+     */
     auto sendChunk(const std::string& data, bool is_last = false) {
         if (m_remaining_bytes == 0) {
             clearExternalBuffer();

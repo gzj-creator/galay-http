@@ -1,3 +1,15 @@
+/**
+ * @file http_server.h
+ * @brief HTTP/HTTPS 服务器，支持自定义连接处理器和路由模式
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HttpServerImpl 模板类，支持两种运行模式：
+ *          1. 自定义连接处理器模式：用户完全控制连接处理逻辑
+ *          2. 路由模式：框架驱动请求读取、Keep-Alive 循环与路由分发
+ *          内部使用 Runtime 管理多线程 IO 调度，支持 SO_REUSEPORT 多线程 accept。
+ */
+
 #ifndef GALAY_HTTP_SERVER_H
 #define GALAY_HTTP_SERVER_H
 
@@ -48,12 +60,12 @@ using HttpConnHandlerImpl = std::function<Task<void>(HttpConnImpl<SocketType>)>;
  */
 struct HttpServerConfig
 {
-    std::string host = "0.0.0.0";
-    uint16_t port = 8080;
-    int backlog = 128;
-    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
-    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
-    RuntimeAffinityConfig affinity;
+    std::string host = "0.0.0.0";              ///< 监听地址
+    uint16_t port = 8080;                       ///< 监听端口
+    int backlog = 128;                          ///< listen backlog 队列长度
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO; ///< IO 调度器数量
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO; ///< 计算调度器数量
+    RuntimeAffinityConfig affinity;             ///< 调度器绑核策略
 };
 
 /**
@@ -62,17 +74,29 @@ struct HttpServerConfig
  */
 class HttpServerBuilder {
 public:
-    HttpServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
-    HttpServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; }
-    HttpServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
-    HttpServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
-    HttpServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
+    HttpServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; } ///< 设置监听地址
+    HttpServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; } ///< 设置监听端口
+    HttpServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; } ///< 设置 listen backlog
+    HttpServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; } ///< 设置 IO 调度器数量
+    HttpServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; } ///< 设置计算调度器数量
+    /**
+     * @brief 设置顺序 CPU 亲和性
+     * @param io_count IO 调度器绑定的 CPU 核心数
+     * @param compute_count 计算调度器绑定的 CPU 核心数
+     * @return Builder 引用
+     */
     HttpServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
         m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
         m_config.affinity.seq_io_count = io_count;
         m_config.affinity.seq_compute_count = compute_count;
         return *this;
     }
+    /**
+     * @brief 设置自定义 CPU 亲和性
+     * @param io_cpus IO 调度器绑定的 CPU 核心列表
+     * @param compute_cpus 计算调度器绑定的 CPU 核心列表
+     * @return 成功返回 true，CPU 核心数与调度器数不匹配返回 false
+     */
     bool customAffinity(std::vector<uint32_t> io_cpus, std::vector<uint32_t> compute_cpus) {
         if (io_cpus.size() != m_config.io_scheduler_count ||
             compute_cpus.size() != m_config.compute_scheduler_count) {
@@ -83,8 +107,8 @@ public:
         m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
         return true;
     }
-    HttpServerImpl<TcpSocket> build() const;
-    HttpServerConfig buildConfig() const                { return m_config; }
+    HttpServerImpl<TcpSocket> build() const; ///< 构建 HTTP 服务器实例
+    HttpServerConfig buildConfig() const                { return m_config; } ///< 导出配置
 private:
     HttpServerConfig m_config;
 };
@@ -247,15 +271,28 @@ public:
 
     }
 
+    /**
+     * @brief 检查服务器是否正在运行
+     * @return 运行中返回 true
+     */
     bool isRunning() const {
         return m_running.load();
     }
 
+    /**
+     * @brief 获取内部 Runtime 引用
+     * @return Runtime 引用
+     */
     Runtime& getRuntime() {
         return m_runtime;
     }
 
 protected:
+    /**
+     * @brief 内部启动实现
+     * @return 成功返回 true
+     * @details 初始化 runtime 并在每个 IO 调度器上启动 serverLoop
+     */
     virtual bool startInternal() {
         if (m_running.load()) {
             return false;
@@ -284,6 +321,12 @@ protected:
         return true;
     }
 
+    /**
+     * @brief 服务器 accept 循环
+     * @param scheduler 当前 IO 调度器
+     * @details 每个 IO 调度器上运行一个独立的 serverLoop，
+     *          创建独立的 listener socket，利用 SO_REUSEPORT 实现多线程 accept。
+     */
     virtual Task<void> serverLoop(IOScheduler* scheduler) {
         // 每个 serverLoop 创建自己的 listener socket
         TcpSocket listener(IPType::IPV4);
@@ -350,6 +393,11 @@ protected:
         co_return;
     }
 
+    /**
+     * @brief 根据文件描述符创建客户端 Socket
+     * @param fd accept 获得的文件描述符
+     * @return 成功返回 Socket 对象，失败返回 std::nullopt
+     */
     virtual std::optional<SocketType> createClientSocket(GHandle fd) {
         if constexpr (std::is_same_v<SocketType, TcpSocket>) {
             return SocketType(fd);
@@ -360,12 +408,12 @@ protected:
     }
 
 protected:
-    Runtime m_runtime;
-    HttpServerConfig m_config;
-    ConnHandler m_handler;
-    std::optional<HttpRouter> m_router;
-    std::unique_ptr<TcpSocket> m_listener;
-    std::atomic<bool> m_running;
+    Runtime m_runtime;                      ///< 内部 Runtime 实例
+    HttpServerConfig m_config;              ///< 服务器配置
+    ConnHandler m_handler;                  ///< 连接处理器
+    std::optional<HttpRouter> m_router;     ///< 路由表（路由模式下使用）
+    std::unique_ptr<TcpSocket> m_listener;  ///< 监听 Socket（已弃用，每个 loop 独立创建）
+    std::atomic<bool> m_running;            ///< 运行状态标志
 };
 
 // 类型别名 - HTTP (TcpSocket)
@@ -383,19 +431,19 @@ inline HttpServer HttpServerBuilder::build() const { return HttpServer(m_config)
  */
 struct HttpsServerConfig
 {
-    std::string host = "0.0.0.0";
-    uint16_t port = 443;
-    int backlog = 128;
-    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
-    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO;
-    RuntimeAffinityConfig affinity;
-    HttpReaderSetting reader_setting;
-    HttpWriterSetting writer_setting;
-    std::string cert_path;
-    std::string key_path;
-    std::string ca_path;
-    bool verify_peer = false;
-    int verify_depth = 4;
+    std::string host = "0.0.0.0";              ///< 监听地址
+    uint16_t port = 443;                        ///< 监听端口
+    int backlog = 128;                          ///< listen backlog 队列长度
+    size_t io_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO; ///< IO 调度器数量
+    size_t compute_scheduler_count = GALAY_RUNTIME_SCHEDULER_COUNT_AUTO; ///< 计算调度器数量
+    RuntimeAffinityConfig affinity;             ///< 调度器绑核策略
+    HttpReaderSetting reader_setting;           ///< TLS 连接的读取器配置
+    HttpWriterSetting writer_setting;           ///< TLS 连接的写入器配置
+    std::string cert_path;                      ///< TLS 服务端证书路径
+    std::string key_path;                       ///< TLS 服务端私钥路径
+    std::string ca_path;                        ///< CA 证书路径（用于客户端证书校验）
+    bool verify_peer = false;                   ///< 是否校验客户端证书
+    int verify_depth = 4;                       ///< 证书链校验深度
 };
 
 class HttpsServer;
@@ -406,11 +454,11 @@ class HttpsServer;
  */
 class HttpsServerBuilder {
 public:
-    HttpsServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; }
-    HttpsServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; }
-    HttpsServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; }
-    HttpsServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; }
-    HttpsServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; }
+    HttpsServerBuilder& host(std::string v)              { m_config.host = std::move(v); return *this; } ///< 设置监听地址
+    HttpsServerBuilder& port(uint16_t v)                 { m_config.port = v; return *this; } ///< 设置监听端口
+    HttpsServerBuilder& backlog(int v)                   { m_config.backlog = v; return *this; } ///< 设置 listen backlog
+    HttpsServerBuilder& ioSchedulerCount(size_t v)       { m_config.io_scheduler_count = v; return *this; } ///< 设置 IO 调度器数量
+    HttpsServerBuilder& computeSchedulerCount(size_t v)  { m_config.compute_scheduler_count = v; return *this; } ///< 设置计算调度器数量
     HttpsServerBuilder& sequentialAffinity(size_t io_count, size_t compute_count) {
         m_config.affinity.mode = RuntimeAffinityConfig::Mode::Sequential;
         m_config.affinity.seq_io_count = io_count;
@@ -427,13 +475,13 @@ public:
         m_config.affinity.custom_compute_cpus = std::move(compute_cpus);
         return true;
     }
-    HttpsServerBuilder& certPath(std::string v)          { m_config.cert_path = std::move(v); return *this; }
-    HttpsServerBuilder& keyPath(std::string v)           { m_config.key_path = std::move(v); return *this; }
-    HttpsServerBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; }
-    HttpsServerBuilder& verifyPeer(bool v)               { m_config.verify_peer = v; return *this; }
-    HttpsServerBuilder& verifyDepth(int v)               { m_config.verify_depth = v; return *this; }
-    HttpsServer build() const;
-    HttpsServerConfig buildConfig() const                { return m_config; }
+    HttpsServerBuilder& certPath(std::string v)          { m_config.cert_path = std::move(v); return *this; } ///< 设置证书路径
+    HttpsServerBuilder& keyPath(std::string v)           { m_config.key_path = std::move(v); return *this; } ///< 设置私钥路径
+    HttpsServerBuilder& caPath(std::string v)            { m_config.ca_path = std::move(v); return *this; } ///< 设置 CA 证书路径
+    HttpsServerBuilder& verifyPeer(bool v)               { m_config.verify_peer = v; return *this; } ///< 设置是否校验客户端证书
+    HttpsServerBuilder& verifyDepth(int v)               { m_config.verify_depth = v; return *this; } ///< 设置证书链校验深度
+    HttpsServer build() const; ///< 构建 HTTPS 服务器实例
+    HttpsServerConfig buildConfig() const                { return m_config; } ///< 导出配置
 private:
     HttpsServerConfig m_config;
 };

@@ -11,10 +11,14 @@ namespace galay::websocket
  */
 struct WsWriterSetting
 {
-    size_t max_frame_size;       // 单个帧的最大大小（默认 10MB）
-    bool auto_fragment;          // 是否自动分片大消息（默认 true）
-    bool use_mask;               // 是否使用掩码（客户端必须为true，服务器必须为false）
+    size_t max_frame_size;       ///< 单个帧的最大大小（默认 10MB）
+    bool auto_fragment;          ///< 是否自动分片大消息（默认 true）
+    bool use_mask;               ///< 是否使用掩码（客户端必须为true，服务器必须为false）
 
+    /**
+     * @brief 构造函数
+     * @param is_client 是否为客户端模式
+     */
     WsWriterSetting(bool is_client)
         : max_frame_size(10 * 1024 * 1024)  // 10MB
         , auto_fragment(true)
@@ -22,10 +26,18 @@ struct WsWriterSetting
     {
     }
 
+    /**
+     * @brief 创建客户端写入器配置
+     * @return 客户端模式的 WsWriterSetting
+     */
     static WsWriterSetting byClient() {
         return WsWriterSetting(true);
     }
 
+    /**
+     * @brief 创建服务器端写入器配置
+     * @return 服务器端模式的 WsWriterSetting
+     */
     static WsWriterSetting byServer() {
         return WsWriterSetting(false);
     }

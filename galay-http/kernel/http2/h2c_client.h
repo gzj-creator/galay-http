@@ -1,3 +1,13 @@
+/**
+ * @file h2c_client.h
+ * @brief HTTP/2 明文（h2c）客户端，支持 HTTP/1.1 到 HTTP/2 的协议升级
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 H2cClient 模板类，支持通过 HTTP/1.1 Upgrade 机制
+ *          将明文连接升级为 HTTP/2 连接。包含升级状态机和前置请求/响应处理。
+ */
+
 #ifndef GALAY_H2C_CLIENT_H
 #define GALAY_H2C_CLIENT_H
 

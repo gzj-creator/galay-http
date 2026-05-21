@@ -1,3 +1,14 @@
+/**
+ * @file frame_disp.h
+ * @brief HTTP/2 帧分发器，处理帧调度动作
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 HTTP/2 连接级别的帧分发策略，
+ *          将接收到的帧分发到对应的流处理器，
+ *          并生成 GOAWAY、RST_STREAM 等协议动作。
+ */
+
 #ifndef GALAY_HTTP2_FRAME_DISPATCHER_H
 #define GALAY_HTTP2_FRAME_DISPATCHER_H
 
@@ -7,10 +18,13 @@
 namespace galay::http2
 {
 
+/**
+ * @brief HTTP/2 帧分发动作类型
+ */
 enum class H2DispatchActionType
 {
-    SendGoaway,
-    SendRstStream
+    SendGoaway,     ///< 发送 GOAWAY 帧，关闭连接
+    SendRstStream   ///< 发送 RST_STREAM 帧，重置流
 };
 
 struct H2DispatchAction

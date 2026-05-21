@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(galay-http VERSION 3.1.0 LANGUAGES CXX)
+project(galay-http VERSION 3.1.1 LANGUAGES CXX)
 
 # Keep tests opt-in even though CTest defaults BUILD_TESTING to ON.
 set(GALAY_HTTP_BUILD_TESTING_USER_DEFINED FALSE)

@@ -1,3 +1,13 @@
+/**
+ * @file file_descriptor.h
+ * @brief RAII 文件描述符管理
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 RAII 风格的文件描述符封装，自动管理文件打开/关闭生命周期，
+ *          支持移动语义、所有权释放与交换操作。
+ */
+
 #ifndef GALAY_FILE_DESCRIPTOR_H
 #define GALAY_FILE_DESCRIPTOR_H
 

@@ -1,3 +1,14 @@
+/**
+ * @file http2_conn.h
+ * @brief HTTP/2 连接实现，管理帧收发、流控制和 HPACK 编解码
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 提供 Http2ConnImpl 模板类，封装 HTTP/2 连接的完整生命周期，
+ *          包括 SETTINGS 握手、流管理、流量控制和帧读写。
+ *          支持 TcpSocket 和 SslSocket 两种底层传输。
+ */
+
 #ifndef GALAY_HTTP2_CONN_H
 #define GALAY_HTTP2_CONN_H
 

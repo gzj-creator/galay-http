@@ -1,3 +1,13 @@
+/**
+ * @file ws_base.h
+ * @brief WebSocket 协议基础类型定义
+ * @author galay-http
+ * @version 1.0.0
+ *
+ * @details 定义 WebSocket 协议核心枚举（操作码、关闭状态码）、
+ *          帧头结构与帧结构体，以及帧类型判断工具函数。
+ */
+
 #ifndef GALAY_WEBSOCKET_BASE_H
 #define GALAY_WEBSOCKET_BASE_H
 
@@ -14,12 +24,12 @@ namespace galay::websocket
  */
 enum class WsOpcode : uint8_t
 {
-    Continuation = 0x0,  // 继续帧
-    Text = 0x1,          // 文本帧
-    Binary = 0x2,        // 二进制帧
-    Close = 0x8,         // 关闭帧
-    Ping = 0x9,          // Ping帧
-    Pong = 0xA           // Pong帧
+    Continuation = 0x0,  ///< 继续帧
+    Text = 0x1,          ///< 文本帧
+    Binary = 0x2,        ///< 二进制帧
+    Close = 0x8,         ///< 关闭帧
+    Ping = 0x9,          ///< Ping 帧
+    Pong = 0xA           ///< Pong 帧
 };
 
 /**
@@ -28,18 +38,18 @@ enum class WsOpcode : uint8_t
  */
 enum class WsCloseCode : uint16_t
 {
-    Normal = 1000,              // 正常关闭
-    GoingAway = 1001,           // 端点离开
-    ProtocolError = 1002,       // 协议错误
-    UnsupportedData = 1003,     // 不支持的数据类型
-    NoStatusReceived = 1005,    // 未收到状态码
-    AbnormalClosure = 1006,     // 异常关闭
-    InvalidPayload = 1007,      // 无效的payload数据
-    PolicyViolation = 1008,     // 策略违规
-    MessageTooBig = 1009,       // 消息过大
-    MandatoryExtension = 1010,  // 强制扩展
-    InternalError = 1011,       // 内部错误
-    TlsHandshake = 1015         // TLS握手失败
+    Normal = 1000,              ///< 正常关闭
+    GoingAway = 1001,           ///< 端点离开
+    ProtocolError = 1002,       ///< 协议错误
+    UnsupportedData = 1003,     ///< 不支持的数据类型
+    NoStatusReceived = 1005,    ///< 未收到状态码
+    AbnormalClosure = 1006,     ///< 异常关闭
+    InvalidPayload = 1007,      ///< 无效的 payload 数据
+    PolicyViolation = 1008,     ///< 策略违规
+    MessageTooBig = 1009,       ///< 消息过大
+    MandatoryExtension = 1010,  ///< 强制扩展
+    InternalError = 1011,       ///< 内部错误
+    TlsHandshake = 1015         ///< TLS 握手失败
 };
 
 /**
@@ -68,14 +78,14 @@ enum class WsCloseCode : uint16_t
  */
 struct WsFrameHeader
 {
-    bool fin;                    // FIN位：是否是最后一个分片
-    bool rsv1;                   // RSV1位：保留位1
-    bool rsv2;                   // RSV2位：保留位2
-    bool rsv3;                   // RSV3位：保留位3
-    WsOpcode opcode;             // 操作码
-    bool mask;                   // MASK位：是否使用掩码
-    uint64_t payload_length;     // Payload长度
-    uint8_t masking_key[4];      // 掩码密钥（如果mask=1）
+    bool fin;                    ///< FIN 位：是否是最后一个分片
+    bool rsv1;                   ///< RSV1 位：保留位1
+    bool rsv2;                   ///< RSV2 位：保留位2
+    bool rsv3;                   ///< RSV3 位：保留位3
+    WsOpcode opcode;             ///< 操作码
+    bool mask;                   ///< MASK 位：是否使用掩码
+    uint64_t payload_length;     ///< Payload 长度
+    uint8_t masking_key[4];      ///< 掩码密钥（如果 mask=1）
 
     WsFrameHeader()
         : fin(false)
@@ -95,8 +105,8 @@ struct WsFrameHeader
  */
 struct WsFrame
 {
-    WsFrameHeader header;        // 帧头
-    std::string payload;         // Payload数据
+    WsFrameHeader header;        ///< 帧头
+    std::string payload;         ///< Payload 数据
 
     WsFrame() = default;
 
